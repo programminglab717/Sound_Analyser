@@ -38,6 +38,15 @@ Prove the hard parts before building on them.
 > If the spectrogram spike fails here, the product thesis needs rework — which is
 > exactly why it is in Phase 0 and not Phase 2.
 
+**Spike result: the thesis survives** — see
+[06 — Spike: spectrogram at 60 fps](06-spike-spectrogram.md). STFT throughput is
+229x realtime (3.8 s of audio per frame budget), so analysis is not the
+bottleneck. Two constraints were confirmed with measurements rather than
+assertions: rendering must be a shader (0.21 ms versus 11.59 ms for CPU scaling
+at 1080p, and CPU scaling fails outright at 4K), and the pyramid must be built
+lazily (an eager full-file pyramid needs 1.3 GB per hour of stereo). The GPU
+renderer itself still needs real hardware and remains Phase 0's open risk.
+
 ## Phase 1 — The Editor · weeks 11–24
 
 Make it a tool someone would actually use daily.

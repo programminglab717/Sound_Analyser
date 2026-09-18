@@ -43,6 +43,7 @@ plugin hosting, measurement reporting) rather than access.
 | [03 — Architecture](docs/03-architecture.md) | Module layout, threading model, data structures, performance strategy |
 | [04 — Roadmap](docs/04-roadmap.md) | Six delivery phases with exit criteria, team shape, risk register |
 | [05 — Licensing & dependencies](docs/05-licensing-and-dependencies.md) | Dependency-by-dependency legal analysis, and the traps |
+| [06 — Spike: spectrogram at 60 fps](docs/06-spike-spectrogram.md) | The Phase 0 gating risk, measured |
 | [ADRs](docs/adr/) | Architecture decision records for the choices that are expensive to reverse |
 
 ## Decisions already locked
@@ -68,12 +69,15 @@ plugin hosting, measurement reporting) rather than access.
 | `sa-core`: buffers, channel layouts, time types, `Result` | ✅ Done |
 | `sa-core`: RT-safety instrumentation | ✅ Done |
 | `sa-io`: peak pyramid + query | ✅ Done, cross-checked against brute force |
+| `sa-dsp`: FFT, windows, STFT | ✅ Done — round-trip is a CI gate |
+| `sa-spectral`: spectrogram pyramid | ✅ Done |
+| **Spectrogram spike** | ✅ [Thesis survives](docs/06-spike-spectrogram.md) |
 | `sa-io`: codecs and streaming reader | ⬜ Next |
 | Device layer over miniaudio (WASAPI) | ⬜ Next |
 | Qt shell: docking, transport, waveform view | ⬜ Next |
-| **Spectrogram tile cache + GPU renderer spike** | ⬜ Next — the gating risk |
+| GPU shader renderer | ⬜ Needs hardware — remaining Phase 0 risk |
 
-53 tests passing on GCC 13, Clang 18 and under ASan/UBSan.
+88 tests passing on GCC 13, Clang 18 and under ASan/UBSan.
 
 ```sh
 cmake --preset debug && cmake --build --preset debug && ctest --preset debug

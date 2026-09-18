@@ -67,7 +67,10 @@ endif()
 # Modules — dependencies point downward only (see docs/03-architecture.md §2)
 # ---------------------------------------------------------------------------
 add_subdirectory(src/sa-core)
+add_subdirectory(src/sa-dsp)
 add_subdirectory(src/sa-io)
+add_subdirectory(src/sa-spectral)
+add_subdirectory(benchmarks)
 
 message(STATUS "")
 message(STATUS "Sound Analyser ${PROJECT_VERSION}")

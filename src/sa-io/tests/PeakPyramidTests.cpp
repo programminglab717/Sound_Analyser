@@ -332,10 +332,15 @@ TEST_CASE("Level sizes halve and storage stays bounded", "[io][peaks]") {
     }
     CHECK(pyramid.frameCountAt(pyramid.levelCount() - 1) <= PeakPyramid::kMinimumTopLevelFrames);
 
-    // The geometric series over all levels must stay under 2x level 0.
+    // The geometric series bounds the total at 2x level 0, plus up to one extra
+    // frame per level per channel because each level rounds its count up. The
+    // plain 2x bound only holds when level 0 happens to be a power of two.
+    const auto channels = static_cast<std::size_t>(pyramid.channelCount());
     const std::size_t levelZero =
-        static_cast<std::size_t>(pyramid.frameCountAt(0)) * 2 * sizeof(PeakFrame);
-    CHECK(pyramid.memoryFootprint() < levelZero * 2);
+        static_cast<std::size_t>(pyramid.frameCountAt(0)) * channels * sizeof(PeakFrame);
+    const std::size_t slack =
+        static_cast<std::size_t>(pyramid.levelCount()) * channels * sizeof(PeakFrame);
+    CHECK(pyramid.memoryFootprint() <= levelZero * 2 + slack);
 }
 
 TEST_CASE("query allocates nothing", "[io][peaks][rt]") {
