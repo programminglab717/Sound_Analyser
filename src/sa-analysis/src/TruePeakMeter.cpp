@@ -24,8 +24,8 @@ double blackmanHarris(int index, int length) noexcept {
     constexpr double a1 = 0.48829;
     constexpr double a2 = 0.14128;
     constexpr double a3 = 0.01168;
-    const double t = 2.0 * std::numbers::pi * static_cast<double>(index) /
-                     static_cast<double>(length - 1);
+    const double t =
+        2.0 * std::numbers::pi * static_cast<double>(index) / static_cast<double>(length - 1);
     return a0 - a1 * std::cos(t) + a2 * std::cos(2.0 * t) - a3 * std::cos(3.0 * t);
 }
 

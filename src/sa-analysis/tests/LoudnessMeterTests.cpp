@@ -6,6 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <numbers>
+#include <random>
 #include <vector>
 
 using namespace sa;
@@ -17,9 +18,9 @@ namespace {
 /// Analytic constants the invariants below are checked against. They are
 /// written out rather than inlined so that a test failure says which law of
 /// physics the meter has broken.
-constexpr double kDoublingLu = 6.020599913279624;   // 20 * log10(2)
-constexpr double kPowerSumLu = 3.010299956639812;   // 10 * log10(2)
-constexpr double kSurroundLu = 1.4921911265355774;  // 10 * log10(1.41)
+constexpr double kDoublingLu = 6.020599913279624;  // 20 * log10(2)
+constexpr double kPowerSumLu = 3.010299956639812;  // 10 * log10(2)
+constexpr double kSurroundLu = 1.4921911265355774; // 10 * log10(1.41)
 
 SampleCount framesFor(double seconds, SampleRate rate) {
     return secondsToSamples(seconds, rate);
@@ -45,6 +46,23 @@ void fillSine(AudioBuffer& buffer, int channel, double frequency, double amplitu
     addSine(buffer, channel, frequency, amplitude, rate, 0, buffer.frames());
 }
 
+/// Broadband noise, scaled so that `amplitude` is the peak of the distribution.
+///
+/// Every other fixture here is a tone, which only ever asks the K-weighting
+/// filter about one frequency and gives every 400 ms block the same energy.
+/// Noise exercises the whole curve and spreads the blocks across the gating
+/// histogram, which is where a binning mistake would hide.
+void fillNoise(AudioBuffer& buffer, double amplitude, unsigned seed = 4321) {
+    std::mt19937 rng{seed};
+    std::uniform_real_distribution<double> distribution{-amplitude, amplitude};
+    for (int channel = 0; channel < buffer.channelCount(); ++channel) {
+        float* samples = buffer.channel(channel);
+        for (SampleCount i = 0; i < buffer.frames(); ++i) {
+            samples[i] = static_cast<float>(distribution(rng));
+        }
+    }
+}
+
 LoudnessMeter meterOrFail(SampleRate rate, const ChannelLayout& layout) {
     auto result = LoudnessMeter::create(rate, layout);
     REQUIRE(result.hasValue());
@@ -59,8 +77,7 @@ LoudnessMeasurement measureOrFail(const AudioBuffer& buffer, SampleRate rate,
 }
 
 /// Integrated loudness of a mono tone of `amplitude`, `seconds` long.
-double monoToneLufs(double amplitude, double seconds = 5.0,
-                    SampleRate rate = kSampleRate48000) {
+double monoToneLufs(double amplitude, double seconds = 5.0, SampleRate rate = kSampleRate48000) {
     AudioBuffer buffer{ChannelLayout::mono(), framesFor(seconds, rate)};
     fillSine(buffer, 0, 1000.0, amplitude, rate);
     return measureOrFail(buffer, rate, ChannelLayout::mono()).integratedLufs;
@@ -223,8 +240,7 @@ TEST_CASE("The absolute gate drops silent blocks", "[analysis][loudness]") {
     // Only the handful of blocks touching the boundary survive from the silent
     // half -- the filter rings for a few milliseconds past the cut, so this is
     // a small bound rather than an exact count.
-    INFO("gated blocks " << gated.gatedBlockCount << " vs reference "
-                         << reference.gatedBlockCount);
+    INFO("gated blocks " << gated.gatedBlockCount << " vs reference " << reference.gatedBlockCount);
     CHECK(gated.gatedBlockCount <= reference.gatedBlockCount + 6);
 }
 
@@ -250,8 +266,7 @@ TEST_CASE("The relative gate drops a quiet passage that clears -70", "[analysis]
     // Every block of the tail clears -70 LUFS, so the absolute gate lets all of
     // them through and only the relative gate can have removed them. If this
     // count dropped, the fixture would be testing the wrong gate.
-    INFO("gated blocks " << gated.gatedBlockCount << " vs reference "
-                         << reference.gatedBlockCount);
+    INFO("gated blocks " << gated.gatedBlockCount << " vs reference " << reference.gatedBlockCount);
     CHECK(gated.gatedBlockCount > reference.gatedBlockCount * 2);
 }
 
@@ -285,6 +300,49 @@ TEST_CASE("A steady tone has essentially no loudness range", "[analysis][loudnes
 }
 
 // --- Floors and degenerate input --------------------------------------------
+
+TEST_CASE("Maximum momentary and short-term track the loudest passage", "[analysis][loudness]") {
+    // EBU R128 asks for Max M and Max S alongside the integrated value, and
+    // they are maxima over the whole programme, not the last reading. A quiet
+    // ending must not pull them down.
+    const SampleRate rate = kSampleRate48000;
+    const auto layout = ChannelLayout::mono();
+    const SampleCount section = framesFor(6.0, rate);
+
+    AudioBuffer loudOnly{layout, section};
+    fillSine(loudOnly, 0, 1000.0, 0.5, rate);
+    const auto reference = measureOrFail(loudOnly, rate, layout);
+
+    AudioBuffer thenQuiet{layout, section * 2};
+    addSine(thenQuiet, 0, 1000.0, 0.5, rate, 0, section);
+    addSine(thenQuiet, 0, 1000.0, 0.05, rate, section, section);
+    const auto measurement = measureOrFail(thenQuiet, rate, layout);
+
+    CHECK(measurement.maximumMomentaryLufs == Approx(reference.maximumMomentaryLufs).margin(0.01));
+    CHECK(measurement.maximumShortTermLufs == Approx(reference.maximumShortTermLufs).margin(0.01));
+    // The instantaneous readings have followed the signal down by 20 dB, which
+    // is what makes the maxima worth keeping separately.
+    CHECK(measurement.momentaryLufs < measurement.maximumMomentaryLufs - 19.0);
+    CHECK(measurement.shortTermLufs < measurement.maximumShortTermLufs - 19.0);
+}
+
+TEST_CASE("A programme entirely below -70 LUFS has no gated loudness", "[analysis][loudness]") {
+    // Every block fails the absolute gate, so BS.1770 leaves the integrated
+    // value undefined rather than reporting the level. Reporting -83 here would
+    // be a plausible-looking number for material the standard says not to
+    // measure at all.
+    const SampleRate rate = kSampleRate48000;
+    const auto layout = ChannelLayout::mono();
+
+    AudioBuffer buffer{layout, framesFor(5.0, rate)};
+    fillSine(buffer, 0, 1000.0, 1e-4, rate);
+
+    const auto measurement = measureOrFail(buffer, rate, layout);
+    CHECK(measurement.integratedLufs == kDecibelFloor);
+    CHECK(measurement.gatedBlockCount == 0);
+    // The momentary meter has no gate, so it still shows where the signal is.
+    CHECK(measurement.momentaryLufs == Approx(-83.0).margin(0.2));
+}
 
 TEST_CASE("Silence reads the floor rather than NaN or -inf", "[analysis][loudness]") {
     const SampleRate rate = kSampleRate48000;
@@ -321,8 +379,7 @@ TEST_CASE("Material shorter than one block reports nothing rather than guessing"
     CHECK(measurement.framesProcessed == buffer.frames());
 }
 
-TEST_CASE("Momentary and short-term appear as soon as they are defined",
-          "[analysis][loudness]") {
+TEST_CASE("Momentary and short-term appear as soon as they are defined", "[analysis][loudness]") {
     const SampleRate rate = kSampleRate48000;
     const auto layout = ChannelLayout::mono();
 
@@ -343,8 +400,7 @@ TEST_CASE("Momentary and short-term appear as soon as they are defined",
     CHECK(meter.shortTermLufs() > -30.0);
 }
 
-TEST_CASE("Degenerate input is refused or ignored, never crashed on",
-          "[analysis][loudness]") {
+TEST_CASE("Degenerate input is refused or ignored, never crashed on", "[analysis][loudness]") {
     const SampleRate rate = kSampleRate48000;
     const auto mono = ChannelLayout::mono();
 
@@ -387,6 +443,31 @@ TEST_CASE("Degenerate input is refused or ignored, never crashed on",
     }
 }
 
+TEST_CASE("Broadband noise obeys the same laws as a tone", "[analysis][loudness]") {
+    const SampleRate rate = kSampleRate48000;
+    const auto layout = ChannelLayout::stereo();
+    const SampleCount frames = framesFor(12.0, rate);
+
+    AudioBuffer quiet{layout, frames};
+    fillNoise(quiet, 0.1);
+
+    AudioBuffer loud{layout, frames};
+    fillNoise(loud, 0.2);
+
+    const auto quietMeasurement = measureOrFail(quiet, rate, layout);
+    const auto loudMeasurement = measureOrFail(loud, rate, layout);
+
+    // Blocks now land in many different histogram bins rather than all in one,
+    // so this also says the gating picked the same set at both levels.
+    CHECK(loudMeasurement.integratedLufs - quietMeasurement.integratedLufs ==
+          Approx(kDoublingLu).margin(1e-6));
+    CHECK(quietMeasurement.gatedBlockCount == loudMeasurement.gatedBlockCount);
+    // Stationary noise has a level but no dynamics.
+    CHECK(quietMeasurement.loudnessRangeLu < 0.5);
+    CHECK(quietMeasurement.integratedLufs > -30.0);
+    CHECK(quietMeasurement.integratedLufs < -10.0);
+}
+
 // --- Streaming --------------------------------------------------------------
 
 TEST_CASE("Streaming block by block matches one-shot exactly", "[analysis][loudness]") {
@@ -399,6 +480,15 @@ TEST_CASE("Streaming block by block matches one-shot exactly", "[analysis][loudn
     AudioBuffer buffer{layout, framesFor(12.0, rate)};
     fillSine(buffer, 0, 997.0, 0.25, rate);
     fillSine(buffer, 1, 1310.0, 0.18, rate);
+    // Plus noise, so the blocks spread across the histogram and every branch of
+    // the gating is on the path being compared.
+    AudioBuffer noise{layout, buffer.frames()};
+    fillNoise(noise, 0.05);
+    for (int channel = 0; channel < layout.count(); ++channel) {
+        for (SampleCount i = 0; i < buffer.frames(); ++i) {
+            buffer.channel(channel)[i] += noise.channel(channel)[i];
+        }
+    }
 
     const auto oneShot = measureOrFail(buffer, rate, layout);
 

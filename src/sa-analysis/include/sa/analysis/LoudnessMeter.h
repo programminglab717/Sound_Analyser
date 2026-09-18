@@ -167,6 +167,12 @@ private:
         double totalEnergy = 0.0;
         std::int64_t totalCount = 0;
 
+        /// Loudness a bin stands for. Bins are taken in or out whole, judged
+        /// by the centre so the quantisation error is unbiased rather than
+        /// always excluding or always including the straddling bin.
+        [[nodiscard]] static double binCentre(int index) noexcept;
+        [[nodiscard]] static int binIndexFor(double loudness) noexcept;
+
         void allocate();
         void clear() noexcept;
         void add(double loudness, double energy) noexcept;

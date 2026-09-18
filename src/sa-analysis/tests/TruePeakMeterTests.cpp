@@ -36,8 +36,8 @@ void fadeEdges(AudioBuffer& buffer, SampleCount fade) {
     for (int channel = 0; channel < buffer.channelCount(); ++channel) {
         float* samples = buffer.channel(channel);
         for (SampleCount i = 0; i < fade && i < buffer.frames(); ++i) {
-            const double ramp = std::numbers::pi * static_cast<double>(i) /
-                                static_cast<double>(fade);
+            const double ramp =
+                std::numbers::pi * static_cast<double>(i) / static_cast<double>(fade);
             const auto gain = static_cast<float>(0.5 - 0.5 * std::cos(ramp));
             samples[i] *= gain;
             samples[buffer.frames() - 1 - i] *= gain;
@@ -56,8 +56,7 @@ double samplePeak(const AudioBuffer& buffer) {
     return peak;
 }
 
-TruePeakMeter meterOrFail(int channels,
-                          int oversampling = TruePeakMeter::kDefaultOversampling) {
+TruePeakMeter meterOrFail(int channels, int oversampling = TruePeakMeter::kDefaultOversampling) {
     auto result = TruePeakMeter::create(channels, oversampling);
     REQUIRE(result.hasValue());
     return std::move(result).value();
@@ -206,8 +205,7 @@ TEST_CASE("Reset clears both the peak and the filter history", "[analysis][truep
     CHECK(meter.truePeak() == 0.0);
 }
 
-TEST_CASE("Degenerate input is refused or ignored, never crashed on",
-          "[analysis][truepeak]") {
+TEST_CASE("Degenerate input is refused or ignored, never crashed on", "[analysis][truepeak]") {
     SECTION("an empty view has no channels to meter") {
         CHECK_FALSE(TruePeakMeter::measureDbtp(ConstAudioBufferView{}).hasValue());
     }

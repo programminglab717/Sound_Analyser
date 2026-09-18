@@ -22,8 +22,8 @@ struct ProgrammeAnalysis {
 };
 
 /// Measure a whole buffer with all three meters in one pass.
-[[nodiscard]] Result<ProgrammeAnalysis> analyseProgramme(
-    ConstAudioBufferView audio, SampleRate rate, const ChannelLayout& layout,
-    int oversampling = TruePeakMeter::kDefaultOversampling);
+[[nodiscard]] Result<ProgrammeAnalysis>
+analyseProgramme(ConstAudioBufferView audio, SampleRate rate, const ChannelLayout& layout,
+                 int oversampling = TruePeakMeter::kDefaultOversampling);
 
 } // namespace sa::analysis

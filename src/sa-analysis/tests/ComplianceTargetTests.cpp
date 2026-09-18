@@ -57,8 +57,7 @@ TEST_CASE("A master on target and under the ceiling passes", "[analysis][complia
     CHECK(result.gainToTargetDb == Approx(0.0).margin(1e-12));
 }
 
-TEST_CASE("Peaks over the ceiling fail even at the right loudness",
-          "[analysis][compliance]") {
+TEST_CASE("Peaks over the ceiling fail even at the right loudness", "[analysis][compliance]") {
     // The common real case: a master limited to 0.0 dBFS that measures dead on
     // target and still clips the moment anything reconstructs it.
     const auto result = check(LoudnessPlatform::AppleMusic, -16.0, 0.4);
@@ -79,8 +78,7 @@ TEST_CASE("Loudness outside tolerance fails", "[analysis][compliance]") {
     CHECK(check(LoudnessPlatform::AtscA85, -22.4, -3.0).passed());
 }
 
-TEST_CASE("The deviation sign says which way the master is wrong",
-          "[analysis][compliance]") {
+TEST_CASE("The deviation sign says which way the master is wrong", "[analysis][compliance]") {
     const auto quiet = check(LoudnessPlatform::YouTube, -20.0, -6.0);
     CHECK(quiet.loudnessDeviationLu == Approx(-6.0));
     CHECK(quiet.gainToTargetDb == Approx(6.0));
@@ -90,8 +88,7 @@ TEST_CASE("The deviation sign says which way the master is wrong",
     CHECK(loud.gainToTargetDb == Approx(-5.0));
 }
 
-TEST_CASE("The conform gain never pushes peaks through the ceiling",
-          "[analysis][compliance]") {
+TEST_CASE("The conform gain never pushes peaks through the ceiling", "[analysis][compliance]") {
     // 6 dB too quiet but only 2 dB of true-peak headroom. Applying the gain the
     // loudness target asks for would clip; conformGainDb stops short and says
     // so, which is the difference between a one-click conform and a one-click

@@ -60,9 +60,7 @@ struct ComplianceResult {
     bool loudnessOnTarget = false;
     bool truePeakWithinCeiling = false;
 
-    [[nodiscard]] bool passed() const noexcept {
-        return loudnessOnTarget && truePeakWithinCeiling;
-    }
+    [[nodiscard]] bool passed() const noexcept { return loudnessOnTarget && truePeakWithinCeiling; }
 
     /// Gain that puts the loudness exactly on target. May push the peaks over
     /// the ceiling -- that is what conformGainDb is for.

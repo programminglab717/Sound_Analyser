@@ -9,7 +9,9 @@
 
 namespace sa::analysis {
 
-/// Inter-sample peak meter, ITU-R BS.1770-4 Annex 2, reported in dBTP.
+/// Inter-sample peak meter, reported in dBTP. Follows the ITU-R BS.1770-4
+/// Annex 2 method but **not** its exact filter -- see the conformance caveat
+/// below before quoting a reading as a standards measurement.
 ///
 /// Sample peak is not what a converter or a lossy encoder sees. Reconstructing
 /// the signal between samples routinely finds another 1-3 dB, and a master that

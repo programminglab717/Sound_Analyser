@@ -6,21 +6,19 @@
 
 namespace sa::analysis {
 
-namespace {
+// --- Histogram --------------------------------------------------------------
 
-/// Index of the bin holding `loudness`, clamped into range.
-int binIndexFor(double loudness, double minimumLufs, double binWidth, int binCount) noexcept {
-    const double offset = (loudness - minimumLufs) / binWidth;
+double LoudnessMeter::Histogram::binCentre(int index) noexcept {
+    return kHistogramMinimumLufs + (static_cast<double>(index) + 0.5) * kHistogramBinWidthLu;
+}
+
+int LoudnessMeter::Histogram::binIndexFor(double loudness) noexcept {
+    const double offset = (loudness - kHistogramMinimumLufs) / kHistogramBinWidthLu;
     if (!(offset > 0.0)) {
         return 0;
     }
-    const int index = static_cast<int>(offset);
-    return std::min(index, binCount - 1);
+    return std::min(static_cast<int>(offset), kHistogramBinCount - 1);
 }
-
-} // namespace
-
-// --- Histogram --------------------------------------------------------------
 
 void LoudnessMeter::Histogram::allocate() {
     bins.assign(static_cast<std::size_t>(kHistogramBinCount), HistogramBin{});
@@ -33,9 +31,7 @@ void LoudnessMeter::Histogram::clear() noexcept {
 }
 
 void LoudnessMeter::Histogram::add(double loudness, double energy) noexcept {
-    const int index =
-        binIndexFor(loudness, kHistogramMinimumLufs, kHistogramBinWidthLu, kHistogramBinCount);
-    HistogramBin& bin = bins[static_cast<std::size_t>(index)];
+    HistogramBin& bin = bins[static_cast<std::size_t>(binIndexFor(loudness))];
     ++bin.count;
     bin.energy += energy;
     totalEnergy += energy;
@@ -50,12 +46,7 @@ double LoudnessMeter::Histogram::meanEnergyAbove(double threshold) const noexcep
     double energy = 0.0;
     std::int64_t count = 0;
     for (int index = 0; index < kHistogramBinCount; ++index) {
-        // A bin is in or out as a whole, judged by its centre. Centring the
-        // test rather than using an edge keeps the quantisation error
-        // unbiased instead of always excluding or always including.
-        const double centre =
-            kHistogramMinimumLufs + (static_cast<double>(index) + 0.5) * kHistogramBinWidthLu;
-        if (centre <= threshold) {
+        if (binCentre(index) <= threshold) {
             continue;
         }
         const HistogramBin& bin = bins[static_cast<std::size_t>(index)];
@@ -68,9 +59,7 @@ double LoudnessMeter::Histogram::meanEnergyAbove(double threshold) const noexcep
 std::int64_t LoudnessMeter::Histogram::countAbove(double threshold) const noexcept {
     std::int64_t count = 0;
     for (int index = 0; index < kHistogramBinCount; ++index) {
-        const double centre =
-            kHistogramMinimumLufs + (static_cast<double>(index) + 0.5) * kHistogramBinWidthLu;
-        if (centre > threshold) {
+        if (binCentre(index) > threshold) {
             count += bins[static_cast<std::size_t>(index)].count;
         }
     }
@@ -86,19 +75,16 @@ double LoudnessMeter::Histogram::percentileAbove(double threshold, double fracti
     // Nearest-rank: the value at position fraction through the sorted list.
     // The histogram is already sorted by construction, so walking it in bin
     // order is walking the sorted values.
-    const auto rank =
-        static_cast<std::int64_t>(static_cast<double>(total - 1) * fraction + 0.5);
+    const auto rank = static_cast<std::int64_t>(static_cast<double>(total - 1) * fraction + 0.5);
 
     std::int64_t seen = 0;
     for (int index = 0; index < kHistogramBinCount; ++index) {
-        const double centre =
-            kHistogramMinimumLufs + (static_cast<double>(index) + 0.5) * kHistogramBinWidthLu;
-        if (centre <= threshold) {
+        if (binCentre(index) <= threshold) {
             continue;
         }
         seen += bins[static_cast<std::size_t>(index)].count;
         if (seen > rank) {
-            return centre;
+            return binCentre(index);
         }
     }
     return kDecibelFloor;
@@ -220,8 +206,8 @@ double LoudnessMeter::windowEnergy(int subBlockCount) const noexcept {
         }
         double sum = 0.0;
         for (int back = 0; back < subBlockCount; ++back) {
-            const auto slot = static_cast<std::size_t>(
-                (completedSubBlocks_ - 1 - back) % kSubBlocksPerShortTerm);
+            const auto slot =
+                static_cast<std::size_t>((completedSubBlocks_ - 1 - back) % kSubBlocksPerShortTerm);
             sum += history_[slot * channels + static_cast<std::size_t>(channel)];
         }
         energy += weight * sum;
@@ -278,8 +264,9 @@ void LoudnessMeter::process(ConstAudioBufferView block) noexcept {
         for (int channel = 0; channel < channelCount_; ++channel) {
             const auto index = static_cast<std::size_t>(channel);
             if (weights_[index] == 0.0) {
-                // LFE contributes nothing, so it does not need filtering. Its
-                // state stays reset, which keeps reset() honest.
+                // An excluded channel never reaches the sum, so filtering it
+                // would be pure cost -- and on a film mix the LFE is a sixth of
+                // the work.
                 continue;
             }
 

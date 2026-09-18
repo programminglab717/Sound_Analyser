@@ -1,5 +1,7 @@
 #include <sa/analysis/ProgrammeAnalysis.h>
 
+#include <utility>
+
 namespace sa::analysis {
 
 Result<ProgrammeAnalysis> analyseProgramme(ConstAudioBufferView audio, SampleRate rate,

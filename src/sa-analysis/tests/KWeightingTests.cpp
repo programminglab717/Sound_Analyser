@@ -60,8 +60,7 @@ KWeightingCoefficients coefficientsOrFail(SampleRate rate) {
 /// K gain at `frequency`, both stages together.
 double kGainDb(SampleRate rate, double frequency) {
     const auto c = coefficientsOrFail(rate);
-    return decibels(magnitude(c.shelf, frequency, rate) *
-                    magnitude(c.highPass, frequency, rate));
+    return decibels(magnitude(c.shelf, frequency, rate) * magnitude(c.highPass, frequency, rate));
 }
 
 } // namespace
@@ -202,16 +201,15 @@ TEST_CASE("The difference equation delivers the transfer function's gain",
         double sumOfSquares = 0.0;
 
         for (int i = 0; i < settle + measured; ++i) {
-            const double x = std::sin(2.0 * std::numbers::pi * frequency *
-                                      static_cast<double>(i) / rate.hz());
+            const double x =
+                std::sin(2.0 * std::numbers::pi * frequency * static_cast<double>(i) / rate.hz());
             const double y = highPass.process(c.highPass, shelf.process(c.shelf, x));
             if (i >= settle) {
                 sumOfSquares += y * y;
             }
         }
 
-        const double observed =
-            std::sqrt(2.0 * sumOfSquares / static_cast<double>(measured));
+        const double observed = std::sqrt(2.0 * sumOfSquares / static_cast<double>(measured));
         const double expected =
             magnitude(c.shelf, frequency, rate) * magnitude(c.highPass, frequency, rate);
         INFO("frequency " << frequency);

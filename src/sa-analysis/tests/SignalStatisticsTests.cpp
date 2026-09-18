@@ -23,8 +23,7 @@ void fillSine(AudioBuffer& buffer, int channel, double cyclesPerSample, double a
     }
 }
 
-SignalStatistics measureOrFail(const AudioBuffer& buffer,
-                               double truePeakDbtp = kDecibelFloor,
+SignalStatistics measureOrFail(const AudioBuffer& buffer, double truePeakDbtp = kDecibelFloor,
                                double integratedLufs = kDecibelFloor) {
     auto result = SignalStatisticsMeter::measure(buffer.constView(), truePeakDbtp, integratedLufs);
     REQUIRE(result.hasValue());
@@ -39,8 +38,7 @@ SignalStatisticsMeter meterOrFail(int channels) {
 
 } // namespace
 
-TEST_CASE("A full-scale sine has the textbook peak, RMS and crest",
-          "[analysis][statistics]") {
+TEST_CASE("A full-scale sine has the textbook peak, RMS and crest", "[analysis][statistics]") {
     // An exact number of cycles, so the RMS is exactly amplitude / sqrt(2) and
     // the crest factor exactly 3.01 dB, with no windowing excuse available.
     AudioBuffer buffer{ChannelLayout::mono(), 4800};
@@ -57,8 +55,7 @@ TEST_CASE("A full-scale sine has the textbook peak, RMS and crest",
     CHECK(statistics.channels == 1);
 }
 
-TEST_CASE("DC offset is found on the worst channel, not averaged away",
-          "[analysis][statistics]") {
+TEST_CASE("DC offset is found on the worst channel, not averaged away", "[analysis][statistics]") {
     // Equal and opposite offsets on left and right average to a clean zero.
     // That average is exactly the reading that would let a real fault ship.
     AudioBuffer buffer{ChannelLayout::stereo(), 4800};
@@ -113,8 +110,7 @@ TEST_CASE("Silence reads the floor and a finite crest", "[analysis][statistics]"
     CHECK(statistics.crestFactorDb == 0.0);
 }
 
-TEST_CASE("Peak to loudness ratio is true peak over gated loudness",
-          "[analysis][statistics]") {
+TEST_CASE("Peak to loudness ratio is true peak over gated loudness", "[analysis][statistics]") {
     CHECK(peakToLoudnessRatioDb(-1.0, -14.0) == Approx(13.0));
     CHECK(peakToLoudnessRatioDb(-0.3, -23.0) == Approx(22.7));
 
@@ -155,8 +151,7 @@ TEST_CASE("Streaming block by block matches one-shot exactly", "[analysis][stati
     CHECK(streamed.frames == oneShot.frames);
 }
 
-TEST_CASE("Degenerate input is refused or ignored, never crashed on",
-          "[analysis][statistics]") {
+TEST_CASE("Degenerate input is refused or ignored, never crashed on", "[analysis][statistics]") {
     SECTION("an empty view has no channels") {
         CHECK_FALSE(SignalStatisticsMeter::measure(ConstAudioBufferView{}).hasValue());
     }

@@ -83,6 +83,26 @@ The half the product is named for.
 - Band filters within IEC 61260 tolerance masks
 - Spectrogram of a 1-hour file pans and zooms at 60 fps
 
+> **Metering conformance is NOT yet met.** `sa-analysis` implements the
+> measurement and is internally consistent, but two gaps stand between it and
+> the exit criterion above, both deliberate and both recorded in the code:
+>
+> 1. **No official test vectors have been run.** Everything is verified against
+>    invariants and one locally reconstructed EBU Tech 3341 case. The word
+>    "conformant" is deliberately not claimed anywhere in the module. Closing
+>    this means fetching the EBU and ITU vector sets into CI.
+> 2. **The true-peak filter is not BS.1770-4 Annex 2 Table 3.** A
+>    Blackman-Harris windowed sinc stands in, because transcribing a 48-tap
+>    table from memory would be worse than an honestly documented substitute.
+>    It is longer and flatter than the standard's, so readings may run
+>    marginally high rather than low. Closing this means transcribing the real
+>    table from the published standard.
+>
+> Also unverified: the LRA short-term hop (1 s, matching libebur128) against
+> EBU Tech 3342, height-channel weights, and the platform compliance targets,
+> which came from the feature spec rather than live platform documentation and
+> must be re-checked before they ship as presets.
+
 ## Phase 3 — Spectral Repair · weeks 26–40
 
 The differentiator, and the hardest research work.
