@@ -30,6 +30,15 @@ jobs:
         run: |
           files=$(find src -name '*.cpp' -o -name '*.h')
           clang-format --dry-run --Werror $files
+      # Every standard library ships a different set of transitive includes.
+      # libstdc++ pulls <algorithm> in through several common headers and the
+      # MSVC STL does not, so a file using std::max with only <vector> compiles
+      # on Linux and fails on Windows. This catches it here, in seconds, rather
+      # than on a Windows runner one error at a time -- MSBuild stops at the
+      # first error per project, so fifteen of these would have been fifteen
+      # round trips.
+      - name: Check includes
+        run: python3 tools/check_includes.py
 
   build:
     name: ${{ matrix.os }} / ${{ matrix.preset }}
@@ -133,6 +142,24 @@ jobs:
           name: interface-screenshot
           path: artefacts/
           if-no-files-found: ignore
+
+  # sa-cli needs no Qt, so it gets its own job rather than riding on one that
+  # installs it. It is also the path a batch user's script depends on, which
+  # makes its output and its exit codes an interface rather than a convenience.
+  cli:
+    name: Headless driver
+    needs: licences
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Configure
+        run: cmake --preset release
+      - name: Build
+        run: cmake --build --preset release --target sa-cli
+      - name: Drive every command
+        run: python3 tools/cli_test.py ./build/release/bin/sa-cli
 
   # A build the product owner can actually run. Everything above proves the code
   # is correct; this is what lets someone judge whether it is any good.

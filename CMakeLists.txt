@@ -99,6 +99,7 @@ add_subdirectory(src/sa-engine)
 add_subdirectory(src/sa-io)
 add_subdirectory(src/sa-spectral)
 add_subdirectory(src/sa-transport)
+add_subdirectory(src/sa-cli)
 add_subdirectory(src/sa-ui)
 add_subdirectory(benchmarks)
 

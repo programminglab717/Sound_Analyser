@@ -13,6 +13,7 @@
 #include <sa/io/FlacReader.h>
 #include <sa/io/PeakPyramid.h>
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <cstdint>

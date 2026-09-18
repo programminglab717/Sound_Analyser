@@ -2,6 +2,8 @@
 
 #include <sa/io/AudioSource.h>
 
+#include <algorithm>
+
 namespace sa::engine {
 
 /// Stands in for audio a session referenced but could not open.

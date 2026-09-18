@@ -12,6 +12,7 @@
 #include <sa/io/WavReader.h>
 #include <sa/io/WavWriter.h>
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <random>
 #include <span>

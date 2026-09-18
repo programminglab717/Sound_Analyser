@@ -2,6 +2,7 @@
 
 #include <sa/io/AudioSource.h>
 
+#include <algorithm>
 #include <cmath>
 #include <memory>
 

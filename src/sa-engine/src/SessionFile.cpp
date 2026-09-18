@@ -2,6 +2,7 @@
 #include <sa/engine/SilentSource.h>
 #include <sa/io/AudioFile.h>
 
+#include <algorithm>
 #include <cmath>
 #include <fstream>
 #include <map>

@@ -1,5 +1,6 @@
 #include <sa/dsp/WindowedSinc.h>
 
+#include <algorithm>
 #include <cmath>
 #include <numbers>
 

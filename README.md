@@ -45,6 +45,7 @@ plugin hosting, measurement reporting) rather than access.
 | [05 — Licensing & dependencies](docs/05-licensing-and-dependencies.md) | Dependency-by-dependency legal analysis, and the traps |
 | [06 — Spike: spectrogram at 60 fps](docs/06-spike-spectrogram.md) | The Phase 0 gating risk, measured |
 | [07 — Work queue](docs/07-autonomous-queue.md) | What is next, what is blocked, and on what |
+| [08 — What needs you](docs/08-for-review.md) | The list that cannot be closed without a person |
 | [ADRs](docs/adr/) | Architecture decision records for the choices that are expensive to reverse |
 
 ## Decisions already locked
