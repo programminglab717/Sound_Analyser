@@ -3,6 +3,7 @@
 #include <sa/core/AudioBuffer.h>
 #include <sa/core/Result.h>
 #include <sa/io/AudioFileInfo.h>
+#include <sa/io/AudioSource.h>
 #include <sa/io/ByteSource.h>
 
 #include <filesystem>
@@ -25,14 +26,14 @@ namespace sa::io {
 /// **Every size in a WAV file is attacker-controlled.** This parser trusts none
 /// of them: chunk extents are validated against the real source length before
 /// use, and a zero-length chunk cannot stall the scan.
-class WavReader {
+class WavReader final : public AudioSource {
 public:
     [[nodiscard]] static Result<WavReader> open(const std::filesystem::path& path);
 
     /// Parse from memory. The bytes must outlive the reader.
     [[nodiscard]] static Result<WavReader> fromMemory(std::span<const std::byte> bytes);
 
-    [[nodiscard]] const AudioFileInfo& info() const noexcept { return info_; }
+    [[nodiscard]] const AudioFileInfo& info() const noexcept override { return info_; }
 
     [[nodiscard]] const AudioFileMetadata& metadata() const noexcept { return metadata_; }
 
@@ -43,7 +44,7 @@ public:
     /// file. Channels beyond the destination's count are skipped; channels the
     /// file does not have are left untouched.
     [[nodiscard]] Result<SampleCount> read(SampleIndex startFrame,
-                                           AudioBufferView destination) const;
+                                           AudioBufferView destination) const override;
 
     /// Read the whole file into a new buffer. Convenient for short files and
     /// tests; prefer read() for anything long.

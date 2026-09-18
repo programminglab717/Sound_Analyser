@@ -10,6 +10,7 @@
 #include <vector>
 
 using namespace sa;
+using namespace sa::io;
 using Catch::Approx;
 
 namespace {

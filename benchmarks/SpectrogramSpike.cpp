@@ -26,6 +26,7 @@
 #include <vector>
 
 using namespace sa;
+using namespace sa::io;
 using Clock = std::chrono::steady_clock;
 
 namespace {

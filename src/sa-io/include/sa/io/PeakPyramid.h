@@ -1,13 +1,15 @@
 #pragma once
 
 #include <sa/core/AudioBuffer.h>
+#include <sa/core/Cancellation.h>
 #include <sa/core/Result.h>
 #include <sa/core/Types.h>
+#include <sa/io/AudioSource.h>
 
 #include <cstddef>
 #include <vector>
 
-namespace sa {
+namespace sa::io {
 
 /// Min/max/RMS summary of one bin of samples.
 ///
@@ -45,10 +47,22 @@ public:
 
     PeakPyramid() = default;
 
-    /// Build a pyramid over `source`. `baseBinSize` must be a power of two of
-    /// at least 2 -- halving resolution per level relies on it.
+    /// Build a pyramid over an in-memory buffer. `baseBinSize` must be a power
+    /// of two of at least 2 -- halving resolution per level relies on it.
     [[nodiscard]] static Result<PeakPyramid> build(ConstAudioBufferView source,
                                                    SampleCount baseBinSize = kDefaultBaseBinSize);
+
+    /// Build by streaming from an AudioSource, never holding more than one
+    /// block of audio.
+    ///
+    /// This is the production path: a two-hour 96 kHz file is several gigabytes
+    /// of samples but only tens of megabytes of pyramid, so requiring the
+    /// source in memory first would defeat the point. Reports progress and
+    /// honours cancellation, since a user who opened the wrong file should not
+    /// have to wait for it.
+    [[nodiscard]] static Result<PeakPyramid>
+    buildStreaming(const AudioSource& source, SampleCount baseBinSize = kDefaultBaseBinSize,
+                   const JobMonitor& monitor = {});
 
     [[nodiscard]] bool isEmpty() const noexcept { return levels_.empty(); }
 
@@ -107,10 +121,13 @@ private:
     [[nodiscard]] PeakFrame aggregate(int level, int channel, SampleIndex startSample,
                                       SampleIndex endSample) const noexcept;
 
+    /// Fold level 0 upward. Shared by both build paths so the two cannot drift.
+    void buildUpperLevels();
+
     std::vector<Level> levels_;
     int channelCount_ = 0;
     SampleCount sourceFrames_ = 0;
     SampleCount baseBinSize_ = kDefaultBaseBinSize;
 };
 
-} // namespace sa
+} // namespace sa::io

@@ -4,7 +4,7 @@
 #include <cmath>
 #include <limits>
 
-namespace sa {
+namespace sa::io {
 
 namespace {
 
@@ -70,6 +70,16 @@ Result<PeakPyramid> PeakPyramid::build(ConstAudioBufferView source, SampleCount 
     }
     pyramid.levels_.push_back(std::move(base));
 
+    pyramid.buildUpperLevels();
+    return pyramid;
+}
+
+void PeakPyramid::buildUpperLevels() {
+    if (levels_.empty()) {
+        return;
+    }
+    const auto channels = static_cast<std::size_t>(channelCount_);
+
     // --- Levels 1..n: fold pairs from the level below -----------------------
     //
     // Each parent takes the min of its children's minima and the max of their
@@ -77,16 +87,16 @@ Result<PeakPyramid> PeakPyramid::build(ConstAudioBufferView source, SampleCount 
     // combines through sum of squares weighted by sample count -- averaging the
     // children's RMS values would be wrong, and wrong in a way that quietly
     // understates loud passages.
-    while (pyramid.levels_.back().frameCount > kMinimumTopLevelFrames) {
-        const Level& previous = pyramid.levels_.back();
-        const int previousIndex = static_cast<int>(pyramid.levels_.size()) - 1;
+    while (levels_.back().frameCount > kMinimumTopLevelFrames) {
+        const Level& previous = levels_.back();
+        const int previousIndex = static_cast<int>(levels_.size()) - 1;
 
         Level next;
         next.binSize = previous.binSize * 2;
         next.frameCount = binsToCover(previous.frameCount, 2);
         next.frames.resize(static_cast<std::size_t>(next.frameCount) * channels);
 
-        for (int channel = 0; channel < pyramid.channelCount_; ++channel) {
+        for (int channel = 0; channel < channelCount_; ++channel) {
             const auto previousOffset =
                 static_cast<std::size_t>(channel) * static_cast<std::size_t>(previous.frameCount);
             const auto nextOffset =
@@ -106,7 +116,7 @@ Result<PeakPyramid> PeakPyramid::build(ConstAudioBufferView source, SampleCount 
                     const PeakFrame& child =
                         previous.frames[previousOffset + static_cast<std::size_t>(firstChild + c)];
                     const auto childSamples =
-                        static_cast<double>(pyramid.samplesInFrame(previousIndex, firstChild + c));
+                        static_cast<double>(samplesInFrame(previousIndex, firstChild + c));
 
                     minimum = std::min(minimum, child.minimum);
                     maximum = std::max(maximum, child.maximum);
@@ -123,9 +133,120 @@ Result<PeakPyramid> PeakPyramid::build(ConstAudioBufferView source, SampleCount 
                               : 0.0f;
             }
         }
-        pyramid.levels_.push_back(std::move(next));
+        levels_.push_back(std::move(next));
+    }
+}
+
+Result<PeakPyramid> PeakPyramid::buildStreaming(const AudioSource& source, SampleCount baseBinSize,
+                                                const JobMonitor& monitor) {
+    if (!isPowerOfTwo(baseBinSize)) {
+        return Error{ErrorCode::InvalidArgument, "baseBinSize must be a power of two >= 2"};
     }
 
+    const AudioFileInfo& info = source.info();
+    PeakPyramid pyramid;
+    pyramid.channelCount_ = info.channelCount();
+    pyramid.sourceFrames_ = info.frameCount;
+    pyramid.baseBinSize_ = baseBinSize;
+
+    if (info.frameCount <= 0 || info.channelCount() <= 0) {
+        return pyramid;
+    }
+
+    const auto channels = static_cast<std::size_t>(info.channelCount());
+
+    Level base;
+    base.binSize = baseBinSize;
+    base.frameCount = binsToCover(info.frameCount, baseBinSize);
+    base.frames.resize(static_cast<std::size_t>(base.frameCount) * channels);
+
+    // Read in whole multiples of the bin size so a bin never straddles two
+    // reads -- that would require carrying partial accumulator state between
+    // blocks, which is where a streaming summariser usually goes subtly wrong.
+    constexpr SampleCount kTargetBlockFrames = 1 << 16;
+    const SampleCount binsPerBlock = std::max<SampleCount>(1, kTargetBlockFrames / baseBinSize);
+    const SampleCount blockFrames = binsPerBlock * baseBinSize;
+
+    AudioBuffer block{info.layout, blockFrames};
+
+    SampleIndex position = 0;
+    SampleCount frameIndex = 0;
+    while (position < info.frameCount) {
+        if (monitor.shouldCancel()) {
+            return Error{ErrorCode::Cancelled, "peak pyramid build cancelled"};
+        }
+
+        // Fill the whole block before summarising. A source is free to return
+        // fewer frames than asked -- a decoder or network-backed read routinely
+        // does -- and summarising a short read as though it were a full block
+        // would treat a handful of samples as an entire bin and slide every bin
+        // after it out of alignment.
+        SampleCount readFrames = 0;
+        while (readFrames < blockFrames && position + readFrames < info.frameCount) {
+            auto got = source.read(position + readFrames,
+                                   block.view().subRange(readFrames, blockFrames - readFrames));
+            if (!got) {
+                return got.error();
+            }
+            if (got.value() <= 0) {
+                break; // genuine end of source
+            }
+            readFrames += got.value();
+        }
+
+        if (readFrames <= 0) {
+            // Source ended earlier than its header claimed. Summarise what
+            // exists rather than failing, and correct the frame count so the
+            // pyramid describes the audio we actually have.
+            break;
+        }
+
+        const SampleCount binsInBlock = binsToCover(readFrames, baseBinSize);
+        for (int channel = 0; channel < info.channelCount(); ++channel) {
+            const float* samples = block.channel(channel);
+            const auto channelOffset =
+                static_cast<std::size_t>(channel) * static_cast<std::size_t>(base.frameCount);
+
+            for (SampleCount bin = 0; bin < binsInBlock; ++bin) {
+                const SampleCount start = bin * baseBinSize;
+                const SampleCount count = std::min(baseBinSize, readFrames - start);
+
+                float minimum = std::numeric_limits<float>::max();
+                float maximum = std::numeric_limits<float>::lowest();
+                double sumOfSquares = 0.0;
+
+                for (SampleCount i = 0; i < count; ++i) {
+                    const float sample = samples[start + i];
+                    minimum = std::min(minimum, sample);
+                    maximum = std::max(maximum, sample);
+                    sumOfSquares += static_cast<double>(sample) * static_cast<double>(sample);
+                }
+
+                const SampleCount target = frameIndex + bin;
+                if (target >= base.frameCount) {
+                    break;
+                }
+                PeakFrame& out = base.frames[channelOffset + static_cast<std::size_t>(target)];
+                out.minimum = minimum;
+                out.maximum = maximum;
+                out.rms = static_cast<float>(std::sqrt(sumOfSquares / static_cast<double>(count)));
+            }
+        }
+
+        frameIndex += binsInBlock;
+        position += readFrames;
+        monitor.report(static_cast<double>(position) / static_cast<double>(info.frameCount));
+    }
+
+    if (position < info.frameCount) {
+        pyramid.sourceFrames_ = position;
+        base.frameCount = binsToCover(position, baseBinSize);
+        base.frames.resize(static_cast<std::size_t>(base.frameCount) * channels);
+    }
+
+    pyramid.levels_.push_back(std::move(base));
+    pyramid.buildUpperLevels();
+    monitor.report(1.0);
     return pyramid;
 }
 
@@ -260,4 +381,4 @@ std::size_t PeakPyramid::memoryFootprint() const noexcept {
     return bytes;
 }
 
-} // namespace sa
+} // namespace sa::io

@@ -14,6 +14,7 @@ target_link_libraries(sa-io PRIVATE sa-warnings)
 if(SA_BUILD_TESTS)
     add_executable(sa-io-tests
         tests/PeakPyramidTests.cpp
+        tests/StreamingPyramidTests.cpp
         tests/WavRobustnessTests.cpp
         tests/WavTests.cpp
     )
