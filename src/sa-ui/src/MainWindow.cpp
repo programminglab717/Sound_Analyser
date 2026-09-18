@@ -10,6 +10,7 @@
 #include <QElapsedTimer>
 #include <QFileDialog>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QLabel>
 #include <QMenuBar>
 #include <QSplitter>
@@ -166,6 +167,18 @@ void MainWindow::buildMenus() {
         refreshActions();
         updateStatus();
     });
+
+    QMenu* process = menuBar()->addMenu(tr("&Process"));
+    process->addAction(tr("&Gain…"), QKeySequence{Qt::CTRL | Qt::Key_G}, this,
+                       &MainWindow::chooseGain);
+    normaliseAction_ =
+        process->addAction(tr("&Normalise to target"), QKeySequence{Qt::CTRL | Qt::Key_N}, this,
+                           &MainWindow::normaliseToTarget);
+    process->addSeparator();
+    process->addAction(tr("Fade &in"), this, [this] { applyFade(true); });
+    process->addAction(tr("Fade &out"), this, [this] { applyFade(false); });
+    process->addSeparator();
+    process->addAction(tr("F&latten"), this, &MainWindow::flattenRange);
 
     QMenu* view = menuBar()->addMenu(tr("&View"));
     view->addAction(tr("Zoom to &fit"), QKeySequence{Qt::Key_F}, this,
@@ -406,6 +419,7 @@ void MainWindow::refreshActions() {
     trimAction_->setEnabled(selected);
     exportSelectionAction_->setEnabled(selected);
     pasteAction_->setEnabled(document && clipboard_.frames() > 0);
+    normaliseAction_->setEnabled(document && meters_->conformGainDb().has_value());
 }
 
 void MainWindow::updateStatus() {
@@ -453,6 +467,86 @@ bool MainWindow::applyEdit(const QString& label, Edit&& edit) {
     rebuildCaches();
     refreshViews();
     return true;
+}
+
+TimeSelection MainWindow::targetRange() const noexcept {
+    const TimeSelection selected = selection();
+    return selected.isEmpty() ? TimeSelection{0, document_.duration()} : selected;
+}
+
+void MainWindow::applyGainDecibels(double decibels, const QString& label) {
+    const TimeSelection range = targetRange();
+    if (range.isEmpty()) {
+        return;
+    }
+    const auto factor = static_cast<float>(std::pow(10.0, decibels / 20.0));
+    (void)applyEdit(label, [this, range, factor] {
+        return engine::applyRangeGain(document_, range.start, range.end, factor).ok();
+    });
+}
+
+void MainWindow::chooseGain() {
+    if (!hasDocument()) {
+        return;
+    }
+    bool accepted = false;
+    const double decibels = QInputDialog::getDouble(this, tr("Gain"), tr("Change level by (dB):"),
+                                                    0.0, -96.0, 24.0, 2, &accepted);
+    if (accepted && decibels != 0.0) {
+        applyGainDecibels(decibels, tr("gain %1 dB").arg(decibels, 0, 'f', 2));
+    }
+}
+
+void MainWindow::normaliseToTarget() {
+    if (!hasDocument()) {
+        return;
+    }
+    // The measurement may still be running -- on a long file it will be, and on
+    // a freshly opened one it always is. Waiting is the right answer either way:
+    // the alternative is a menu item that silently does nothing depending on how
+    // fast the user reached for it.
+    if (meters_->busy()) {
+        status_->setText(tr("Waiting for the measurement to finish…"));
+        if (!waitForAnalysis()) {
+            status_->setText(tr("The measurement did not finish in time"));
+            return;
+        }
+    }
+
+    const std::optional<double> gain = meters_->conformGainDb();
+    if (!gain) {
+        status_->setText(tr("Nothing measurable to normalise yet"));
+        return;
+    }
+    if (std::abs(*gain) < 0.01) {
+        status_->setText(tr("Already on target for %1").arg(meters_->targetName()));
+        return;
+    }
+    // The measurement covers whatever the panel last measured, which is the
+    // same range this will change -- targetRange decides both.
+    applyGainDecibels(*gain, tr("normalise to %1").arg(meters_->targetName()));
+}
+
+void MainWindow::applyFade(bool fadingIn) {
+    const TimeSelection range = targetRange();
+    if (range.isEmpty()) {
+        return;
+    }
+    (void)applyEdit(fadingIn ? tr("fade in") : tr("fade out"), [this, range, fadingIn] {
+        return engine::applyRangeFade(document_, range.start, range.end, fadingIn,
+                                      engine::FadeShape::Linear)
+            .ok();
+    });
+}
+
+void MainWindow::flattenRange() {
+    const TimeSelection range = targetRange();
+    if (range.isEmpty()) {
+        return;
+    }
+    (void)applyEdit(tr("flatten"), [this, range] {
+        return engine::flattenRange(document_, range.start, range.end).ok();
+    });
 }
 
 void MainWindow::copySelection() {
@@ -601,7 +695,24 @@ bool MainWindow::applyOperation(const QString& name) {
         selectSeconds(from, to);
         return true;
     }
-    if (name == "cut") {
+    if (name.startsWith("gain:")) {
+        bool ok = false;
+        const double decibels = name.mid(5).toDouble(&ok);
+        if (!ok) {
+            return false;
+        }
+        applyGainDecibels(decibels, QStringLiteral("gain"));
+        return true;
+    }
+    if (name == "normalise") {
+        normaliseToTarget();
+    } else if (name == "fadein") {
+        applyFade(true);
+    } else if (name == "fadeout") {
+        applyFade(false);
+    } else if (name == "flatten") {
+        flattenRange();
+    } else if (name == "cut") {
         cutSelection();
     } else if (name == "copy") {
         copySelection();

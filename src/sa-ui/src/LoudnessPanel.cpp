@@ -233,6 +233,19 @@ void LoudnessPanel::measure(std::shared_ptr<const io::AudioSource> source, Sampl
     }}.detach();
 }
 
+std::optional<double> LoudnessPanel::conformGainDb() const {
+    if (!hasLatest_ || latest_.loudness.gatedBlockCount <= 0) {
+        return std::nullopt;
+    }
+    const auto platform = static_cast<analysis::LoudnessPlatform>(target_->currentData().toInt());
+    return analysis::check(platform, latest_.loudness.integratedLufs, latest_.truePeakDbtp)
+        .conformGainDb;
+}
+
+QString LoudnessPanel::targetName() const {
+    return target_->currentText();
+}
+
 void LoudnessPanel::show(const analysis::ProgrammeAnalysis& result, const QString& what) {
     latest_ = result;
     hasLatest_ = true;

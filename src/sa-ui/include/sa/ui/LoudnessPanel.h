@@ -8,6 +8,7 @@
 #include <QWidget>
 #include <atomic>
 #include <memory>
+#include <optional>
 
 class QComboBox;
 class QLabel;
@@ -39,6 +40,14 @@ public:
     /// waits on this; without it, a batch run captures the panel mid-measure
     /// and every number reads "--".
     [[nodiscard]] bool busy() const noexcept { return busy_; }
+
+    /// Gain in dB that brings the last measurement onto the selected target
+    /// without pushing the peaks through its ceiling, or nothing when there is
+    /// no usable measurement to work from.
+    [[nodiscard]] std::optional<double> conformGainDb() const;
+
+    /// Name of the selected target, for an undo label.
+    [[nodiscard]] QString targetName() const;
 
     /// The last completed measurement, or nothing if none has completed.
     [[nodiscard]] const analysis::ProgrammeAnalysis* latest() const noexcept {

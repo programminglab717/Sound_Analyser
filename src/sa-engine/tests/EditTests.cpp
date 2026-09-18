@@ -4,6 +4,7 @@
 
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <limits>
 #include <vector>
 
 using namespace sa;
@@ -358,4 +359,122 @@ TEST_CASE("Duplicating shares the source", "[engine][edits][duplicate]") {
     CHECK(rendered[550] == Approx(50.0f));
 
     CHECK_FALSE(duplicateClip(fixture.document, static_cast<ClipId>(77), 0).hasValue());
+}
+
+TEST_CASE("Range gain multiplies only what is inside the range", "[engine][edits][gain]") {
+    Fixture fixture{1000};
+    Document& document = fixture.document;
+    REQUIRE(applyRangeGain(document, 200, 600, 0.5f).ok());
+
+    AudioBuffer out{ChannelLayout::stereo(), 1000};
+    REQUIRE(document.render(0, out.view()).ok());
+
+    CHECK(out.channel(0)[199] == Approx(199.0f));
+    CHECK(out.channel(0)[200] == Approx(100.0f));
+    CHECK(out.channel(0)[599] == Approx(299.5f));
+    CHECK(out.channel(0)[600] == Approx(600.0f));
+}
+
+TEST_CASE("Range gain is multiplicative, not absolute", "[engine][edits][gain]") {
+    // Two corrections in a row must compose. An absolute set would silently
+    // discard the first, which is exactly the bug that makes a user distrust a
+    // gain control.
+    Fixture fixture{1000};
+    Document& document = fixture.document;
+    REQUIRE(applyRangeGain(document, 0, 1000, 0.5f).ok());
+    REQUIRE(applyRangeGain(document, 0, 1000, 0.5f).ok());
+
+    AudioBuffer out{ChannelLayout::stereo(), 8};
+    REQUIRE(document.render(100, out.view()).ok());
+    CHECK(out.channel(0)[0] == Approx(25.0f));
+}
+
+TEST_CASE("Range gain refuses nonsense", "[engine][edits][gain]") {
+    Fixture fixture{1000};
+    Document& document = fixture.document;
+    CHECK_FALSE(applyRangeGain(document, 500, 500, 0.5f).ok());
+    CHECK_FALSE(applyRangeGain(document, 600, 200, 0.5f).ok());
+    CHECK_FALSE(applyRangeGain(document, 0, 100, -1.0f).ok());
+    CHECK_FALSE(applyRangeGain(document, 0, 100, std::numeric_limits<float>::quiet_NaN()).ok());
+    CHECK_FALSE(applyRangeGain(document, 0, 100, std::numeric_limits<float>::infinity()).ok());
+}
+
+TEST_CASE("Splitting at an edge, in a gap or past the end is a no-op", "[engine][edits][split]") {
+    Fixture fixture{1000};
+    Document& document = fixture.document;
+    const std::size_t before = document.timeline().clips().size();
+
+    CHECK(splitAt(document, 0).ok());
+    CHECK(splitAt(document, 1000).ok());
+    CHECK(splitAt(document, 99999).ok());
+    CHECK(document.timeline().clips().size() == before);
+
+    CHECK(splitAt(document, 500).ok());
+    CHECK(document.timeline().clips().size() == before + 1);
+
+    CHECK_FALSE(splitAt(document, -1).ok());
+}
+
+TEST_CASE("A fade in over a range reaches full level at its end", "[engine][edits][fade]") {
+    Fixture fixture{1000};
+    Document& document = fixture.document;
+    REQUIRE(applyRangeFade(document, 0, 400, true, FadeShape::Linear).ok());
+
+    AudioBuffer out{ChannelLayout::stereo(), 1000};
+    REQUIRE(document.render(0, out.view()).ok());
+
+    // Silent at the start, half way up in the middle, untouched past the end.
+    CHECK(out.channel(0)[0] == Approx(0.0f).margin(1e-6));
+    CHECK(out.channel(0)[200] == Approx(100.0f).margin(1.0f));
+    CHECK(out.channel(0)[500] == Approx(500.0f));
+}
+
+TEST_CASE("A fade across several clips is flattened rather than restarted",
+          "[engine][edits][fade]") {
+    // Two internal boundaries mean three clips under the range. Without
+    // flattening each would restart the curve, which shows up as the level
+    // jumping back up at every seam.
+    Fixture fixture{1200};
+    Document& document = fixture.document;
+    REQUIRE(splitAt(document, 200).ok());
+    REQUIRE(splitAt(document, 400).ok());
+    REQUIRE(document.timeline().clips().size() == 3);
+
+    REQUIRE(applyRangeFade(document, 0, 600, true, FadeShape::Linear).ok());
+
+    AudioBuffer out{ChannelLayout::stereo(), 600};
+    REQUIRE(document.render(0, out.view()).ok());
+
+    // The applied gain must rise monotonically across the whole range. The
+    // source is a ramp, so divide it out first.
+    float previous = -1.0f;
+    int drops = 0;
+    for (SampleCount i = 10; i < 600; i += 10) {
+        const float gain = out.channel(0)[i] / static_cast<float>(i);
+        if (gain < previous - 1e-4f) {
+            ++drops;
+        }
+        previous = gain;
+    }
+    CHECK(drops == 0);
+    CHECK(out.channel(0)[599] / 599.0f == Approx(1.0f).margin(0.02f));
+}
+
+TEST_CASE("Flattening a range preserves what it sounded like", "[engine][edits][flatten]") {
+    Fixture fixture{1000};
+    Document& document = fixture.document;
+    REQUIRE(applyRangeGain(document, 200, 600, 0.25f).ok());
+
+    AudioBuffer before{ChannelLayout::stereo(), 1000};
+    REQUIRE(document.render(0, before.view()).ok());
+
+    REQUIRE(flattenRange(document, 100, 800).ok());
+    CHECK(document.duration() == 1000);
+
+    AudioBuffer after{ChannelLayout::stereo(), 1000};
+    REQUIRE(document.render(0, after.view()).ok());
+
+    for (SampleCount i = 0; i < 1000; ++i) {
+        REQUIRE(after.channel(0)[i] == Approx(before.channel(0)[i]).margin(1e-4));
+    }
 }

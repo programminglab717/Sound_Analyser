@@ -48,8 +48,9 @@ int main(int argc, char** argv) {
                               "span"};
     QCommandLineOption apply{
         "apply",
-        "Comma-separated operations, applied in order: select:<from>-<to> (seconds), cut, copy, "
-        "paste, delete, silence, trim, undo, redo, selectall, deselect.",
+        "Comma-separated operations, applied in order: select:<from>-<to> (seconds), gain:<dB>, "
+        "normalise, fadein, fadeout, flatten, cut, copy, paste, delete, silence, trim, undo, "
+        "redo, selectall, deselect.",
         "ops"};
     QCommandLineOption exportTo{"export", "Write the edited document to <wav>.", "wav"};
     QCommandLineOption printAnalysis{"print-analysis",

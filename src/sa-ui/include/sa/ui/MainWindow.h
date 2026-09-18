@@ -102,6 +102,17 @@ private:
     template <typename Edit>
     [[nodiscard]] bool applyEdit(const QString& label, Edit&& edit);
 
+    /// The range an operation acts on: the selection if there is one, otherwise
+    /// the whole document. "No selection" means "all of it" everywhere in this
+    /// window, and having each caller decide that separately is how they drift.
+    [[nodiscard]] TimeSelection targetRange() const noexcept;
+
+    void applyGainDecibels(double decibels, const QString& label);
+    void chooseGain();
+    void normaliseToTarget();
+    void applyFade(bool fadingIn);
+    void flattenRange();
+
     void copySelection();
     void cutSelection();
     void pasteClipboard();
@@ -128,6 +139,7 @@ private:
     QAction* deleteAction_ = nullptr;
     QAction* silenceAction_ = nullptr;
     QAction* trimAction_ = nullptr;
+    QAction* normaliseAction_ = nullptr;
     QAction* exportSelectionAction_ = nullptr;
 
     engine::Document document_;

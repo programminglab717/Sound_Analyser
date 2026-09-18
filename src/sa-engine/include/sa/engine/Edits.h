@@ -62,6 +62,42 @@ namespace sa::engine {
 [[nodiscard]] Status crossfade(Document& document, ClipId first, ClipId second, SampleCount length,
                                FadeShape shape = FadeShape::EqualPower);
 
+/// Multiply the gain of everything in [start, end) by `factor`.
+///
+/// Clips straddling a boundary are split, so the change stops exactly where the
+/// user put it rather than spilling over whichever clip happened to be there.
+/// Multiplicative rather than absolute: the caller is applying a correction to
+/// what is already there -- "turn this down 3 dB" -- and an absolute set would
+/// silently discard an earlier adjustment.
+[[nodiscard]] Status applyRangeGain(Document& document, SampleIndex start, SampleIndex end,
+                                    float factor);
+
+/// Replace a range with a single clip holding what it currently sounds like.
+///
+/// The one deliberately destructive operation in the model, and the "flatten"
+/// ADR 0003 says belongs on top of the non-destructive core rather than instead
+/// of it. Gains and fades inside the range are baked in; the range keeps its
+/// position on the timeline.
+[[nodiscard]] Status flattenRange(Document& document, SampleIndex start, SampleIndex end);
+
+/// Fade the range in or out over its whole length.
+///
+/// The range is isolated by splitting at both edges first, so the fade covers
+/// exactly the selection. A fade runs from a clip's own edge, so a range
+/// spanning several clips is flattened first: carrying one curve across several
+/// clips is not expressible, and letting each clip restart the fade is audible
+/// as a series of dips.
+[[nodiscard]] Status applyRangeFade(Document& document, SampleIndex start, SampleIndex end,
+                                    bool fadingIn, FadeShape shape = FadeShape::Linear);
+
+/// Split whatever clip spans `position`, leaving the audio unchanged.
+///
+/// A position at a clip edge, in a gap, or off the end is a no-op rather than an
+/// error: the caller's guarantee is "there is a clip boundary here afterwards",
+/// and all three already satisfy it. Exposed because every range operation above
+/// needs it and so will every future one.
+[[nodiscard]] Status splitAt(Document& document, SampleIndex position);
+
 /// Duplicate a clip at a new position, referencing the same source audio.
 [[nodiscard]] Result<ClipId> duplicateClip(Document& document, ClipId clip,
                                            SampleIndex newTimelineStart);

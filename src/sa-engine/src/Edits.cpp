@@ -1,6 +1,9 @@
+#include <sa/engine/BufferSource.h>
 #include <sa/engine/Edits.h>
 
 #include <algorithm>
+#include <cmath>
+#include <memory>
 #include <vector>
 
 namespace sa::engine {
@@ -290,6 +293,156 @@ Status crossfade(Document& document, ClipId first, ClipId second, SampleCount le
 
     document.timeline().reorder();
     return Status{};
+}
+
+Status splitAt(Document& document, SampleIndex position) {
+    if (position < 0) {
+        return Error{ErrorCode::OutOfRange, "position is negative"};
+    }
+
+    // Find the clip strictly containing the position. splitClip rejects a
+    // position on an edge, which is exactly the case that needs no split.
+    ClipId target = ClipId::Invalid;
+    for (const Clip& clip : document.timeline().clips()) {
+        if (clip.timelineStart < position && position < clip.timelineEnd()) {
+            target = clip.id;
+            break;
+        }
+    }
+    if (target == ClipId::Invalid) {
+        return Status{};
+    }
+    if (!splitClip(document, target, position)) {
+        return Error{ErrorCode::InvalidArgument, "could not split at the range boundary"};
+    }
+    return Status{};
+}
+
+Status applyRangeGain(Document& document, SampleIndex start, SampleIndex end, float factor) {
+    if (end <= start) {
+        return Error{ErrorCode::InvalidArgument, "range is empty"};
+    }
+    if (!std::isfinite(factor) || factor < 0.0f) {
+        return Error{ErrorCode::InvalidArgument, "gain factor must be finite and non-negative"};
+    }
+
+    if (auto status = splitAt(document, start); !status) {
+        return status;
+    }
+    if (auto status = splitAt(document, end); !status) {
+        return status;
+    }
+
+    // Collect first: setClipGain goes through the timeline, and holding a
+    // pointer across it is how the earlier edits in this file got their
+    // invalidation comments.
+    std::vector<ClipId> inside;
+    for (const Clip& clip : document.timeline().clips()) {
+        if (clip.timelineStart >= start && clip.timelineEnd() <= end) {
+            inside.push_back(clip.id);
+        }
+    }
+
+    for (ClipId id : inside) {
+        const Clip* clip = document.timeline().find(id);
+        if (clip == nullptr) {
+            continue;
+        }
+        if (auto status = setClipGain(document, id, clip->gain * factor); !status) {
+            return status;
+        }
+    }
+    return Status{};
+}
+
+Status flattenRange(Document& document, SampleIndex start, SampleIndex end) {
+    if (end <= start) {
+        return Error{ErrorCode::InvalidArgument, "range is empty"};
+    }
+
+    // Render what the range currently sounds like, gains and fades included,
+    // then put that back as a single clip. This is the one place the model goes
+    // destructive, and it does so deliberately: some operations cannot be
+    // expressed as a decision attached to a clip, and pretending otherwise
+    // produces an approximation nobody can reason about (ADR 0003).
+    AudioBuffer rendered{document.layout(), end - start};
+    if (auto status = document.render(start, rendered.view()); !status) {
+        return status;
+    }
+
+    // Without ripple: the range keeps its place on the timeline, which is the
+    // whole point of replacing it in situ.
+    if (auto status = deleteRange(document, start, end, false); !status) {
+        return status;
+    }
+
+    auto source = document.addSource(
+        std::make_shared<BufferSource>(std::move(rendered), document.sampleRate()), "flattened");
+    if (!source) {
+        return source.error();
+    }
+    auto clip = document.appendSource(source.value(), start);
+    if (!clip) {
+        return clip.error();
+    }
+    return Status{};
+}
+
+Status applyRangeFade(Document& document, SampleIndex start, SampleIndex end, bool fadingIn,
+                      FadeShape shape) {
+    if (end <= start) {
+        return Error{ErrorCode::InvalidArgument, "range is empty"};
+    }
+
+    if (auto status = splitAt(document, start); !status) {
+        return status;
+    }
+    if (auto status = splitAt(document, end); !status) {
+        return status;
+    }
+
+    const auto clipsInside = [&] {
+        std::vector<ClipId> found;
+        for (const Clip& clip : document.timeline().clips()) {
+            if (clip.timelineStart >= start && clip.timelineEnd() <= end) {
+                found.push_back(clip.id);
+            }
+        }
+        return found;
+    };
+
+    std::vector<ClipId> inside = clipsInside();
+    if (inside.empty()) {
+        return Error{ErrorCode::NotFound, "nothing to fade in that range"};
+    }
+
+    // A fade runs from a clip's own edge, so a range spanning several clips
+    // cannot carry one curve: each clip would restart it, which is audible as a
+    // series of dips. Flatten to one clip first rather than approximate. After
+    // a few edits any selection spans clips, so refusing instead would make
+    // this unusable in practice.
+    if (inside.size() > 1) {
+        if (auto status = flattenRange(document, start, end); !status) {
+            return status;
+        }
+        inside = clipsInside();
+        if (inside.size() != 1) {
+            return Error{ErrorCode::Unknown, "flattening did not leave a single clip"};
+        }
+    }
+
+    const Clip* clip = document.timeline().find(inside.front());
+    if (clip == nullptr) {
+        return Error{ErrorCode::NotFound, "the clip vanished mid-edit"};
+    }
+
+    Fade fadeIn = clip->fadeIn;
+    Fade fadeOut = clip->fadeOut;
+    Fade& affected = fadingIn ? fadeIn : fadeOut;
+    affected.shape = shape;
+    affected.length = clip->length;
+
+    return setClipFades(document, inside.front(), fadeIn, fadeOut);
 }
 
 Result<ClipId> duplicateClip(Document& document, ClipId clip, SampleIndex newTimelineStart) {

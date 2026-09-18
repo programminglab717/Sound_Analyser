@@ -172,13 +172,91 @@ def main() -> int:
             original,
         )
 
+        # The mastering loop: measure, apply the correction the meter advises,
+        # write the file, then measure the file that came out. Every stage has
+        # to agree or this does not land on the target, which makes it the
+        # strongest single check in the project -- it covers the meters, the
+        # gain verb, the render and the writer at once.
+        print("\nmastering loop:")
+        loudness = workspace / "normalised.wav"
+        completed = subprocess.run(
+            [
+                str(arguments.binary),
+                str(source),
+                "--apply",
+                "normalise",
+                "--export",
+                str(loudness),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if completed.returncode != 0 or not loudness.exists():
+            failures.append(f"normalise: exited {completed.returncode} -- {completed.stderr}")
+        else:
+            remeasured = subprocess.run(
+                [str(arguments.binary), str(loudness), "--print-analysis"],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            values = {}
+            for line in remeasured.stdout.splitlines():
+                key, _, value = line.partition("=")
+                try:
+                    values[key] = float(value)
+                except ValueError:
+                    pass
+
+            integrated = values.get("integrated_lufs")
+            if integrated is None:
+                failures.append("normalise: the exported file did not measure")
+            elif abs(integrated - (-23.0)) > 0.1:
+                failures.append(
+                    f"normalise: exported file reads {integrated:.3f} LUFS, wanted -23.0"
+                )
+            else:
+                print(f"  ok  normalise to EBU R128: exported file reads {integrated:.3f} LUFS")
+
+        # A gain is exact arithmetic, so a -6 dB correction must show up as
+        # exactly -6 dB on both the loudness and the peak.
+        before = {}
+        after = {}
+        for target, arguments_list in (
+            (before, ["--print-analysis"]),
+            (after, ["--apply", "gain:-6", "--print-analysis"]),
+        ):
+            result = subprocess.run(
+                [str(arguments.binary), str(source), *arguments_list],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            for line in result.stdout.splitlines():
+                key, _, value = line.partition("=")
+                try:
+                    target[key] = float(value)
+                except ValueError:
+                    pass
+
+        for key in ("integrated_lufs", "sample_peak_dbfs"):
+            if key not in before or key not in after:
+                failures.append(f"gain: no {key} measured")
+            elif abs((before[key] - after[key]) - 6.0) > 0.01:
+                failures.append(
+                    f"gain: -6 dB moved {key} by {before[key] - after[key]:.3f} dB"
+                )
+        if not failures:
+            print("  ok  gain: -6 dB moved loudness and peak by exactly 6 dB")
+
     if failures:
         print()
         for failure in failures:
             print(f"FAIL: {failure}")
         return 1
 
-    print("\nOK: every editing operation moved exactly the samples it should have")
+    print("\nOK: every operation moved exactly the samples it should have")
     return 0
 
 
