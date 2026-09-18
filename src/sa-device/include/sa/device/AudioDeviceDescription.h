@@ -51,7 +51,8 @@ struct AudioDeviceDescription {
 
     /// The listed rate closest to `preferred`, compared in octaves rather than
     /// hertz so that 44100 prefers 48000 over 96000 the way a human would.
-    /// Returns `preferred` unchanged when the rate list is empty.
+    /// Returns `preferred` unchanged when the rate list is empty, and the first
+    /// listed rate when `preferred` is not a valid rate at all.
     [[nodiscard]] SampleRate closestSampleRate(SampleRate preferred) const noexcept;
 };
 

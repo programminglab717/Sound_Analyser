@@ -1,7 +1,6 @@
-#include <sa/device/NullAudioDevice.h>
-
 #include <sa/core/ChannelLayout.h>
 #include <sa/core/RealtimeGuard.h>
+#include <sa/device/NullAudioDevice.h>
 
 #include <chrono>
 #include <cstdint>
@@ -34,8 +33,8 @@ NullAudioDevice::NullAudioDevice(AudioDeviceDescription description, AudioDevice
     // allocate -- see the real-time contract on AudioCallback. A direction with
     // no channels still keeps the block's frame count, so both views handed to
     // the callback agree on how long the block is.
-    const auto frames = config_.bufferFrames > 0 ? static_cast<SampleCount>(config_.bufferFrames)
-                                                 : SampleCount{0};
+    const auto frames =
+        config_.bufferFrames > 0 ? static_cast<SampleCount>(config_.bufferFrames) : SampleCount{0};
     input_.resize(ChannelLayout::discrete(config_.inputChannels), frames);
     output_.resize(ChannelLayout::discrete(config_.outputChannels), frames);
 }
@@ -159,8 +158,8 @@ std::vector<AudioDeviceDescription> NullAudioBackend::enumerate() const {
     return {std::move(description)};
 }
 
-Result<std::unique_ptr<AudioDevice>> NullAudioBackend::open(const AudioDeviceDescription& description,
-                                                            const AudioDeviceConfig& config) {
+Result<std::unique_ptr<AudioDevice>>
+NullAudioBackend::open(const AudioDeviceDescription& description, const AudioDeviceConfig& config) {
     if (description.id != kDeviceId) {
         return Error{ErrorCode::NotFound, "unknown null-backend device id: " + description.id};
     }

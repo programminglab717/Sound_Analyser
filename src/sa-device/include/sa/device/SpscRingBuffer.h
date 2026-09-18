@@ -107,26 +107,33 @@ public:
 
     [[nodiscard]] std::size_t capacity() const noexcept { return capacity_; }
 
-    /// Samples waiting to be read. Exact on the consumer thread; on any other
-    /// thread it is a lower bound, because the producer may add more at any
-    /// moment. Never over-reports to the consumer, which is what makes it safe
-    /// to size a read from.
+    /// Samples waiting to be read.
+    ///
+    /// Only the consumer may size a read from this. The consumer's own index is
+    /// exact and the producer's can only be stale in the direction of *fewer*
+    /// samples, so it never over-reports here -- whereas on the producer thread
+    /// it can, because the consumer may have drained more than the producer has
+    /// observed. Treat it as a hint anywhere but the consumer.
     [[nodiscard]] std::size_t availableToRead() const noexcept {
         const std::size_t readPos = readIndex_.load(std::memory_order_relaxed);
         const std::size_t writePos = writeIndex_.load(std::memory_order_acquire);
         return fillLevel(writePos, readPos);
     }
 
-    /// Free space, in samples. Exact on the producer thread; a lower bound
-    /// elsewhere, for the mirror-image reason.
+    /// Free space, in samples. The mirror image: safe to size a write from on
+    /// the producer thread, a hint anywhere else.
     [[nodiscard]] std::size_t availableToWrite() const noexcept {
         const std::size_t writePos = writeIndex_.load(std::memory_order_relaxed);
         const std::size_t readPos = readIndex_.load(std::memory_order_acquire);
         return capacity_ - fillLevel(writePos, readPos);
     }
 
+    /// True when the consumer has nothing to take. Carries the same caveat as
+    /// availableToRead(): trustworthy on the consumer thread, a hint elsewhere.
     [[nodiscard]] bool isEmpty() const noexcept { return availableToRead() == 0; }
 
+    /// True when the producer cannot place anything. Trustworthy on the
+    /// producer thread, a hint elsewhere.
     [[nodiscard]] bool isFull() const noexcept { return availableToWrite() == 0; }
 
     /// Copies up to `count` samples in, returning how many were taken. A short

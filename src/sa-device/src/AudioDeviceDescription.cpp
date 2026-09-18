@@ -21,8 +21,13 @@ bool AudioDeviceDescription::supportsSampleRate(SampleRate rate) const noexcept 
 }
 
 SampleRate AudioDeviceDescription::closestSampleRate(SampleRate preferred) const noexcept {
-    if (sampleRates.empty() || !preferred.isValid()) {
+    if (sampleRates.empty()) {
         return preferred;
+    }
+    if (!preferred.isValid()) {
+        // Nothing meaningful to be close to, so the device's own first choice
+        // wins -- backends report it first because they prefer it.
+        return sampleRates.front();
     }
 
     SampleRate best = sampleRates.front();

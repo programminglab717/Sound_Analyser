@@ -58,14 +58,18 @@ public:
 
     [[nodiscard]] Result<std::unique_ptr<AudioDevice>> openDefault(const AudioDeviceConfig& config);
 
-    /// Opens `id` if it is present and opens, otherwise the default device.
-    /// This is what application startup should call: the interface a session
-    /// remembers is routinely unplugged, and the right answer is to come up on
-    /// something else, not to refuse to start.
-    [[nodiscard]] Result<std::unique_ptr<AudioDevice>> openOrFallback(std::string_view id,
-                                                                      const AudioDeviceConfig& config);
+    /// Opens `id`; failing that the default device; failing that every other
+    /// device in turn. This is what application startup should call: the
+    /// interface a session remembers is routinely unplugged or held by another
+    /// application, and the right answer is to come up on something else rather
+    /// than refuse to start. Only fails when nothing at all will open.
+    [[nodiscard]] Result<std::unique_ptr<AudioDevice>>
+    openOrFallback(std::string_view id, const AudioDeviceConfig& config);
 
 private:
+    /// Index of the device defaultDevice() would pick, or devices_.size().
+    [[nodiscard]] std::size_t defaultIndex() const noexcept;
+
     [[nodiscard]] Result<std::unique_ptr<AudioDevice>> openAt(std::size_t index,
                                                               const AudioDeviceConfig& config);
 

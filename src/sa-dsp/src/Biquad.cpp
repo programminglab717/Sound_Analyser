@@ -36,7 +36,7 @@ struct Cookbook {
     return terms;
 }
 
-[[nodiscard]] Status checkGain(double gainDb) noexcept {
+[[nodiscard]] Status checkGain(double gainDb) {
     if (!std::isfinite(gainDb)) {
         return Error{ErrorCode::InvalidArgument, "gain must be finite"};
     }

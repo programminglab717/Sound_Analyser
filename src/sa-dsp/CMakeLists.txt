@@ -1,5 +1,10 @@
 add_library(sa-dsp STATIC
+    src/Biquad.cpp
+    src/BiquadCascade.cpp
+    src/Dynamics.cpp
+    src/EnvelopeFollower.cpp
     src/Fft.cpp
+    src/ParametricEq.cpp
     src/Stft.cpp
     src/Window.cpp
 )
@@ -11,7 +16,10 @@ target_link_libraries(sa-dsp PRIVATE sa-warnings)
 
 if(SA_BUILD_TESTS)
     add_executable(sa-dsp-tests
+        tests/BiquadTests.cpp
+        tests/DynamicsTests.cpp
         tests/FftTests.cpp
+        tests/ParametricEqTests.cpp
         tests/StftTests.cpp
         tests/WindowTests.cpp
     )
