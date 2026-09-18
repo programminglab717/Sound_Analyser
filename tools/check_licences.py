@@ -13,7 +13,8 @@ Checks performed:
      or unverified.
   3. LGPL dependencies are marked for dynamic linking. Static linking an LGPL
      library imposes relink obligations we cannot meet in a closed-source build.
-  4. Anything CMake fetches, finds with find_package, or vcpkg installs is
+  4. Anything CMake fetches, finds with find_package, vendors under
+     third_party/, or vcpkg installs is
      actually declared in third-party.json, so a dependency cannot arrive
      undocumented. A system facility that carries no licence of ours -- the
      platform's own threading or OpenGL -- must still be listed under
@@ -160,6 +161,37 @@ def scan_cmake_find_package(
             )
 
 
+def scan_vendored(root: Path, manifest: dict, found: Violations) -> None:
+    """Every directory under third_party/ must be claimed by a declared entry.
+
+    Vendored source is the third way a dependency arrives, after fetching and
+    finding, and it is the one that leaves no trace in a build file at all --
+    someone copies a header in and the gate has nothing to scan. Requiring each
+    directory to be named by a 'vendoredPath' means copying a library in without
+    declaring it fails the build.
+    """
+    vendored = root / "third_party"
+    if not vendored.is_dir():
+        return
+
+    claimed = {
+        str(entry["vendoredPath"]).rstrip("/")
+        for key in ("dependencies", "models")
+        for entry in manifest.get(key, [])
+        if entry.get("vendoredPath")
+    }
+
+    for child in sorted(vendored.iterdir()):
+        if not child.is_dir():
+            continue
+        relative = child.relative_to(root).as_posix()
+        if relative not in claimed:
+            found.error(
+                f"{relative} contains vendored source but no manifest entry claims it "
+                f"with 'vendoredPath'."
+            )
+
+
 def scan_vcpkg(root: Path, declared: set[str], found: Violations) -> None:
     manifest_path = root / "vcpkg.json"
     if not manifest_path.is_file():
@@ -207,6 +239,7 @@ def main() -> int:
     }
     scan_cmake_fetches(root, declared, found)
     scan_cmake_find_package(root, declared, allowed_system, found)
+    scan_vendored(root, manifest, found)
     scan_vcpkg(root, declared, found)
 
     print(f"licence gate: {len(dependencies)} dependencies, {len(models)} models checked")

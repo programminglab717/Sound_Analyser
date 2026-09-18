@@ -315,7 +315,8 @@ void MainWindow::showSpectrogramCursor(double seconds, double hz, double decibel
 
 void MainWindow::chooseFile() {
     const QString path = QFileDialog::getOpenFileName(
-        this, tr("Open audio"), {}, tr("Audio files (*.wav *.aif *.aiff *.aifc);;All files (*)"));
+        this, tr("Open audio"), {},
+        tr("Audio files (*.wav *.aif *.aiff *.aifc *.flac *.mp3);;All files (*)"));
     if (!path.isEmpty()) {
         openFile(path.toStdString());
     }

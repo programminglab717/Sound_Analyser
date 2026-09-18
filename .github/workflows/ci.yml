@@ -134,6 +134,73 @@ jobs:
           path: artefacts/
           if-no-files-found: ignore
 
-  # TODO(Phase 1): now that Qt is linked, add a job that inspects the built
-  # binaries and fails if any LGPL library was linked statically. The manifest
-  # gate above checks the declaration; this would check the reality.
+  # A build the product owner can actually run. Everything above proves the code
+  # is correct; this is what lets someone judge whether it is any good.
+  #
+  # It also closes the loop the licence gate can only half close: the gate checks
+  # that Qt is *declared* as dynamically linked, and this checks that the thing
+  # we would hand to a user really does carry Qt as separate DLLs it could
+  # replace. A declaration and a binary disagreeing is exactly the failure ADR
+  # 0006 exists to prevent.
+  windows-package:
+    name: Windows package
+    needs: licences
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # aqtinstall directly rather than a marketplace action: it is one pip
+      # package whose source we can read, and it keeps the Qt version visible
+      # here rather than inside somebody else's action.
+      - name: Install Qt
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip aqtinstall
+          python -m aqt install-qt windows desktop 6.8.1 win64_msvc2022_64 --outputdir ${{ github.workspace }}/Qt
+          echo "CMAKE_PREFIX_PATH=${{ github.workspace }}/Qt/6.8.1/msvc2022_64" >> $env:GITHUB_ENV
+
+      - name: Configure
+        run: cmake --preset windows-release
+
+      - name: Build
+        run: cmake --build --preset windows-release
+
+      - name: Test
+        run: ctest --preset windows-release
+
+      - name: Stage the application
+        shell: pwsh
+        run: |
+          $stage = "package/Sound Analyser"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          $exe = Get-ChildItem -Recurse -Filter sound-analyser.exe |
+                 Select-Object -First 1 -ExpandProperty FullName
+          if (-not $exe) { throw "sound-analyser.exe was not built" }
+          Copy-Item $exe $stage
+          & "$env:CMAKE_PREFIX_PATH/bin/windeployqt.exe" --release --no-translations `
+              --no-system-d3d-compiler --no-opengl-sw "$stage/sound-analyser.exe"
+
+      # Qt is LGPL-3.0 and may only ship dynamically linked. windeployqt putting
+      # the DLLs beside the executable is what makes that true in the artefact,
+      # so their absence is a licence failure and not merely a broken build.
+      - name: Check Qt ships as replaceable DLLs
+        shell: pwsh
+        run: |
+          $stage = "package/Sound Analyser"
+          foreach ($dll in @("Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll")) {
+            if (-not (Test-Path "$stage/$dll")) {
+              throw "$dll is missing: Qt must ship dynamically linked (ADR 0006)"
+            }
+          }
+          Get-ChildItem $stage -Filter "Qt6*.dll" | ForEach-Object { Write-Host $_.Name }
+
+      - name: Upload the application
+        uses: actions/upload-artifact@v4
+        with:
+          name: sound-analyser-windows
+          path: package/
+          if-no-files-found: error

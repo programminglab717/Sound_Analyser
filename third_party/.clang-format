@@ -1,0 +1,11 @@
+---
+# Vendored third-party sources are formatted by their upstream authors, not by
+# us. Reformatting them would turn every future update into a merge conflict
+# and would make a diff against upstream unreadable, so clang-format leaves
+# everything under third_party/ alone.
+#
+# The repo-wide check in .github/workflows/ci.yml only scans src/, which is the
+# other half of the same decision: vendored code lives outside src/ precisely so
+# that our formatting and warning rules apply to code we can actually fix.
+DisableFormat: true
+SortIncludes: false

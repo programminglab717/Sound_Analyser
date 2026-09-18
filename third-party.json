@@ -9,7 +9,8 @@
     "that anything CMake fetches or vcpkg installs is declared.",
     "",
     "'cmakeNames' lists the names a dependency is found under in build files, because a package is rarely called the same thing twice.",
-    "'systemPackages' exempts a find_package() that is a platform facility rather than a third-party library -- the compiler's threading runtime, the system's own OpenGL. Each needs a reason, so every exemption is written down rather than assumed."
+    "'systemPackages' exempts a find_package() that is a platform facility rather than a third-party library -- the compiler's threading runtime, the system's own OpenGL. Each needs a reason, so every exemption is written down rather than assumed.",
+    "'vendoredPath' points at the directory a dependency's source was copied into. The gate requires every directory under third_party/ to be claimed by one, so source cannot be vendored without being declared."
   ],
   "policy": {
     "allowedLicences": [
@@ -64,6 +65,30 @@
       "scope": "test",
       "url": "https://github.com/catchorg/Catch2",
       "purpose": "Test framework. Test-only, never shipped."
+    },
+    {
+      "name": "dr_flac",
+      "vendoredPath": "third_party/dr_libs",
+      "version": "v0.13.4 (unreleased), commit dfe8377631000664666519fdb83da193fd8037f4",
+      "licence": "Unlicense",
+      "alternativeLicence": "MIT-0",
+      "linkage": "static",
+      "url": "https://github.com/mackron/dr_libs",
+      "sha256": "111144e778f55738db6851cb226015c419e00d04b916a09506d4856d9cff945c",
+      "usedFor": "FLAC decoding, behind sa::io::AudioSource.",
+      "notes": "Dual licensed, either alternative acceptable: Unlicense (public domain) or MIT-0 (MIT with no attribution clause). Licence text read directly from the file, not taken on trust. The header states 'v0.13.4 - TBD', meaning an unreleased snapshot of master, so the commit hash is the only real pin and the sha256 above is what was vendored. Compiled in its own target without this project's warning set, because third-party C does not survive it; sa-io itself keeps -Werror."
+    },
+    {
+      "name": "dr_mp3",
+      "vendoredPath": "third_party/dr_libs",
+      "version": "v0.7.4 (unreleased), commit dfe8377631000664666519fdb83da193fd8037f4",
+      "licence": "Unlicense",
+      "alternativeLicence": "MIT-0",
+      "linkage": "static",
+      "url": "https://github.com/mackron/dr_libs",
+      "sha256": "997b7ee18de6e6b81e2a83f1ea9fc62aef25c62b28d48db95635f49e65de0a2f",
+      "usedFor": "MP3 decoding, behind sa::io::AudioSource.",
+      "notes": "Same dual licence and same commit as dr_flac. Carries a third upstream: it derives from minimp3 (https://github.com/lieff/minimp3), whose own notice at the foot of the file is a CC0-1.0 public domain dedication -- also allowlisted, recorded here because it is a distinct author. MP3 decoding patents expired in 2017, so there is no patent position to take. Verified by reading all three notices in the file."
     },
     {
       "name": "nlohmann_json",
