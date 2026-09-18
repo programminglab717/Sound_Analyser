@@ -394,6 +394,98 @@ def main() -> int:
             else:
                 print(f"  ok  no click at the join: {join:.5f} against {neighbourhood:.5f}")
 
+        # Time stretch and pitch shift. The two halves of the same machine, and
+        # each one's whole claim is that it changes one thing and leaves the
+        # other alone -- so each is checked on both.
+        print("\nstretch and shift:")
+        note = workspace / "note.wav"
+        write_tone_mix(note, [(440.0, 0.4)], 4)
+        plain = load(note)
+
+        def middle(x: list[float]) -> tuple[int, int]:
+            """The middle half of a signal: clear of both ends whatever its length."""
+            return len(x) // 4, len(x) // 2
+
+        def processed(operations: str, name: str) -> list[float] | None:
+            output = workspace / f"{name}.wav"
+            completed = subprocess.run(
+                [str(arguments.binary), str(note), "--apply", operations, "--export", str(output)],
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+            if completed.returncode != 0 or not output.exists():
+                failures.append(f"{name}: exited {completed.returncode} -- {completed.stderr}")
+                return None
+            return load(output)
+
+        for operation, factor in (("stretch:200", 2.0), ("stretch:50", 0.5), ("stretch:137", 1.37)):
+            result = processed(operation, operation.replace(":", "-"))
+            if result is None:
+                continue
+            wanted = round(len(plain) * factor)
+            if len(result) != wanted:
+                failures.append(f"{operation}: {len(result)} frames, wanted {wanted}")
+                continue
+            # The note has to survive at its own pitch and its own level. A
+            # stretch done by resampling would pass the length and fail this.
+            held = amplitude_at(result, 440.0, *middle(result))
+            if abs(held - 0.4) > 0.01:
+                failures.append(f"{operation}: 440 Hz came out at {held:.4f}, wanted 0.4")
+            else:
+                print(f"  ok  {operation}: {len(result)} frames, 440 Hz still at {held:.4f}")
+
+        for operation, semitones in (("pitch:12", 12.0), ("pitch:-7", -7.0), ("pitch:0.5", 0.5)):
+            result = processed(operation, operation.replace(":", "").replace(".", "-"))
+            if result is None:
+                continue
+            if len(result) != len(plain):
+                failures.append(
+                    f"{operation}: {len(result)} frames, wanted {len(plain)} -- a shift must "
+                    "not change the length"
+                )
+                continue
+            wanted = 440.0 * 2.0 ** (semitones / 12.0)
+            moved = amplitude_at(result, wanted, *middle(result))
+            stayed = amplitude_at(result, 440.0, *middle(result))
+            if abs(moved - 0.4) > 0.015:
+                failures.append(
+                    f"{operation}: {wanted:.2f} Hz came out at {moved:.4f}, wanted 0.4"
+                )
+            elif stayed > 0.02:
+                failures.append(
+                    f"{operation}: 440 Hz is still there at {stayed:.4f} -- it was joined, "
+                    "not moved"
+                )
+            else:
+                print(f"  ok  {operation}: {wanted:.2f} Hz at {moved:.4f}, nothing left at 440")
+
+        # Stretching a selection moves everything after it and nothing before
+        # it, and both edges have to be exact or the document has drifted.
+        result = processed("select:1-2,stretch:200", "stretch-part")
+        if result is not None:
+            wanted = len(plain) + SAMPLE_RATE
+            if len(result) != wanted:
+                failures.append(
+                    f"stretch a selection: {len(result)} frames, wanted {wanted}"
+                )
+            else:
+                head = max(abs(result[i] - plain[i]) for i in range(SAMPLE_RATE))
+                tail = max(
+                    abs(result[len(result) - 1 - i] - plain[len(plain) - 1 - i])
+                    for i in range(2 * SAMPLE_RATE - 1)
+                )
+                if max(head, tail) > 2e-4:
+                    failures.append(
+                        f"stretch a selection: audio outside it moved -- head {head:.5f}, "
+                        f"tail {tail:.5f}"
+                    )
+                else:
+                    print(
+                        f"  ok  stretching a selection: {len(result)} frames, and what was "
+                        "outside it is untouched"
+                    )
+
         # Playback, against the null device. That device runs a real thread on a
         # real clock, so this exercises the ring, the render worker, the
         # callback and the position counter -- everything except the final

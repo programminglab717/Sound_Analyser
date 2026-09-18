@@ -23,6 +23,7 @@
 #include <sa/io/AudioFile.h>
 #include <sa/io/WavWriter.h>
 #include <sa/spectral/Denoise.h>
+#include <sa/spectral/TimeStretch.h>
 
 #include <algorithm>
 #include <cctype>
@@ -31,6 +32,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -305,6 +307,14 @@ void usage() {
   denoise <in> <out> --noise <from>-<to> [--amount <dB>] [--format 16|24|float]
       Learn a noise profile from <from>-<to> in seconds, then clean the file.
 
+  stretch <in> <out> --length <percent> [--format 16|24|float]
+      Change how long it lasts without changing its pitch. 200 is twice as
+      long, 50 is half.
+
+  pitch <in> <out> --semitones <n> [--format 16|24|float]
+      Change its pitch without changing how long it lasts. Fractions are
+      allowed, and 0.01 of a semitone is a cent.
+
   render <session.sa> <out.wav> [--format 16|24|float]
       Render a saved arrangement to audio.
 
@@ -552,6 +562,92 @@ int denoise(const Options& options) {
     return 0;
 }
 
+/// Shared by both halves of the machine below: read the whole file in, hand the
+/// buffer to a transform, write what comes back.
+int reshape(const Options& options,
+            const std::function<sa::Result<sa::AudioBuffer>(const sa::AudioBuffer&)>& transform,
+            const std::string& description) {
+    std::string error;
+    const auto source = open(options.positional[1], error);
+    if (!source) {
+        return fail(error);
+    }
+    const sa::io::AudioFileInfo& info = source->info();
+
+    sa::AudioBuffer audio{info.layout, info.frameCount};
+    if (const auto read = source->read(0, audio.view()); !read) {
+        return fail(std::string{read.error().what()});
+    }
+
+    auto reshaped = transform(audio);
+    if (!reshaped) {
+        return fail(std::string{reshaped.error().what()});
+    }
+
+    const double seconds = sa::samplesToSeconds(reshaped.value().frames(), info.sampleRate);
+    const sa::engine::BufferSource result{std::move(reshaped.value()), info.sampleRate};
+    if (!write(result, options.positional[2], formatFrom(options, info.format), error)) {
+        return fail(error);
+    }
+    std::printf("%s: %s -> %s (%.2f s)\n",
+                std::filesystem::path{options.positional[1]}.filename().string().c_str(),
+                description.c_str(),
+                std::filesystem::path{options.positional[2]}.filename().string().c_str(), seconds);
+    return 0;
+}
+
+int stretch(const Options& options) {
+    if (options.positional.size() != 3) {
+        return fail("stretch needs an input and an output");
+    }
+    if (!options.value("length")) {
+        return fail("stretch needs --length <percent>, where 200 is twice as long");
+    }
+    const double percent = options.number("length", 100.0);
+    const double factor = percent / 100.0;
+    if (!(factor >= sa::spectral::stretch::kMinimumFactor &&
+          factor <= sa::spectral::stretch::kMaximumFactor)) {
+        return fail("--length is outside 10 to 1000 percent");
+    }
+
+    char described[64];
+    std::snprintf(described, sizeof described, "stretched to %.2f%%", percent);
+    return reshape(
+        options,
+        [factor](const sa::AudioBuffer& audio) {
+            sa::spectral::StretchSettings settings;
+            settings.factor = factor;
+            return sa::spectral::timeStretch(audio, settings);
+        },
+        described);
+}
+
+int pitch(const Options& options) {
+    if (options.positional.size() != 3) {
+        return fail("pitch needs an input and an output");
+    }
+    if (!options.value("semitones")) {
+        return fail("pitch needs --semitones <n>; fractions are allowed, and 0.01 is a cent");
+    }
+    const double semitones = options.number("semitones", 0.0);
+    if (!(semitones >= sa::spectral::stretch::kMinimumSemitones &&
+          semitones <= sa::spectral::stretch::kMaximumSemitones)) {
+        return fail("--semitones is outside three octaves either way");
+    }
+
+    char described[64];
+    std::snprintf(described, sizeof described, "shifted by %+.2f semitones (x%.5f)", semitones,
+                  sa::spectral::pitchRatio(semitones));
+    return reshape(
+        options,
+        [semitones](const sa::AudioBuffer& audio) {
+            sa::spectral::PitchSettings settings;
+            settings.semitones = semitones;
+            return sa::spectral::pitchShift(audio, settings);
+        },
+        described);
+}
+
 int render(const Options& options) {
     if (options.positional.size() != 3) {
         return fail("render needs a session and an output");
@@ -601,6 +697,12 @@ int main(int argc, char** argv) {
     }
     if (command == "denoise") {
         return denoise(options);
+    }
+    if (command == "stretch") {
+        return stretch(options);
+    }
+    if (command == "pitch") {
+        return pitch(options);
     }
     if (command == "render") {
         return render(options);

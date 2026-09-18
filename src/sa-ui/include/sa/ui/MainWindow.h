@@ -175,6 +175,10 @@ private:
     void chooseFilter();
     void applyFilter(int filterType, double frequency, double q, double gainDb,
                      const QString& label);
+    void chooseTimeStretch();
+    void choosePitchShift();
+    bool applyTimeStretch(double factor, const QString& label);
+    bool applyPitchShift(double semitones, const QString& label);
     void limitTo(double ceilingDb);
     void normaliseToTarget();
     void applyFade(bool fadingIn);

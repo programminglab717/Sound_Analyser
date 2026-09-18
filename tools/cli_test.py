@@ -180,6 +180,40 @@ def main() -> int:
             check("the noise floor drops", floor_change < -8.0, f"{floor_change:.1f} dB")
             check("the tone survives", tone_change > -1.0, f"{tone_change:.2f} dB")
 
+        print("stretch:")
+        longer = workspace / "longer.wav"
+        result = run("stretch", str(source), str(longer), "--length", "175")
+        check("exits cleanly", result.returncode == 0, result.stderr)
+        if longer.exists():
+            before_samples, _ = read_wav(source)
+            after_samples, rate = read_wav(longer)
+            wanted = round(len(before_samples) * 1.75)
+            check("the length is what was asked for", len(after_samples) == wanted,
+                  f"{len(after_samples)} frames, wanted {wanted}")
+            middle = after_samples[len(after_samples) // 4 : 3 * len(after_samples) // 4]
+            held = tone_amplitude(middle, 1000.0, rate)
+            was = tone_amplitude(before_samples, 1000.0, rate)
+            check("the pitch did not move", abs(held - was) < 0.02 * max(was, 1e-9),
+                  f"{held:.4f} against {was:.4f}")
+
+        print("pitch:")
+        higher = workspace / "higher.wav"
+        result = run("pitch", str(source), str(higher), "--semitones", "5")
+        check("exits cleanly", result.returncode == 0, result.stderr)
+        if higher.exists():
+            before_samples, _ = read_wav(source)
+            after_samples, rate = read_wav(higher)
+            check("the length did not move", len(after_samples) == len(before_samples),
+                  f"{len(after_samples)} frames, wanted {len(before_samples)}")
+            middle = after_samples[len(after_samples) // 4 : 3 * len(after_samples) // 4]
+            wanted_hz = 1000.0 * 2.0 ** (5.0 / 12.0)
+            moved = tone_amplitude(middle, wanted_hz, rate)
+            left = tone_amplitude(middle, 1000.0, rate)
+            was = tone_amplitude(before_samples, 1000.0, rate)
+            check("the tone moved up a fourth", abs(moved - was) < 0.05 * max(was, 1e-9),
+                  f"{wanted_hz:.1f} Hz at {moved:.4f}, wanted {was:.4f}")
+            check("and nothing was left behind", left < 0.05 * max(was, 1e-9), f"{left:.4f}")
+
         print("failure handling:")
         check("a missing file fails", run("analyse", str(workspace / "nope.wav")).returncode != 0)
         check("an unknown command fails", run("frobnicate").returncode != 0)
@@ -187,6 +221,14 @@ def main() -> int:
               run("normalise", str(source), str(workspace / "x.wav"),
                   "--target", "not-a-platform").returncode != 0)
         check("no arguments prints usage and fails", run().returncode != 0)
+        check("a stretch with no length fails",
+              run("stretch", str(source), str(workspace / "x.wav")).returncode != 0)
+        check("an impossible stretch fails",
+              run("stretch", str(source), str(workspace / "x.wav"),
+                  "--length", "5000").returncode != 0)
+        check("a shift past three octaves fails",
+              run("pitch", str(source), str(workspace / "x.wav"),
+                  "--semitones", "99").returncode != 0)
 
     if failures:
         print()

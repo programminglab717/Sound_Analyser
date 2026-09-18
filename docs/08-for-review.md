@@ -17,7 +17,8 @@ run `sound-analyser.exe`. Qt ships beside it, so there is nothing to install.
 It is about 12.6 MB and it is built and tested by the same run that produces it:
 all ten CI jobs green, including both MSVC configurations, before the package is
 uploaded. `sa-cli.exe` is not in the package yet -- say if you want it and it is
-a one-line change.
+a one-line change. It now has seven commands: analyse, convert, normalise,
+denoise, render, stretch and pitch.
 
 Then open something real — a recording of your own, not a test tone — and try:
 
@@ -31,6 +32,8 @@ Then open something real — a recording of your own, not a test tone — and tr
 | Fix the level | Process ▸ Normalise to target, after picking a target in the panel |
 | Filter | Process ▸ Filter, or Ctrl+F. High-pass at 80 Hz is the one to try first on anything with rumble in it |
 | Limit | Process ▸ Limiter. It holds a true-peak ceiling rather than approaching it |
+| Stretch | Process ▸ Time stretch. Asked for as a percentage of the current length, so 200 is twice as long. Pitch stays put |
+| Retune | Process ▸ Pitch shift. Semitones, and fractions of one — 0.01 is a cent, which is what a tuning fix actually needs |
 | Repair | Draw a box round a hum or a click, then Repair ▸ Attenuate or Heal |
 | Denoise | Select a passage of noise alone ▸ Repair ▸ Learn noise profile, then select the whole thing ▸ Repair ▸ Reduce noise |
 | Save | File ▸ Save session, reopen it, check nothing was lost |
@@ -77,6 +80,12 @@ that becomes exact.
 
 Not blocked, but a person's judgement would be better than mine.
 
+- **How a stretch sounds to you.** The measurements say a stretched tone is
+  the same tone and a shifted one has moved by exactly the right ratio, and
+  both are exact. What measurements cannot tell me is how a *drum* sounds
+  stretched to 130%, because a phase vocoder smears transients by construction
+  and no number I can produce here says whether that is acceptable or
+  embarrassing. Try it on something percussive and tell me.
 - **The repair defaults.** Noise reduction defaults to 12 dB with 1.5x
   oversubtraction. Those produce clean results on my synthetic tests, but
   synthetic noise is stationary and real noise is not. Try it on a real bad

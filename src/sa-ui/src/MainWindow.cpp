@@ -11,6 +11,7 @@
 #include <sa/io/AudioFile.h>
 #include <sa/io/WavWriter.h>
 #include <sa/spectral/SpectralEdit.h>
+#include <sa/spectral/TimeStretch.h>
 #include <sa/ui/MainWindow.h>
 #include <sa/ui/ViewGeometry.h>
 
@@ -58,6 +59,18 @@ constexpr std::size_t kMaximumPyramidBytes = 1'200'000'000;
     config.fftSize = 4096;
     config.hopSize = 1024;
     return config;
+}
+
+/// The loudest sample in a buffer, as an absolute value.
+[[nodiscard]] double peakOf(const AudioBuffer& audio) noexcept {
+    double peak = 0.0;
+    for (int channel = 0; channel < audio.channelCount(); ++channel) {
+        const float* samples = audio.channel(channel);
+        for (SampleCount i = 0; i < audio.frames(); ++i) {
+            peak = std::max(peak, std::abs(static_cast<double>(samples[i])));
+        }
+    }
+    return peak;
 }
 
 } // namespace
@@ -214,6 +227,8 @@ void MainWindow::buildMenus() {
                        &MainWindow::chooseFilter);
     process->addAction(tr("&Limiter…"), QKeySequence{Qt::CTRL | Qt::SHIFT | Qt::Key_L}, this,
                        &MainWindow::chooseLimiter);
+    process->addAction(tr("&Time stretch…"), this, &MainWindow::chooseTimeStretch);
+    process->addAction(tr("&Pitch shift…"), this, &MainWindow::choosePitchShift);
     normaliseAction_ =
         process->addAction(tr("&Normalise to target"), QKeySequence{Qt::CTRL | Qt::Key_N}, this,
                            &MainWindow::normaliseToTarget);
@@ -1100,6 +1115,144 @@ void MainWindow::applyFilter(int filterType, double frequency, double q, double 
     });
 }
 
+void MainWindow::chooseTimeStretch() {
+    if (!hasDocument()) {
+        return;
+    }
+    // Asked for as a length rather than as a factor, because that is what the
+    // job is: this take has to fit that slot. A factor makes the user do the
+    // division, and they will do it in their head, and sometimes wrongly.
+    bool accepted = false;
+    const double percent = QInputDialog::getDouble(
+        this, tr("Time stretch"), tr("New length, as a percentage of the current one:"), 100.0,
+        100.0 * spectral::stretch::kMinimumFactor, 100.0 * spectral::stretch::kMaximumFactor, 2,
+        &accepted);
+    if (!accepted || std::abs(percent - 100.0) < 1e-9) {
+        return;
+    }
+    applyTimeStretch(percent / 100.0, tr("stretch to %1%").arg(percent, 0, 'f', 2));
+}
+
+void MainWindow::choosePitchShift() {
+    if (!hasDocument()) {
+        return;
+    }
+    bool accepted = false;
+    const double semitones = QInputDialog::getDouble(
+        this, tr("Pitch shift"), tr("Semitones, fractions allowed (0.01 is a cent):"), 0.0,
+        spectral::stretch::kMinimumSemitones, spectral::stretch::kMaximumSemitones, 2, &accepted);
+    if (!accepted || std::abs(semitones) < 1e-9) {
+        return;
+    }
+    applyPitchShift(semitones, tr("shift by %1 semitones").arg(semitones, 0, 'f', 2));
+}
+
+bool MainWindow::applyTimeStretch(double factor, const QString& label) {
+    const TimeSelection range = targetRange();
+    if (range.isEmpty() || !documentSource_) {
+        return false;
+    }
+
+    AudioBuffer span{document_.layout(), range.length()};
+    if (!documentSource_->read(range.start, span.view())) {
+        status_->setText(tr("Could not read the selection"));
+        return false;
+    }
+
+    // A phase vocoder is thousands of transforms and it is not instant on a
+    // long selection. Saying so beats a window that has stopped answering.
+    //
+    // repaint() rather than processEvents(): the message has to appear now, but
+    // running the event loop here would let the user start a second stretch on
+    // top of this one, and the second would finish first and apply to a
+    // document the first still thinks it knows.
+    status_->setText(tr("Stretching…"));
+    status_->repaint();
+
+    spectral::StretchSettings settings;
+    settings.factor = factor;
+    auto stretched = spectral::timeStretch(span, settings);
+    if (!stretched) {
+        status_->setText(tr("Could not stretch: %1")
+                             .arg(QString::fromStdString(std::string{stretched.error().what()})));
+        return false;
+    }
+
+    // Rebuilding a waveform from reconstructed phases does not reproduce the
+    // original crest, so a file that was already close to the ceiling can come
+    // back over it. Small -- a tenth of a decibel on the material this was
+    // measured on -- but a tenth of a decibel is the difference between a clean
+    // export and a clipped one, and the user should hear it from us rather than
+    // from the file.
+    const QString warning =
+        peakOf(stretched.value()) > 1.0
+            ? tr(" — it now peaks over full scale, so limit it before exporting")
+            : QString{};
+
+    const SampleIndex start = range.start;
+    const SampleIndex end = range.end;
+    const bool applied = applyEdit(label, [this, start, end, &stretched] {
+        // The length changes, so the range comes out and the new audio goes in
+        // rather than being written over the top. Everything after it moves,
+        // which is the point of a stretch.
+        if (!engine::deleteRange(document_, start, end, true).ok()) {
+            return false;
+        }
+        const SampleCount length = stretched.value().frames();
+        if (!engine::insertSilence(document_, start, length).ok()) {
+            return false;
+        }
+        auto source = document_.addSource(std::make_shared<engine::BufferSource>(
+                                              std::move(stretched.value()), document_.sampleRate()),
+                                          "time stretch");
+        return source.hasValue() && document_.appendSource(source.value(), start).hasValue();
+    });
+    if (applied && !warning.isEmpty()) {
+        status_->setText(label + warning);
+    }
+    return applied;
+}
+
+bool MainWindow::applyPitchShift(double semitones, const QString& label) {
+    const TimeSelection range = targetRange();
+    if (range.isEmpty() || !documentSource_) {
+        return false;
+    }
+
+    AudioBuffer span{document_.layout(), range.length()};
+    if (!documentSource_->read(range.start, span.view())) {
+        status_->setText(tr("Could not read the selection"));
+        return false;
+    }
+
+    status_->setText(tr("Shifting…"));
+    status_->repaint(); // As above: no event loop, so no re-entry.
+
+    spectral::PitchSettings settings;
+    settings.semitones = semitones;
+    auto shifted = spectral::pitchShift(span, settings);
+    if (!shifted) {
+        status_->setText(tr("Could not shift: %1")
+                             .arg(QString::fromStdString(std::string{shifted.error().what()})));
+        return false;
+    }
+
+    const QString warning =
+        peakOf(shifted.value()) > 1.0
+            ? tr(" — it now peaks over full scale, so limit it before exporting")
+            : QString{};
+
+    // A shift keeps the length, so this writes over the range in place and
+    // nothing downstream of it moves.
+    const bool applied = applyEdit(label, [this, &range, &shifted] {
+        return engine::replaceRange(document_, range.start, std::move(shifted.value())).ok();
+    });
+    if (applied && !warning.isEmpty()) {
+        status_->setText(label + warning);
+    }
+    return applied;
+}
+
 void MainWindow::chooseLimiter() {
     if (!hasDocument()) {
         return;
@@ -1461,6 +1614,22 @@ bool MainWindow::applyOperation(const QString& name) {
         applyFilter(static_cast<int>(dsp::FilterType::LowPass), frequency, dsp::kButterworthQ, 0.0,
                     QStringLiteral("low-pass"));
         return true;
+    }
+    if (name.startsWith("stretch:")) {
+        bool ok = false;
+        const double percent = name.mid(8).toDouble(&ok);
+        if (!ok) {
+            return false;
+        }
+        return applyTimeStretch(percent / 100.0, QStringLiteral("stretch"));
+    }
+    if (name.startsWith("pitch:")) {
+        bool ok = false;
+        const double semitones = name.mid(6).toDouble(&ok);
+        if (!ok) {
+            return false;
+        }
+        return applyPitchShift(semitones, QStringLiteral("pitch shift"));
     }
     if (name.startsWith("limit:")) {
         bool ok = false;

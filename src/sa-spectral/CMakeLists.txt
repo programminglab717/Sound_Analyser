@@ -2,6 +2,7 @@ add_library(sa-spectral STATIC
     src/Denoise.cpp
     src/SpectralEdit.cpp
     src/SpectrogramPyramid.cpp
+    src/TimeStretch.cpp
 )
 add_library(sa::spectral ALIAS sa-spectral)
 
@@ -14,6 +15,7 @@ if(SA_BUILD_TESTS)
         tests/DenoiseTests.cpp
         tests/SpectralEditTests.cpp
         tests/SpectrogramPyramidTests.cpp
+        tests/TimeStretchTests.cpp
     )
     target_link_libraries(sa-spectral-tests PRIVATE sa-spectral sa-warnings Catch2::Catch2WithMain)
     catch_discover_tests(sa-spectral-tests)
