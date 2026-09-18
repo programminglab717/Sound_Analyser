@@ -33,6 +33,18 @@ add_library(sa-warnings INTERFACE)
 
 if(MSVC)
     target_compile_options(sa-warnings INTERFACE /W4 /permissive- /Zc:__cplusplus)
+    # MSVC's Debug default is _ITERATOR_DEBUG_LEVEL=2, which makes standard
+    # containers allocate for iterator bookkeeping. That breaks the "allocates
+    # nothing on the audio thread" assertions this codebase is built around:
+    # they pass under MSVC Release and fail under MSVC Debug by 8 and 20
+    # allocations respectively, in code that allocates nothing under GCC.
+    #
+    # Allocation-freedom is a core invariant here, so being able to assert it in
+    # the configuration developers actually debug in is worth more than iterator
+    # validity checking -- which the Linux ASan/UBSan jobs cover anyway. Every
+    # target in this tree is built with the same setting, so there is no ODR
+    # mismatch across the libraries or Catch2.
+    add_compile_definitions($<$<CONFIG:Debug>:_ITERATOR_DEBUG_LEVEL=0>)
     if(SA_WARNINGS_AS_ERRORS)
         target_compile_options(sa-warnings INTERFACE /WX)
     endif()

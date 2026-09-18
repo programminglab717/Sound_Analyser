@@ -23,6 +23,14 @@ namespace sa::io {
 /// Reading is random-access and streamed: opening a file parses only its chunk
 /// headers, and read() touches just the bytes it needs.
 ///
+/// **The file stays open for the reader's lifetime.** That is what makes reads
+/// cheap, but on Windows an open handle blocks deletion and renaming, so a
+/// document holding fifty sources locks fifty files against the user's own file
+/// manager. Anything that needs to release a file must destroy its reader.
+/// Revisit if that becomes a real complaint: the alternatives are reopening per
+/// read, or a Windows-specific open with FILE_SHARE_DELETE, neither of which is
+/// worth doing speculatively.
+///
 /// **Every size in a WAV file is attacker-controlled.** This parser trusts none
 /// of them: chunk extents are validated against the real source length before
 /// use, and a zero-length chunk cannot stall the scan.

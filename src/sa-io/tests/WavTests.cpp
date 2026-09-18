@@ -326,14 +326,20 @@ TEST_CASE("Writing to a file and reading it back works", "[io][wav]") {
         WavWriter::writeFile(path, source.constView(), kSampleRate44100, ChannelLayout::stereo())
             .ok());
 
-    auto reader = WavReader::open(path);
-    REQUIRE(reader.hasValue());
-    CHECK(reader.value().info().frameCount == 777);
-    CHECK(reader.value().info().sampleRate == kSampleRate44100);
+    // The reader is scoped so it closes before the file is removed. POSIX
+    // happily unlinks an open file; Windows refuses, and that difference is a
+    // real property of the reader rather than a quirk of this test -- see the
+    // note on WavReader about holding the handle open.
+    {
+        auto reader = WavReader::open(path);
+        REQUIRE(reader.hasValue());
+        CHECK(reader.value().info().frameCount == 777);
+        CHECK(reader.value().info().sampleRate == kSampleRate44100);
 
-    auto restored = reader.value().readAll();
-    REQUIRE(restored.hasValue());
-    CHECK(restored.value().channel(1)[500] == Approx(source.channel(1)[500]).margin(1e-4));
+        auto restored = reader.value().readAll();
+        REQUIRE(restored.hasValue());
+        CHECK(restored.value().channel(1)[500] == Approx(source.channel(1)[500]).margin(1e-4));
+    }
 
     std::filesystem::remove(path);
 }
