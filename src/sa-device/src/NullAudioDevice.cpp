@@ -58,7 +58,13 @@ Status NullAudioDevice::start(AudioCallback callback) {
 
     const std::lock_guard<std::mutex> lock{lifecycle_};
     if (running_.load(std::memory_order_acquire)) {
-        return Status{};
+        // The caller's callback cannot be honoured -- swapping a std::function
+        // under a live audio thread is a data race -- so say so rather than
+        // returning success and silently keeping the old one. A caller whose
+        // new callback never fires, against a success return, has a bug that
+        // surfaces months later and points nowhere near here.
+        return Error{ErrorCode::InvalidArgument,
+                     "device is already running; stop() before starting with a new callback"};
     }
 
     // A previous run may have ended without being joined: a callback that

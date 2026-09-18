@@ -77,10 +77,13 @@ public:
 
     [[nodiscard]] virtual const AudioDeviceDescription& description() const noexcept = 0;
 
-    /// Begins calling `callback` on the real-time thread. Idempotent: starting
-    /// an already-running device succeeds and changes nothing, including the
-    /// installed callback -- swapping a callback under a live audio thread
-    /// cannot be done safely, so stop() first.
+    /// Begins calling `callback` on the real-time thread.
+    ///
+    /// Fails if the device is already running. The callback cannot be swapped
+    /// under a live audio thread without a data race, so the alternative would
+    /// be to return success while quietly ignoring the callback the caller
+    /// passed -- which produces a bug that surfaces much later and points
+    /// nowhere near the cause. Call stop() first.
     [[nodiscard]] virtual Status start(AudioCallback callback) = 0;
 
     /// Stops the stream. Idempotent, and safe to call on a device that never

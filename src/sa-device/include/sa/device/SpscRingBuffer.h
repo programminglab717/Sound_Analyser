@@ -248,6 +248,12 @@ private:
         return writePos >= readPos ? writePos - readPos : writePos + indexLimit() - readPos;
     }
 
+    // The wait-free promise is only worth making if the indices really are
+    // lock-free; a libstdc++ that fell back to a mutex here would put a lock in
+    // the audio callback while every comment above still claimed otherwise.
+    static_assert(std::atomic<std::size_t>::is_always_lock_free,
+                  "SpscRingBuffer needs lock-free size_t atomics to be audio-thread safe");
+
     std::unique_ptr<float[]> storage_;
     std::size_t capacity_ = 0;
     alignas(kCacheLineSize) std::atomic<std::size_t> writeIndex_{0};

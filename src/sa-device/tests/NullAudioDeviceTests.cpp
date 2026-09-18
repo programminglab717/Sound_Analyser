@@ -134,7 +134,7 @@ TEST_CASE("A direction with no channels still reports the block length", "[devic
     CHECK(inputFrames.load() == 64);
 }
 
-TEST_CASE("Starting an already-running device changes nothing", "[device][null]") {
+TEST_CASE("Starting an already-running device is refused", "[device][null]") {
     NullAudioDevice device{testDescription(), testConfig(), NullAudioDevice::Pacing::FreeRun};
 
     std::atomic<int> firstCallbackRuns{0};
@@ -148,14 +148,18 @@ TEST_CASE("Starting an already-running device changes nothing", "[device][null]"
                 .ok());
     REQUIRE(waitFor([&] { return firstCallbackRuns.load() >= 2; }));
 
-    // Idempotent: succeeds, keeps the running stream, and pointedly does not
-    // swap the callback -- doing that under a live audio thread is a data race.
-    CHECK(device
-              .start([&](ConstAudioBufferView, AudioBufferView output) {
-                  secondCallbackRuns.fetch_add(1, std::memory_order_relaxed);
-                  fillOutput(output, 0.0f);
-              })
-              .ok());
+    // The callback cannot be swapped under a live audio thread, so the call is
+    // refused rather than succeeding while quietly ignoring what was passed.
+    // Silently keeping the old callback is the failure mode that surfaces as
+    // "my new callback never fires" long after the cause.
+    CHECK_FALSE(device
+                    .start([&](ConstAudioBufferView, AudioBufferView output) {
+                        secondCallbackRuns.fetch_add(1, std::memory_order_relaxed);
+                        fillOutput(output, 0.0f);
+                    })
+                    .ok());
+
+    // The refusal must not disturb the stream that was already running.
     CHECK(device.isRunning());
 
     const int runsBefore = firstCallbackRuns.load();
