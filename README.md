@@ -77,7 +77,9 @@ plugin hosting, measurement reporting) rather than access.
 | Qt shell: docking, transport, waveform view | ⬜ Next |
 | GPU shader renderer | ⬜ Needs hardware — remaining Phase 0 risk |
 
-88 tests passing on GCC 13, Clang 18 and under ASan/UBSan.
+**376 tests passing on GCC 13, Clang 18, MSVC 19 (Visual Studio 18), and under
+ASan/UBSan.** CI is green on Windows and Linux — see the CI badge on the
+branch.
 
 ```sh
 cmake --preset debug && cmake --build --preset debug && ctest --preset debug

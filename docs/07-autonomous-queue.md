@@ -75,6 +75,11 @@ branch unnoticed.
 - **Commit and push after every completed item.** The container is ephemeral;
   uncommitted work is lost when it is reclaimed.
 - **Check CI after every push.** Local green is not evidence about Windows.
+  If the GitHub tools are unavailable in the firing session — a scheduled
+  Routine may run without connector access — still push, and say plainly in the
+  commit message that CI verification is pending rather than implying the change
+  was checked. An unverified push recorded as unverified is fine; one reported
+  as green is not.
 - **Never weaken a test to make it pass.** If an assertion fails, either the
   code is wrong or the assertion was wrong — establish which, and say which in
   the commit message.
