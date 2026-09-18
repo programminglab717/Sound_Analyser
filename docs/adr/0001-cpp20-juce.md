@@ -1,6 +1,8 @@
 # ADR 0001 — C++20 + JUCE as the application stack
 
-**Status:** Accepted · 2026-09-18
+**Status:** ⚠️ **Superseded by [ADR 0006](0006-permissive-only-dependencies.md)** · 2026-09-18
+
+> The C++20 decision stands. The **JUCE** half was reversed when a no-licence-purchases constraint was introduced: JUCE's free tier is capped at ~$20k/yr revenue, which our freemium plan is designed to exceed.
 
 ## Context
 We are building a Windows-first audio editor with real-time playback, live

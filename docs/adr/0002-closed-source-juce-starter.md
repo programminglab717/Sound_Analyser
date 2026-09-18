@@ -1,6 +1,8 @@
 # ADR 0002 — Closed-source under the JUCE Starter tier
 
-**Status:** Accepted · 2026-09-18
+**Status:** ⚠️ **Superseded by [ADR 0006](0006-permissive-only-dependencies.md)** · 2026-09-18
+
+> The closed-source decision stands and its reasoning is unchanged. The **JUCE Starter** mechanism was reversed — the tier's revenue cap is incompatible with a no-purchases constraint.
 
 ## Context
 The product ships free at launch and moves to freemium later. JUCE is dual

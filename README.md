@@ -50,9 +50,10 @@ plugin hosting, measurement reporting) rather than access.
 | Decision | Choice | Why |
 | -------- | ------ | --- |
 | Audience | Analysis-first repair & mastering | Clearest differentiation; "analyser" is the moat |
-| Stack | C++20 + JUCE | Real-time safe, ASIO/WASAPI, VST3/CLAP hosting, free cross-platform later |
-| Licensing | Closed-source, free at launch → freemium | JUCE **Starter** tier permits this at $0 under the revenue cap |
+| Stack | C++20 + Qt 6 (LGPL) + miniaudio + CLAP | Real-time safe; every dependency free in perpetuity with no revenue cap |
+| Licensing | Closed-source, free at launch → freemium | **No licence purchases, ever** — see [ADR 0006](docs/adr/0006-permissive-only-dependencies.md) |
 | ML | Core differentiator, on-device via ONNX Runtime | Privacy, no per-user cost, works offline |
+| Dependencies | Permissive-only, CI-enforced | Free forever · closed-source OK · no revenue cap |
 
 ## Status
 

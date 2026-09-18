@@ -144,17 +144,23 @@ Netflix −27 dialog-gated, AES streaming recommendation.
 | Audio event classification & tagging | P4 | Pro | Mostly clear (YAMNet/PANNs) |
 | "Find sounds like this" similarity search | v2 | Pro | Clear (own embeddings) |
 | Auto-chaptering / topic segmentation | P4 | Pro | Clear |
-| **Stem separation (vocals/drums/bass/other)** | P4 | Pro | **BLOCKED** — see below |
+| ~~Stem separation~~ | — | — | **Dropped from roadmap** — see below |
 | Bandwidth extension (restore lost highs) | v2 | Pro | Verify |
 
-> ### ⚠ Stem separation is licence-blocked
-> Demucs / htdemucs **weights** are released for scientific use only — the MIT
-> licence covers the *code*, not the weights, and converting to ONNX does not
-> change that. Open-Unmix UMXL is CC BY-NC-SA. Most strong models are trained on
-> MUSDB18-HQ, which is itself non-commercial.
-> **Open-sourcing our app does not fix this** — these are *use* restrictions, not
-> copyleft. Full analysis and the three viable paths are in
-> [05 — Licensing](05-licensing-and-dependencies.md) §4.
+> ### ⚠ Stem separation is dropped
+> Demucs / htdemucs **weights** are research-use-only — the MIT licence covers
+> the *code*, not the weights, and ONNX conversion does not change that.
+> Open-Unmix UMXL is CC BY-NC-SA, and most strong models derive from MUSDB18-HQ,
+> which is itself non-commercial.
+>
+> Under a **no-licence-purchases** constraint all three escape routes close:
+> licensing costs money, training our own costs money, and the good free weights
+> are non-commercial. **Cut from the roadmap.**
+>
+> This is a smaller loss than it looks — stem separation is a *music production*
+> feature and our audience is repair and mastering. Revisit only if a
+> permissively-licensed model of adequate quality appears.
+> See [05 — Licensing](05-licensing-and-dependencies.md) §4.
 
 ## F. Processing & effects
 
@@ -166,7 +172,7 @@ Netflix −27 dialog-gated, AES streaming recommendation.
 | Match EQ (fingerprint a reference, match to it) | P3 | Pro | High-demand feature |
 | Compressor, limiter (true-peak), gate, expander | P1 | F | |
 | Multiband compressor, transient shaper | P3 | Pro | |
-| Time stretch & pitch shift, formant-preserving | P2 | F | See licensing note on Rubber Band |
+| Time stretch & pitch shift, formant-preserving | P2 | F | **Built in-house** — Rubber Band is GPL/commercial |
 | Pitch correction / pitch contour editing | P3 | Pro | |
 | Varispeed (tape-style, coupled pitch+time) | P1 | F | |
 | Convolution reverb (use captured IRs) | P3 | Pro | Pairs with IR capture |
@@ -176,7 +182,7 @@ Netflix −27 dialog-gated, AES streaming recommendation.
 | High-quality resampling (SRC) | P0 | F | |
 | Dither with noise shaping (TPDF, POW-r-class) | P1 | F | Correct dither on export is a mark of seriousness |
 | Loudness normalisation to target | P2 | F | |
-| **VST3 / CLAP plugin hosting** | P5 | Pro | Out-of-process — see architecture §6 |
+| **CLAP plugin hosting** | P5 | Pro | Out-of-process — see architecture §6. CLAP is MIT; VST3 needs a signed Steinberg agreement, deferred |
 
 ## G. I/O, formats, workflow
 
@@ -197,7 +203,8 @@ timecode, cue/marker chunks, cover art — **P1**.
 | --- | --- | --- |
 | Session files, autosave, crash recovery | P1 | F |
 | Recording: multichannel, punch-in, timed, pre-record buffer | P1 | F |
-| ASIO, WASAPI shared + exclusive, WDM | P0 | F |
+| WASAPI shared + exclusive (via miniaudio) | P0 | F |
+| ASIO | v2 | F |
 | Low-latency monitoring with live effect preview | P1 | F |
 | Batch processor with saved chains & presets | P5 | Pro |
 | Watch folders | P5 | Pro |
@@ -221,7 +228,7 @@ timecode, cue/marker chunks, cover art — **P1**.
 | Opt-in telemetry with visible field list | P5 | F |
 | Consent-gated crash reporting (never includes audio) | P5 | F |
 | Auto-update with staged rollout | P5 | F |
-| Signed installer (EV certificate) | P5 | F |
+| Signed installer | P5 | F |
 
 ## Explicitly out of scope for 1.0
 

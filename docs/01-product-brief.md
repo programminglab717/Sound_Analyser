@@ -113,8 +113,9 @@ Two conditions make it work:
 
 ### Stage 1 — Free (launch → ~12 months)
 Everything unlocked. Objective is usage, feedback and a corpus of real-world
-problem audio. Revenue $0, which keeps us inside the JUCE Starter tier at no
-cost (see [05 — Licensing](05-licensing-and-dependencies.md)).
+problem audio. Revenue $0. Note that our dependency policy carries **no revenue
+cap at any point**, so commercial success creates no licensing obligation — see
+[05 — Licensing](05-licensing-and-dependencies.md).
 
 ### Stage 2 — Freemium
 Proposed split. **Gate on capability, never on who the user is** — "commercial
@@ -126,7 +127,7 @@ users.
 | Full editor, undo, sessions | Batch processing & watch folders |
 | Waveform + GPU spectrogram | Spectral layers (multi-layer editing) |
 | **All** metering & analysis | Advanced ML: de-reverb, ML de-noise, separation |
-| Loudness compliance check + conform | VST3 / CLAP plugin hosting |
+| Loudness compliance check + conform | CLAP plugin hosting |
 | Basic repair: de-hum, de-click, noise profile | Measurement & reporting module (RT60, IR, PDF reports) |
 | All format import/export | Scripting / CLI automation |
 | Speech transcription (CPU) | Surround & multichannel |

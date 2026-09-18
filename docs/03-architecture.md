@@ -1,6 +1,10 @@
 # 03 — Architecture
 
-**Stack:** C++20 · JUCE · CMake · vcpkg · ONNX Runtime · Windows-first, portable-by-construction.
+**Stack:** C++20 · Qt 6 (LGPL) · miniaudio · CLAP · CMake · vcpkg · ONNX Runtime ·
+Windows-first, portable-by-construction.
+
+> Every dependency is free in perpetuity for closed-source distribution with no
+> revenue cap — see [ADR 0006](adr/0006-permissive-only-dependencies.md).
 
 ---
 
@@ -13,7 +17,7 @@
 3. **Draw from caches, never from files.** Pan and zoom must never touch a
    decoder. This is the difference between our spectrogram and Audacity's.
 4. **DSP is a library, not an app feature.** Every processor is headlessly
-   testable with golden-file references, with no UI and no JUCE dependency.
+   testable with golden-file references, with no UI-framework dependency.
 5. **Correctness is provable.** Measurement code is validated against published
    standards test vectors in CI, not by ear.
 6. **Third-party code cannot crash us.** Plugins and file parsers are hostile
@@ -22,17 +26,18 @@
 ## 2. Module map
 
 Each module is a separate static library with its own tests. Dependencies point
-downward only; `sa-dsp` and `sa-analysis` must never include a JUCE UI header.
+downward only; `sa-dsp` and `sa-analysis` must never include a UI header. That
+rule is what keeps the UI toolkit a replaceable decision rather than a rewrite.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │ sa-app        shell, entitlements, updater, crash reporting   │
 ├──────────────────────────────────────────────────────────────┤
-│ sa-ui         JUCE components · GPU spectrogram renderer      │
+│ sa-ui         Qt 6 shell · OpenGL spectrogram renderer        │
 ├──────────────────────────────────────────────────────────────┤
 │ sa-engine     document model · EDL · undo · render scheduler  │
 ├───────────────────────────┬──────────────────────────────────┤
-│ sa-spectral               │ sa-host   VST3/CLAP, out-of-proc  │
+│ sa-spectral               │ sa-host   CLAP, out-of-process    │
 │ STFT/ISTFT · layers       │                                   │
 ├───────────────┬───────────┴───────────┬──────────────────────┤
 │ sa-dsp        │ sa-analysis           │ sa-ml                 │
@@ -60,7 +65,7 @@ Four classes of thread, with strict rules about what crosses between them.
 | **Audio callback** | Real-time | No malloc, no lock, no I/O, no exceptions. Reads from lock-free ring buffers only. |
 | **Disk/streamer** | High | Decodes ahead of playhead into ring buffers. Never blocks the audio thread. |
 | **Worker pool** | Normal | Work-stealing pool, `hardware_concurrency - 1`. All analysis, rendering, cache building. Every job cancellable and progress-reporting. |
-| **UI** | Normal | JUCE message thread. Never blocks on a job; subscribes to results. |
+| **UI** | Normal | Qt main thread. Never blocks on a job; subscribes to results. |
 
 **Crossing rules**
 - Audio → UI: lock-free SPSC queue of POD messages (levels, playhead, events).
@@ -154,13 +159,17 @@ The heart of the differentiator, and the hardest thing to get right.
 
 ## 6. Plugin hosting — out of process
 
-Third-party VST3/CLAP plugins crash. A plugin crash must never destroy unsaved
+Third-party plugins crash. A plugin crash must never destroy unsaved
 work.
 
 ```
 Editor process  ──shared memory (audio) ──▶  sa-plughost.exe (one per vendor)
-                ──named pipe (control)  ──▶  [plugin instance]
+                ──named pipe (control)  ──▶  [CLAP plugin instance]
 ```
+
+**CLAP first, VST3 later.** CLAP is MIT with nothing to sign and a cleaner API.
+The VST3 SDK is free but requires a signed Steinberg agreement, so it is deferred
+until users ask for it.
 
 The host process is restartable and its state is reconstructable. This costs
 roughly two weeks of extra engineering and is the clearest single signal that
@@ -202,7 +211,7 @@ single-channel textures; a fragment shader applies log scaling, dynamic range
 windowing and the colourmap. Consequences: colourmap and contrast changes are
 free (no recompute), and zoom interpolation happens in hardware.
 
-JUCE's OpenGL context is the baseline for reach. Direct2D/D3D11 is a possible
+`QOpenGLWidget` is the baseline for reach. Direct2D/D3D11 is a possible
 optimisation later; it should not be a Phase-0 dependency.
 
 ## 9. Testing strategy
@@ -244,9 +253,12 @@ long history of CVEs, and our users open files sent to them by strangers.
 - **MSVC** as primary; also build with clang-cl in CI to catch latent UB.
 - **CI:** Windows runners — build, unit, conformance, benchmark, ASan. Target
   under 15 minutes for the fast lane.
-- **Distribution:** WiX or Inno Setup installer, EV code-signing certificate.
-  Start signing early — SmartScreen reputation accrues over time and a new
-  publisher's first releases get flagged regardless of correctness.
+- **Licence gate:** CI **fails the build** on any dependency whose licence is not
+  on the allowlist, and on any static link of an LGPL library. Policy enforced by
+  the build, not by review.
+- **Distribution:** Inno Setup or WiX installer. Code signing has no free option —
+  unsigned through beta, then Azure Trusted Signing (~$10/mo) before 1.0. See
+  [05 — Licensing](05-licensing-and-dependencies.md) §3.
 
 ## 12. Deliberate non-decisions
 
@@ -258,5 +270,7 @@ Recorded so that we revisit them on evidence rather than drift into them:
   Decide at Phase 5 with user input.
 - **Session file format** — JSON while the schema churns, a binary format later
   if load times demand it. Do not optimise this early.
-- **macOS port** — JUCE makes it cheap but not free. Not before 1.0 ships on
-  Windows; revisit for 1.x.
+- **macOS port** — Qt and miniaudio both port cleanly, but "cheap" is not "free".
+  Not before 1.0 ships on Windows; revisit for 1.x.
+- **UI toolkit** — Qt 6 LGPL chosen over Dear ImGui for text handling and
+  accessibility. Revisit only if the LGPL obligations prove burdensome.

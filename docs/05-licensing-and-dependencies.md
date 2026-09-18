@@ -1,190 +1,239 @@
 # 05 — Licensing & Dependencies
 
-> **Not legal advice.** This is engineering analysis of publicly stated licence
-> terms, current as of September 2026. Licence terms change — JUCE has revised
-> its terms twice in recent years. **Have a lawyer review the dependency set
-> before 1.0**, and re-verify every row below at that time.
-
-**Our constraint:** closed-source, free at launch, freemium later. That means we
-need terms permitting **proprietary distribution**, including once we start
-charging.
+> **Not legal advice.** Engineering analysis of publicly stated licence terms,
+> current as of September 2026. Terms change — JUCE has revised its twice in
+> recent years. **Have a lawyer review the dependency set before 1.0.**
 
 ---
 
-## 1. Should we open-source instead? — **No.**
+## 0. The constraint
 
-The question was raised because of licensing friction. It is worth answering
-precisely, because the intuition is reasonable but the conclusion is wrong.
+**No licence purchases, ever. Every dependency must be free in perpetuity for
+closed-source commercial distribution, or we build it ourselves.**
 
-### What open-sourcing would fix
-| Problem | Fixed by going open source? |
-| --- | --- |
-| FFTW is GPL | ✅ Yes — but BSD alternatives are already fine |
-| Rubber Band is GPL/commercial | ✅ Yes — but SoundTouch (LGPL) is usable, or we build our own |
-| FFmpeg GPL-only components | ✅ Yes — but we need almost none of them for audio |
+This is stricter than "free to start." It rules out anything with a revenue cap,
+a royalty, a seat fee, or a paid tier we would eventually be forced into. Three
+tests every dependency must pass:
 
-### What open-sourcing would **not** fix
-| Problem | Fixed? | Why not |
+1. **Free forever?** Not free-until-you-succeed.
+2. **Closed-source permitted?** Rules out GPL/AGPL.
+3. **No revenue, seat or unit cap?** Rules out capped free tiers.
+
+A dependency failing any test is replaced, or built in-house.
+
+---
+
+## 1. What this constraint kills: **JUCE**
+
+JUCE's free **Starter** tier permits closed-source distribution, but it is
+capped at roughly **$20k/yr**, and the cap is unusually broad:
+
+- It counts **gross revenue** (before expenses), not profit.
+- It counts revenue from **all** uses of the framework, across all products.
+- It counts **donations, sponsorship and advertising** — revenue from a free or
+  pay-what-you-want product counts toward it.
+- On exceeding it you must **purchase a licence or immediately cease
+  distributing**.
+
+Our stated plan is freemium. **The plan's success condition is the licence
+tier's breach condition.** Under a no-purchases constraint, JUCE is not a free
+dependency — it is a deferred bill that falls due at the exact moment the
+product starts working, and the alternative to paying it is pulling the product
+from distribution.
+
+### Why we switch now rather than later
+
+The asymmetry is decisive and it is entirely about timing:
+
+| | Cost if we switch **now** | Cost if we switch **later** |
 | --- | --- | --- |
-| Demucs weights are research-only | ❌ **No** | A *use* restriction on the weights. Our source licence is irrelevant to it. |
-| Open-Unmix UMXL is CC BY-NC-SA | ❌ **No** | Non-**commercial**, not non-proprietary. Orthogonal to our source licence. |
-| MUSDB18-HQ-derived weights | ❌ **No** | Same — the dataset's NC term follows the weights, not the code. |
+| Engineering | ~6–10 weeks of foundation work | Rip out the UI and audio layers of a mature app |
+| Timing | Week 0. No code exists yet. | Month 12+, at the moment of commercial traction |
+| Risk | Bounded, known | Unbounded, under revenue pressure, or stop shipping |
 
-**This is the crux.** The blocking licensing problem in this product is ML model
-weights, and weight licences restrict *what you may use them for*, not *whether
-you publish your source*. Open-sourcing the application changes nothing about
-them.
+There is no code yet. This decision will never again be as cheap as it is today.
 
-### What open-sourcing would break
-JUCE's free tier is **AGPLv3**. Going open source means the whole application
-becomes AGPLv3, and then:
-
-- Anyone may take the source, strip the entitlement checks, recompile and
-  redistribute. **The freemium model becomes unenforceable.**
-- AGPL's network clause creates obligations if we ever add a hosted component.
-- We lose the ability to license third-party proprietary components at all.
-
-### Conclusion
-Open-sourcing solves two problems we can already solve by swapping libraries,
-fixes none of the problems that actually block us, and destroys the business
-model. **Stay closed-source.** Every remaining issue below has a clean
-closed-source path.
+> **Reversible if the constraint softens.** If a ~$1000 perpetual JUCE licence
+> later becomes acceptable — paid out of the revenue that triggered it — the
+> engine modules (`sa-core` … `sa-ml`) carry no UI-framework dependency by
+> design, so only `sa-ui` and the device layer would change. We are not burning
+> the bridge, only declining to camp on it.
 
 ---
 
-## 2. Framework
+## 2. The replacement stack
 
-### JUCE — **use the free Starter tier**
+Everything below is free in perpetuity for closed-source commercial use, with no
+revenue cap.
 
-JUCE is dual-licensed: **AGPLv3**, or a commercial licence in Starter / Indie /
-Pro tiers.
+| Layer | JUCE provided | Free replacement | Licence | Notes |
+| --- | --- | --- | --- | --- |
+| **App shell / UI** | JUCE Components | **Qt 6** *(dynamically linked)* | **LGPLv3** | Free forever for closed source. Obligations in §5. Alternative: **Dear ImGui** (MIT, zero obligations) — see §2.1 |
+| **GPU rendering** | JUCE OpenGL | OpenGL via `QOpenGLWidget` | — | We draw the spectrogram ourselves regardless |
+| **Audio device I/O** | JUCE audio devices | **miniaudio** *(single-header)* | **Public domain / MIT-0** | WASAPI shared + exclusive, DirectSound, WinMM. Alternatives: RtAudio (MIT), PortAudio (MIT) |
+| **ASIO** | JUCE ASIO wrapper | **Skip for v1** | — | ASIO SDK is free but needs a signed Steinberg agreement. WASAPI exclusive reaches 3–10 ms, ample for an editor. Revisit only on user demand |
+| **Plugin hosting** | JUCE VST3 hosting | **CLAP** | **MIT** | Fully clean. VST3 needs a free signed Steinberg agreement — add later if users demand it |
+| **DSP building blocks** | `juce::dsp` | **Build in-house** | ours | Filters, dynamics, envelopes. Straightforward, well-documented DSP; ours forever |
+| **Audio file I/O** | JUCE formats | libsndfile (LGPL) + **dr_libs** (public domain) | LGPL / PD | dr_wav, dr_flac, dr_mp3 are single-header public domain |
+| **Containers/codecs** | — | FFmpeg **LGPL build** | LGPL-2.1+ | Dynamic link, never `--enable-gpl` |
+| **FFT** | `juce::dsp::FFT` | **PFFFT** or **pocketfft** | BSD | Never FFTW (GPL) |
+| **Resampling** | — | **r8brain-free-src** | MIT | High quality |
+| **Time/pitch** | — | **Build in-house** (phase-locked vocoder + WSOLA) | ours | Rubber Band is GPL/commercial → excluded. SoundTouch (LGPL) is the fallback if we run short of time |
+| **ML inference** | — | **ONNX Runtime** | MIT | |
+| **Crash reporting** | — | **Crashpad** | Apache-2.0 | |
+| **Tests** | — | Catch2 / GoogleTest | BSL-1.0 / BSD | |
+| **Installer** | — | Inno Setup / WiX | permissive | |
 
-| Tier | Cost | Closed-source | Revenue/funding limit |
-| --- | --- | --- | --- |
-| AGPLv3 | Free | ❌ Must open-source | None |
-| **Starter** | **Free** | **✅ Permitted** | **~$20k/yr** |
-| Indie | Paid | ✅ | Higher |
-| Pro | Paid (≈$50/mo or ≈$1000 perpetual) | ✅ | None |
+### 2.1 UI toolkit: Qt LGPL vs Dear ImGui
 
-This fits our plan almost perfectly:
+Both are free forever. The trade is real and worth deciding deliberately.
 
-- **Stage 1 (free product, $0 revenue):** Starter tier, costs nothing, permits
-  closed source. Since JUCE 8 there is **no splash-screen requirement** on the
-  free tier.
-- **Stage 2 (freemium):** upgrade to Indie or Pro once revenue approaches the
-  cap. At that point it is a rounding error against revenue.
+| | **Qt 6 (LGPLv3)** | **Dear ImGui (MIT)** |
+| --- | --- | --- |
+| Licence obligations | Dynamic linking, relink rights, source offer | **None** |
+| Redistributable | ~30–50 MB | ~2 MB |
+| Accessibility / screen readers | **Good** | **Poor** — a real gap |
+| Text editing + IME | **Strong** — matters for the transcript editor | Basic |
+| Native dialogs, high-DPI, multi-monitor | Built in | Roll your own / Win32 |
+| Custom GPU canvas | Good (`QOpenGLWidget`) | **Excellent — its native idiom** |
+| Forms, settings, batch config | **Strong** | Tedious at scale |
 
-**Two traps to watch.**
+**Recommendation: Qt 6 under LGPLv3.** The transcript editor and the
+accessibility commitment in the product brief both need real text and real
+widget semantics, and ImGui is weak at exactly those. The LGPL obligations are
+mechanical and we already planned the attribution screen.
 
-1. The revenue limit counts *all* revenue and funding derived from use of the
-   framework — **including donations, sponsorship and advertising**, not just
-   product sales. A successful donation drive could breach the cap while the
-   product is still nominally free.
-2. The licence must be maintained **for as long as you distribute closed-source
-   binaries containing JUCE**, not merely while developing.
+Use **Dear ImGui** instead if the LGPL obligations are judged unacceptable, or
+if we later decide to drop the accessibility and transcript-editing goals — it
+is genuinely the better fit for the spectral canvas alone.
 
-> **Action:** JUCE's master `LICENSE.md` now references a **JUCE 9** EULA, so
-> terms have moved again recently. `juce.com` is unreachable from this
-> environment — verify the current Starter tier terms and cap directly at
-> <https://juce.com/get-juce/> before writing the first line of code.
-
----
-
-## 3. Libraries
-
-✅ = safe for closed-source proprietary distribution.
-
-| Dependency | Licence | OK? | Notes |
-| --- | --- | --- | --- |
-| **FFmpeg** | LGPL-2.1+ *(GPL if `--enable-gpl`)* | ✅ | **Never** build with `--enable-gpl` or `--enable-nonfree`. Link **dynamically**, ship as DLLs, honour LGPL relink rights. |
-| libsndfile | LGPL-2.1 | ✅ | Dynamic link. |
-| FLAC, Ogg, Vorbis, Opus | BSD | ✅ | |
-| LAME (MP3 encode) | LGPL | ✅ | Dynamic link. MP3 patents have expired — no royalty exposure. |
-| **AAC encoding** | — | ✅ | Use **Windows Media Foundation**'s built-in AAC encoder. Sidesteps FDK-AAC licensing entirely and ships with the OS. |
-| **FFTW** | **GPL** or paid commercial | ❌ | **Common trap.** Use **PFFFT** (BSD-like) or **pocketfft** (BSD-3) instead. Both are fast enough. |
-| Intel IPP / oneMKL | Intel proprietary (free redistribution) | ⚠️ | Fast, but adds a large redistributable and vendor lock-in. Optional accelerator, never the baseline. |
-| libsamplerate | BSD-2 *(since v2.0)* | ✅ | Relicensed from GPL in 2021 — **ensure ≥ 2.0**. |
-| r8brain-free-src | MIT | ✅ | Excellent quality; recommended default resampler. |
-| **Rubber Band** | **GPL or paid commercial** | ⚠️ | Best-in-class time/pitch. Either buy the commercial licence, or use **SoundTouch** (LGPL), or build our own phase-locked vocoder + WSOLA. Budget the decision in Phase 2. |
-| ONNX Runtime | MIT | ✅ | |
-| Crashpad | Apache-2.0 | ✅ | |
-| Catch2 / GoogleTest | BSL-1.0 / BSD-3 | ✅ | |
-| **VST3 SDK** | GPLv3 **or** Steinberg proprietary | ✅ | Steinberg's proprietary option is free but requires signing their agreement. Do this before Phase 5. |
-| **CLAP** | MIT | ✅ | Genuinely permissive. Prefer it; support VST3 for compatibility. |
-| WiX / Inno Setup | MS-RL / custom permissive | ✅ | |
+> Avoid Qt's **GPL-only modules**: Qt Charts, Qt Data Visualization, Qt Virtual
+> Keyboard. We draw our own charts anyway. Also note Qt LTS releases are
+> commercial-only for a window — use current releases or build from source.
 
 ---
 
-## 4. ML model weights — **the real landmine**
+## 3. Remaining costs that are **not** licences
+
+The constraint is about licences, but three real costs remain. Two are solvable
+free; one is not.
+
+| Cost | Free path? | Recommendation |
+| --- | --- | --- |
+| **Model hosting / CDN** | ✅ Yes | GitHub Releases (2 GB/file), Hugging Face, or Cloudflare R2 free tier. Fully solved at zero cost |
+| **Stem-separation model training** | ❌ No | Thousands of dollars of GPU time plus a licensed multitrack corpus. **Off the table.** Ship without stem separation — see §4 |
+| **Windows code signing** | ⚠️ **No free option exists** | See below |
+
+### Code signing — the one unavoidable cost
+
+There is **no free code-signing path that Windows trusts.** Unsigned installers
+trigger SmartScreen warnings and AV false positives, which measurably costs
+installs.
+
+Options, cheapest first:
+
+1. **Ship unsigned for alpha/beta.** Free. Document the SmartScreen workaround.
+   Acceptable while the audience is early adopters; not acceptable at 1.0.
+2. **Azure Trusted Signing — roughly $10/month.** The cheapest legitimate path
+   by a wide margin. Requires organisation identity verification.
+3. Traditional OV/EV certificate — $200–500/yr. No reason to pay this now.
+
+**Recommendation:** unsigned through beta, then ~$10/month before public 1.0.
+If that is genuinely impossible, ship unsigned and accept the install friction —
+but budget it as a known conversion cost, not an oversight.
+
+---
+
+## 4. ML model weights
 
 > **The rule:** a model's *code* licence and its *weights* licence are different
-> documents. MIT code with research-only weights is common, and shipping the
-> weights anyway is the single most likely way for this project to acquire a
-> legal problem.
+> documents. MIT code with research-only weights is common.
 
-| Model | Code | Weights | Commercial? |
+| Model | Code | Weights | Usable? |
 | --- | --- | --- | --- |
-| **Demucs / htdemucs** | MIT | **Research/scientific use only (Meta)** | ❌ **No.** Converting to ONNX/CoreML does not change the weights' licence. |
-| Open-Unmix **UMXL** | MIT | CC BY-NC-SA 4.0 | ❌ No — non-commercial. |
-| Open-Unmix UMX / UMXHQ | MIT | Ambiguous; trained on MUSDB18-HQ (itself NC) | ⚠️ Needs legal review. Do not assume. |
-| Spleeter | MIT | Reported MIT | ⚠️ Likely yes, quality is lower — verify in writing. |
-| **Whisper** | MIT | **MIT** | ✅ **Yes** — safe. Our transcription foundation. |
-| **Silero VAD** | MIT | MIT | ✅ Yes. |
-| **RNNoise** | BSD | BSD | ✅ Yes — solid baseline denoiser. |
-| DeepFilterNet | Dual — verify | Verify | ⚠️ Strong denoiser; confirm terms per release. |
-| YAMNet / PANNs | Apache-2.0 / MIT | Verify per checkpoint | ⚠️ Mostly permissive. |
+| **Whisper** | MIT | **MIT** | ✅ **Yes** — transcription foundation |
+| **Silero VAD** | MIT | MIT | ✅ Yes |
+| **RNNoise** | BSD | BSD | ✅ Yes — baseline denoiser |
+| DeepFilterNet | Verify per release | Verify | ⚠️ Strong denoiser; confirm in writing |
+| YAMNet / PANNs | Apache-2.0 / MIT | Verify per checkpoint | ⚠️ Mostly permissive |
+| Spleeter | MIT | Reported MIT | ⚠️ Lower quality; confirm in writing |
+| **Demucs / htdemucs** | MIT | **Research use only (Meta)** | ❌ **No** — ONNX conversion does not change this |
+| Open-Unmix **UMXL** | MIT | CC BY-NC-SA 4.0 | ❌ No |
+| Open-Unmix UMX/UMXHQ | MIT | Ambiguous (MUSDB18-HQ is NC) | ⚠️ Do not assume |
 
-### Stem separation: three paths
+### Stem separation: ship without it
 
-1. **Ship without it.** Launch with transcription, VAD, ML de-noise and event
-   tagging — all with clean licences. Stem separation arrives when resolved.
-   *Recommended for v1.*
-2. **License commercially.** Negotiate with Meta, or integrate a vendor
-   (Audioshake, Music.AI/Moises, LALAL.AI). Fast, but introduces a per-user cost
-   and — if it is an API — breaks the on-device privacy promise. If we take this
-   route it must be an explicitly-opt-in, clearly-labelled cloud feature.
-3. **Train our own** on a properly licensed or owned multitrack corpus.
-   Expensive in data acquisition and compute, but it produces the only durable
-   moat of the three: weights we own outright and can licence as we please.
+All three previous paths are now closed. Licensing costs money; training costs
+money; the good free weights are non-commercial. **Ship v1 without stem
+separation.**
 
-**Recommendation:** path 1 for v1, begin path 3 as a background research track
-during Phase 4, keep path 2 as the commercial fallback.
+This is a smaller loss than it looks. Stem separation is a *music production*
+feature, and our audience is repair and mastering. Every feature it would have
+supported — denoise, de-reverb, transcription, event tagging, voice isolation
+from steady background — has a clean-licence path already.
 
-### Policy to adopt now
+Revisit only if Spleeter's weights are confirmed MIT in writing, or a
+permissively-licensed model of adequate quality appears.
+
+### Policy
 - **No model ships without a written licence determination** recorded in the
-  model registry manifest (see [03 — Architecture](03-architecture.md) §7).
-- The manifest carries a `licence` field, and CI fails on any model whose field
-  is absent or marked `unverified`.
+  model registry manifest.
+- CI fails on any model whose `licence` field is absent or `unverified`.
 - Because models are downloaded rather than bundled, a model whose terms change
-  can be withdrawn without shipping a new binary. This is a licensing safeguard,
-  not just a size optimisation.
+  can be withdrawn without shipping a new binary.
 
 ---
 
 ## 5. Obligations we take on
 
-Even with a clean set, we owe things:
+Free is not the same as unconditional. What we owe:
 
-| Obligation | Trigger | What we do |
+| Obligation | From | What we do |
 | --- | --- | --- |
-| LGPL relink rights | FFmpeg, libsndfile, LAME | Ship them as DLLs, never statically link; publish the exact source versions used and our object files or a documented relink path |
-| Attribution notices | BSD/MIT/Apache deps | An in-app "Third-party licences" screen, generated from the vcpkg manifest at build time, not maintained by hand |
-| Apache-2.0 NOTICE | Crashpad and others | Reproduce NOTICE contents verbatim |
-| Steinberg VST3 agreement | Plugin hosting | Sign before Phase 5; keep the countersigned copy |
-| JUCE licence maintenance | For as long as we distribute | Diarise the renewal; monitor the revenue cap |
+| **Dynamic linking only** | Qt, FFmpeg, libsndfile | Ship as DLLs. **Never static link.** Enforce in CI |
+| **Relink rights** | Qt (LGPLv3), FFmpeg | Publish exact dependency versions; provide object files or a documented relink path |
+| **Source offer** | Qt, FFmpeg, libsndfile | Host the unmodified source of the exact versions used, or a written offer |
+| **Attribution notices** | All permissive deps | In-app "Third-party licences" screen, **generated from the vcpkg manifest at build time** |
+| **Apache NOTICE** | Crashpad | Reproduce verbatim |
+| **No GPL-only modules** | Qt Charts, Qt DataVis, Qt Virtual Keyboard | CI check on the linked module list |
+| **Anti-tivoization** | LGPLv3 | No mechanism preventing users replacing our DLLs |
 
-Generate the attribution screen from the dependency manifest in CI. Hand-curated
-licence lists go stale the first time someone adds a dependency in a hurry.
+Generate the attribution screen from the manifest in CI. Hand-maintained licence
+lists go stale the first time someone adds a dependency in a hurry.
+
+### Enforce it mechanically
+Add a CI gate that fails the build on any dependency whose licence is not on an
+allowlist (MIT, BSD, Apache-2.0, public domain, MIT-0, BSL-1.0, LGPL-with-dynamic-
+linking). A human reviewing dependency licences will eventually miss one; the
+build should not.
 
 ---
 
-## 6. Open questions to close before Phase 1
+## 6. What we now build ourselves
 
-- [ ] Confirm current JUCE Starter terms and revenue cap at juce.com (JUCE 9 EULA)
-- [ ] Decide Rubber Band: buy, substitute SoundTouch, or build
-- [ ] Confirm Spleeter weights licence in writing, if pursuing path 1 + Spleeter
-- [ ] Confirm DeepFilterNet weights terms
-- [ ] Sign the Steinberg VST3 licence agreement
-- [ ] Begin EV code-signing certificate application *(weeks of lead time)*
+Accepted in-house scope created by this constraint. All of it is well-trodden
+DSP with published literature — this is work, not research.
+
+| Component | Effort | Notes |
+| --- | --- | --- |
+| DSP primitives (filters, dynamics, envelopes) | 3–4 wks | Replaces `juce::dsp` |
+| Time-stretch / pitch-shift | 3–4 wks | Phase-locked vocoder + WSOLA. SoundTouch (LGPL) is the fallback |
+| Audio device abstraction over miniaudio | 1–2 wks | Thinner than JUCE's, and ours |
+| UI shell on Qt (docking, panels, transport) | 3–4 wks | |
+| Plugin hosting via CLAP | 2 wks | Simpler than VST3 — CLAP is a better-designed API |
+
+**Total added to Phase 0–1: roughly 6–10 weeks.** Offsetting benefits: no
+licence exposure ever, no revenue cap, a DSP library we own outright, and
+freedom to relicense or open-source later without untangling anyone else's terms.
+
+---
+
+## 7. Open questions to close before Phase 1
+
+- [ ] Final call: **Qt 6 LGPL** vs **Dear ImGui** *(recommendation: Qt)*
+- [ ] Confirm DeepFilterNet weights terms in writing
+- [ ] Confirm Spleeter weights terms if separation is ever revisited
+- [ ] Decide code-signing posture: unsigned beta → ~$10/mo at 1.0, or unsigned throughout
+- [ ] Stand up the CI licence-allowlist gate **before** the dependency list grows
 - [ ] Legal review of the full dependency set
-- [ ] Decide the cloud-vs-local policy for any path-2 stem separation
+- [ ] Confirm no GPL-only Qt module is in the linked set
