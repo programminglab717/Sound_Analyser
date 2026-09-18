@@ -1,0 +1,33 @@
+# Build
+build/
+out/
+cmake-build-*/
+*.user
+.vs/
+.vscode/
+CMakeUserPresets.json
+
+# Dependencies
+vcpkg_installed/
+_deps/
+
+# Artifacts
+*.exe
+*.dll
+*.pdb
+*.lib
+*.obj
+
+# Caches produced by the app
+*.sapeak
+*.saspec
+.sa-cache/
+
+# ML models (downloaded, never committed)
+models/*.onnx
+models/*.bin
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
