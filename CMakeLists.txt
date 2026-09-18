@@ -66,6 +66,19 @@ endif()
 # ---------------------------------------------------------------------------
 # Modules — dependencies point downward only (see docs/03-architecture.md §2)
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Third-party
+# ---------------------------------------------------------------------------
+# Session files are untrusted input -- a user opens a session someone sent them
+# -- so the parser is a well-tested library rather than something hand-rolled.
+include(FetchContent)
+FetchContent_Declare(nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG        v3.11.3
+    GIT_SHALLOW    TRUE)
+set(JSON_BuildTests OFF CACHE INTERNAL "")
+FetchContent_MakeAvailable(nlohmann_json)
+
 add_subdirectory(src/sa-core)
 add_subdirectory(src/sa-analysis)
 add_subdirectory(src/sa-device)

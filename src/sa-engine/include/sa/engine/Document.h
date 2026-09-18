@@ -6,6 +6,7 @@
 #include <sa/engine/Timeline.h>
 #include <sa/io/AudioSource.h>
 
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -18,6 +19,11 @@ struct SourceEntry {
     SourceId id = SourceId::Invalid;
     std::shared_ptr<const io::AudioSource> audio;
     std::string name;
+
+    /// Where the audio came from, so a session can be saved and reopened.
+    /// Empty for sources with no file behind them -- generated tone, recorded
+    /// material not yet written to disk, a test fixture.
+    std::filesystem::path path;
 };
 
 /// Reusable scratch for rendering.
@@ -64,11 +70,16 @@ public:
     /// Register a source. The document holds a reference; the audio is shared,
     /// never copied, so the same file backing ten clips costs one decode.
     [[nodiscard]] Result<SourceId> addSource(std::shared_ptr<const io::AudioSource> audio,
-                                             std::string name = {});
+                                             std::string name = {},
+                                             std::filesystem::path path = {});
 
     [[nodiscard]] const SourceEntry* source(SourceId id) const noexcept;
 
     [[nodiscard]] std::size_t sourceCount() const noexcept { return sources_.size(); }
+
+    /// Every registered source, in registration order. Needed to serialise a
+    /// session, which must record each source's path and shape.
+    [[nodiscard]] const std::vector<SourceEntry>& sources() const noexcept { return sources_; }
 
     /// Place a whole source on the timeline at `position`.
     [[nodiscard]] Result<ClipId> appendSource(SourceId source, SampleIndex position);

@@ -1,5 +1,6 @@
 add_library(sa-io STATIC
     src/AiffReader.cpp
+    src/AudioFile.cpp
     src/AudioFileInfo.cpp
     src/ByteSource.cpp
     src/PeakPyramid.cpp
@@ -15,6 +16,7 @@ target_link_libraries(sa-io PRIVATE sa-warnings)
 if(SA_BUILD_TESTS)
     add_executable(sa-io-tests
         tests/AiffTests.cpp
+        tests/AudioFileTests.cpp
         tests/PeakPyramidTests.cpp
         tests/StreamingPyramidTests.cpp
         tests/WavRobustnessTests.cpp

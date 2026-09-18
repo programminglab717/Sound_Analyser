@@ -17,8 +17,8 @@ AudioBufferView RenderContext::scratch(SampleCount frames) noexcept {
 Document::Document(SampleRate sampleRate, ChannelLayout layout)
     : sampleRate_(sampleRate), layout_(layout) {}
 
-Result<SourceId> Document::addSource(std::shared_ptr<const io::AudioSource> audio,
-                                     std::string name) {
+Result<SourceId> Document::addSource(std::shared_ptr<const io::AudioSource> audio, std::string name,
+                                     std::filesystem::path path) {
     if (audio == nullptr) {
         return Error{ErrorCode::InvalidArgument, "source audio is null"};
     }
@@ -26,6 +26,7 @@ Result<SourceId> Document::addSource(std::shared_ptr<const io::AudioSource> audi
     entry.id = static_cast<SourceId>(nextId_++);
     entry.audio = std::move(audio);
     entry.name = std::move(name);
+    entry.path = std::move(path);
     const SourceId id = entry.id;
     sources_.push_back(std::move(entry));
     return id;
