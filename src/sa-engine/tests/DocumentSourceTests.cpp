@@ -181,3 +181,73 @@ TEST_CASE("A buffer source reads back exactly what it was given", "[engine][buff
     CHECK_FALSE(source.read(-5, out.view()).hasValue());
     CHECK(source.read(400, out.view()).value() == 0);
 }
+
+TEST_CASE("A source is a snapshot, not a window onto a document still being edited",
+          "[engine][documentsource]") {
+    // This is the contract the background readers depend on. A spectrogram
+    // build and the player's render worker both hold a source and read it on
+    // their own threads while the user goes on editing; if the source looked at
+    // the live document, every edit would be a race against every reader, and
+    // the failure mode is a crash once in a hundred runs on a loaded machine
+    // rather than anything a test would catch by accident.
+    Document document = documentWithRamp(1000);
+    const DocumentSource source{document};
+
+    REQUIRE(deleteRange(document, 0, 500, true).ok());
+    REQUIRE(document.duration() == 500);
+
+    // The source still describes, and still reads, what it was made from.
+    CHECK(source.info().frameCount == 1000);
+
+    AudioBuffer read{ChannelLayout::mono(), 8};
+    const auto count = source.read(600, read.view());
+    REQUIRE(count);
+    CHECK(count.value() == 8);
+    for (SampleCount i = 0; i < 8; ++i) {
+        INFO("frame " << i);
+        CHECK(read.channel(0)[i] == Approx(static_cast<float>(600 + i)));
+    }
+}
+
+TEST_CASE("Reading a source while the document it came from is rewritten is safe",
+          "[engine][documentsource]") {
+    // The shape of the fault this guards, run for real: one thread reading
+    // through a source, another editing the document underneath it. Under the
+    // thread sanitiser this fails outright if the source ever looks at the
+    // live document again; without it, it is still a stress test that used to
+    // crash and now does not.
+    Document document = documentWithRamp(200000);
+    const auto source = std::make_shared<const DocumentSource>(document);
+
+    std::atomic<bool> stop{false};
+    std::atomic<int> reads{0};
+    std::thread reader{[source, &stop, &reads] {
+        AudioBuffer block{ChannelLayout::mono(), 4096};
+        while (!stop.load(std::memory_order_relaxed)) {
+            for (SampleIndex at = 0; at + 4096 < 200000; at += 4096) {
+                if (const auto got = source->read(at, block.view()); got) {
+                    reads.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        }
+    }};
+
+    // Wait for the reader to actually be reading before editing under it.
+    // Structural edits are microseconds and a thread takes longer than that to
+    // start, so without this the edits are all over before the race could
+    // happen and the test proves nothing.
+    while (reads.load(std::memory_order_relaxed) == 0) {
+        std::this_thread::yield();
+    }
+    for (int round = 0; round < 2000; ++round) {
+        REQUIRE(insertSilence(document, 1000, 500).ok());
+        REQUIRE(deleteRange(document, 1000, 1500, true).ok());
+    }
+    const int duringEdits = reads.load(std::memory_order_relaxed);
+    stop.store(true, std::memory_order_relaxed);
+    reader.join();
+
+    CHECK(duringEdits > 0);
+    CHECK(reads.load() > duringEdits);
+    CHECK(document.duration() == 200000);
+}

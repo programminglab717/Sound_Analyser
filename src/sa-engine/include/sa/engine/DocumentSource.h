@@ -19,6 +19,16 @@ namespace sa::engine {
 /// background analysis pass and a redraw can share one adapter. That mutex is
 /// why this must not be read from the audio thread; playback renders from the
 /// document directly, with its own context.
+///
+/// **It holds its own copy of the document, and that is the point.** The
+/// readers above run on background threads -- a spectrogram build, the player's
+/// render worker -- while the user goes on editing, and a document is not
+/// thread safe. Pointing at the live one made every edit a race against every
+/// reader, which is the kind of fault that appears once in a hundred runs on a
+/// loaded machine and never in a test. A copy costs a clip list and a source
+/// table; the audio itself is shared, because sources are immutable once added.
+/// The consequence to know is that a source does not track later edits: the
+/// caller makes a new one, which is what an edit does anyway.
 class DocumentSource final : public io::AudioSource {
 public:
     explicit DocumentSource(const Document& document);
@@ -29,7 +39,7 @@ public:
                                            AudioBufferView destination) const override;
 
 private:
-    const Document* document_;
+    Document document_;
     io::AudioFileInfo info_;
     mutable std::mutex mutex_;
     mutable RenderContext context_;

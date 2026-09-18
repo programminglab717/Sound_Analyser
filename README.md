@@ -66,7 +66,7 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 
 | Area | State |
 | --- | --- |
-| Build, presets, warnings-as-errors, CI on Windows and Linux | ✅ Done |
+| Build, presets, warnings-as-errors, CI on Windows and Linux | ✅ Done — ASan, UBSan and TSan all gate every commit |
 | Licence allowlist gate (`tools/check_licences.py`) | ✅ Done, negative-tested three ways |
 | `sa-core`: buffers, channel layouts, time types, `Result`, RT instrumentation | ✅ Done |
 | `sa-dsp`: FFT, windows, STFT, biquads, EQ, dynamics | ✅ Done — STFT round trip is a CI gate |
@@ -85,12 +85,12 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | Markers and regions in the interface; a draggable EQ curve | ⬜ Next |
 | GPU shader renderer | ⬜ An optimisation, not a requirement — the CPU path fits in the frame budget |
 
-**544 tests passing on GCC 13 and under ASan/UBSan with leak detection.** CI runs
-the same suite on MSVC 19 (Visual Studio 18), and the most recent run was green
-on all ten jobs -- both Windows configurations included -- and produced a
-packaged Windows build as an artifact.
+**546 tests passing on GCC 13, under ASan/UBSan with leak detection, and under
+ThreadSanitizer.** CI runs the same suite on MSVC 19 (Visual Studio 18), and
+the most recent run was green on every job -- both Windows configurations
+included -- and produced a packaged Windows build as an artifact.
 
-Three things the tests check that are worth naming, because each one covers a
+Four things the tests check that are worth naming, because each one covers a
 whole chain rather than a unit:
 
 - **Measure, normalise, export, re-measure lands on −23.000 LUFS** against EBU
@@ -105,6 +105,12 @@ whole chain rather than a unit:
   twentieth of one in the band it was not pointed at. The same standard applies
   to the limiter, which is judged by a band-limited reconstruction that shares
   no code with the detector it was built against.
+- **Races are looked for, not waited for.** A rare crash in the interface turned
+  out to be a background spectrogram build reading the document while an edit
+  rewrote it; ThreadSanitizer named the exact pair of lines. Analysis sources
+  now hold their own snapshot, which makes the whole class impossible rather
+  than unlikely, and a TSan run is a CI gate so the next one is found the same
+  way.
 
 ### What is not true yet
 

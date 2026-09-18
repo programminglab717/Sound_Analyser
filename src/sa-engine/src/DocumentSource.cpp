@@ -4,7 +4,7 @@
 
 namespace sa::engine {
 
-DocumentSource::DocumentSource(const Document& document) : document_(&document) {
+DocumentSource::DocumentSource(const Document& document) : document_(document) {
     info_.sampleRate = document.sampleRate();
     info_.layout = document.layout();
     info_.frameCount = document.duration();
@@ -24,7 +24,7 @@ Result<SampleCount> DocumentSource::read(SampleIndex startFrame,
                      "destination channel count does not match the document"};
     }
 
-    const SampleCount total = document_->duration();
+    const SampleCount total = document_.duration();
     if (startFrame >= total) {
         return SampleCount{0};
     }
@@ -37,7 +37,7 @@ Result<SampleCount> DocumentSource::read(SampleIndex startFrame,
     // return zeros and make every caller think the document is longer than it
     // is; the short read is the honest answer and the interface's contract.
     AudioBufferView window = destination.subRange(0, available);
-    if (auto status = document_->render(startFrame, window, context_); !status) {
+    if (auto status = document_.render(startFrame, window, context_); !status) {
         return status.error();
     }
     return available;

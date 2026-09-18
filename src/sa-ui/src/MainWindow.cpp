@@ -420,6 +420,10 @@ bool MainWindow::openSession(const std::filesystem::path& path) {
         return false;
     }
 
+    // Only now, once the session is known to have loaded: a failed open should
+    // leave the analysis of whatever is already open alone.
+    cancelSpectrogramBuild();
+
     document_ = std::move(loaded).value().document;
     const auto& details = loaded.value();
     sessionPath_ = path;
@@ -472,6 +476,11 @@ bool MainWindow::openFile(const std::filesystem::path& path) {
 
     const auto audio = opened.value();
     const io::AudioFileInfo& info = audio->info();
+
+    // Only now, once the file is known to be readable: a failed open should
+    // leave whatever was already loaded playing and drawing.
+    stopPlayback();
+    cancelSpectrogramBuild();
 
     document_ = engine::Document{info.sampleRate, info.layout};
     auto source = document_.addSource(audio, path.filename().string(), path);
@@ -673,15 +682,22 @@ bool MainWindow::applyEdit(const QString& label, Edit&& edit) {
     if (!hasDocument() || !history_) {
         return false;
     }
-    if (!edit()) {
-        status_->setText(tr("%1 did not apply").arg(label));
-        return false;
-    }
-    // The player and the spectrogram worker are both reading the document
-    // source that is about to be replaced. Stopping them first is not
-    // politeness, it is the lifetime rule.
+    // Before the edit, not after it. The reader each of these owns is looking
+    // at audio that is about to stop being what the user is editing, and a
+    // player that goes on playing the old version through an edit is wrong even
+    // where it is safe. (It is now safe either way -- DocumentSource keeps its
+    // own copy -- but that is a floor under this, not a substitute for it.)
     stopPlayback();
     cancelSpectrogramBuild();
+
+    if (!edit()) {
+        status_->setText(tr("%1 did not apply").arg(label));
+        // Nothing changed, so the analysis that was stopped for it is still
+        // the right analysis. Put it back rather than leaving the window
+        // looking like the edit did something.
+        startSpectrogramBuild();
+        return false;
+    }
     history_->commit(document_, label.toStdString());
     rebuildCaches();
     refreshViews();
@@ -1305,16 +1321,32 @@ void MainWindow::pasteClipboard() {
 }
 
 void MainWindow::undo() {
-    if (history_ && history_->undo(document_)) {
+    if (!history_ || !history_->canUndo()) {
+        return;
+    }
+    // Undo rewrites the document exactly as an edit does, so it owes the
+    // readers the same courtesy -- see applyEdit.
+    stopPlayback();
+    cancelSpectrogramBuild();
+    if (history_->undo(document_)) {
         rebuildCaches();
         refreshViews();
+    } else {
+        startSpectrogramBuild();
     }
 }
 
 void MainWindow::redo() {
-    if (history_ && history_->redo(document_)) {
+    if (!history_ || !history_->canRedo()) {
+        return;
+    }
+    stopPlayback();
+    cancelSpectrogramBuild();
+    if (history_->redo(document_)) {
         rebuildCaches();
         refreshViews();
+    } else {
+        startSpectrogramBuild();
     }
 }
 

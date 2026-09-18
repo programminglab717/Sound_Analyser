@@ -107,6 +107,29 @@ jobs:
           ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
 
+  # A separate run because ThreadSanitizer cannot share a binary with
+  # AddressSanitizer, and because the faults it finds are a different kind: not
+  # a bad access that happens every time, but a race that happens on a loaded
+  # machine once in a hundred runs. One of those reached this repository -- a
+  # background spectrogram build reading a document while an edit rewrote it --
+  # and nothing else here would have caught it.
+  race:
+    name: ThreadSanitizer
+    needs: licences
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Ninja
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Configure
+        run: cmake --preset tsan
+      - name: Build
+        run: cmake --build --preset tsan
+      - name: Test
+        run: ctest --preset tsan
+        env:
+          TSAN_OPTIONS: halt_on_error=1
+
   # Proves the whole path -- decode, peak pyramid, STFT, pyramid, log axis,
   # paint -- still produces the right picture. An exit code alone would pass on
   # a build that draws nothing, so this one reads the pixels back.
