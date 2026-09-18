@@ -38,6 +38,16 @@ const SourceEntry* Document::source(SourceId id) const noexcept {
     return it == sources_.end() ? nullptr : &*it;
 }
 
+bool Document::setSourcePath(SourceId id, std::filesystem::path path) {
+    for (SourceEntry& entry : sources_) {
+        if (entry.id == id) {
+            entry.path = std::move(path);
+            return true;
+        }
+    }
+    return false;
+}
+
 Result<ClipId> Document::appendSource(SourceId source, SampleIndex position) {
     const SourceEntry* entry = this->source(source);
     if (entry == nullptr) {

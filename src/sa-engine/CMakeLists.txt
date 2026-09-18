@@ -1,5 +1,6 @@
 add_library(sa-engine STATIC
     src/Clip.cpp
+    src/Consolidate.cpp
     src/Document.cpp
     src/DocumentSource.cpp
     src/Edits.cpp
@@ -16,6 +17,7 @@ target_link_libraries(sa-engine PRIVATE sa-warnings)
 
 if(SA_BUILD_TESTS)
     add_executable(sa-engine-tests
+        tests/ConsolidateTests.cpp
         tests/DocumentSourceTests.cpp
         tests/DocumentTests.cpp
         tests/EditTests.cpp

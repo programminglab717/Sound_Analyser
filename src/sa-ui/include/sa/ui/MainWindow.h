@@ -38,6 +38,13 @@ public:
     /// reports on the status bar if the file cannot be opened.
     bool openFile(const std::filesystem::path& path);
 
+    /// Save the arrangement, consolidating any audio that exists only in
+    /// memory into a folder beside the session first.
+    bool saveSession(const std::filesystem::path& path);
+
+    /// Reopen a saved arrangement.
+    bool openSession(const std::filesystem::path& path);
+
     /// Write the edited document to a WAV file.
     bool exportTo(const std::filesystem::path& path, bool selectionOnly);
 
@@ -84,6 +91,8 @@ public:
 
 private slots:
     void chooseFile();
+    void chooseSaveSession();
+    void chooseOpenSession();
     void chooseExport();
     void chooseExportSelection();
 
@@ -184,6 +193,7 @@ private:
 
     AudioBuffer clipboard_;
     std::filesystem::path openedPath_;
+    std::filesystem::path sessionPath_;
     QString spectrogramNote_;
 };
 

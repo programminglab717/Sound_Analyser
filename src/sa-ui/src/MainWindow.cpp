@@ -1,6 +1,8 @@
 #include <sa/device/AudioDeviceManager.h>
 #include <sa/engine/BufferSource.h>
+#include <sa/engine/Consolidate.h>
 #include <sa/engine/Edits.h>
+#include <sa/engine/SessionFile.h>
 #include <sa/io/AudioFile.h>
 #include <sa/io/WavWriter.h>
 #include <sa/spectral/SpectralEdit.h>
@@ -135,7 +137,11 @@ TimeSelection MainWindow::selection() const noexcept {
 
 void MainWindow::buildMenus() {
     QMenu* file = menuBar()->addMenu(tr("&File"));
-    file->addAction(tr("&Open…"), QKeySequence::Open, this, &MainWindow::chooseFile);
+    file->addAction(tr("&Open audio…"), QKeySequence::Open, this, &MainWindow::chooseFile);
+    file->addSeparator();
+    file->addAction(tr("Open &session…"), QKeySequence{Qt::CTRL | Qt::SHIFT | Qt::Key_O}, this,
+                    &MainWindow::chooseOpenSession);
+    file->addAction(tr("&Save session…"), QKeySequence::Save, this, &MainWindow::chooseSaveSession);
     file->addSeparator();
     file->addAction(tr("&Export…"), QKeySequence::SaveAs, this, &MainWindow::chooseExport);
     exportSelectionAction_ =
@@ -315,6 +321,94 @@ void MainWindow::chooseFile() {
     }
 }
 
+void MainWindow::chooseSaveSession() {
+    if (!hasDocument()) {
+        return;
+    }
+    const QString path = QFileDialog::getSaveFileName(this, tr("Save session"),
+                                                      QString::fromStdString(sessionPath_.string()),
+                                                      tr("Sound Analyser session (*.sa)"));
+    if (!path.isEmpty()) {
+        saveSession(path.toStdString());
+    }
+}
+
+void MainWindow::chooseOpenSession() {
+    const QString path = QFileDialog::getOpenFileName(this, tr("Open session"), {},
+                                                      tr("Sound Analyser session (*.sa)"));
+    if (!path.isEmpty()) {
+        openSession(path.toStdString());
+    }
+}
+
+bool MainWindow::saveSession(const std::filesystem::path& path) {
+    if (!hasDocument()) {
+        return false;
+    }
+    stopPlayback();
+
+    // Audio generated while editing -- a paste, a flatten, a repair -- exists
+    // only in memory. A session records sources by path, so without this the
+    // arrangement reopens intact and silent, which looks like it worked.
+    const auto consolidated = engine::consolidateSources(document_, path);
+    if (!consolidated.failures.empty()) {
+        status_->setText(tr("Could not save all the audio: %1")
+                             .arg(QString::fromStdString(consolidated.failures.front())));
+        return false;
+    }
+
+    if (auto status = engine::saveSession(document_, path); !status) {
+        status_->setText(tr("Could not save %1: %2")
+                             .arg(QString::fromStdString(path.filename().string()),
+                                  QString::fromStdString(std::string{status.error().what()})));
+        return false;
+    }
+
+    sessionPath_ = path;
+    setWindowTitle(tr("%1 — Sound Analyser").arg(QString::fromStdString(path.filename().string())));
+    status_->setText(consolidated.written.empty()
+                         ? tr("Saved %1").arg(QString::fromStdString(path.filename().string()))
+                         : tr("Saved %1 with %2 consolidated file(s)")
+                               .arg(QString::fromStdString(path.filename().string()))
+                               .arg(consolidated.written.size()));
+    return true;
+}
+
+bool MainWindow::openSession(const std::filesystem::path& path) {
+    stopPlayback();
+
+    engine::FileSourceResolver resolver;
+    auto loaded = engine::loadSession(path, resolver);
+    if (!loaded) {
+        status_->setText(tr("Could not open %1: %2")
+                             .arg(QString::fromStdString(path.filename().string()),
+                                  QString::fromStdString(std::string{loaded.error().what()})));
+        return false;
+    }
+
+    document_ = std::move(loaded).value().document;
+    const auto& details = loaded.value();
+    sessionPath_ = path;
+    openedPath_ = path;
+    sessionPath_.clear();
+    history_.emplace(document_);
+    rebuildCaches();
+    refreshViews();
+    waveform_->showAll();
+
+    // A missing file is reported, not hidden. Its clips are still there backed
+    // by silence, so the arrangement survives and the user can relink -- but
+    // they have to know, or they will mix a session with a hole in it.
+    if (!details.missingSources.empty()) {
+        status_->setText(tr("%1 opened, but %2 referenced file(s) are missing -- their clips "
+                            "are silent")
+                             .arg(QString::fromStdString(path.filename().string()))
+                             .arg(details.missingSources.size()));
+    }
+    setWindowTitle(tr("%1 — Sound Analyser").arg(QString::fromStdString(path.filename().string())));
+    return true;
+}
+
 void MainWindow::chooseExport() {
     const QString path =
         QFileDialog::getSaveFileName(this, tr("Export"), {}, tr("WAV audio (*.wav)"));
@@ -353,6 +447,7 @@ bool MainWindow::openFile(const std::filesystem::path& path) {
     }
 
     openedPath_ = path;
+    sessionPath_.clear();
     history_.emplace(document_);
     rebuildCaches();
     refreshViews();

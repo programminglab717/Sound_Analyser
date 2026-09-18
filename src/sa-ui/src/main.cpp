@@ -55,24 +55,32 @@ int main(int argc, char** argv) {
     QCommandLineOption exportTo{"export", "Write the edited document to <wav>.", "wav"};
     QCommandLineOption printAnalysis{"print-analysis",
                                      "Print the measured loudness and peaks on stdout."};
+    QCommandLineOption saveSession{"save-session", "Save the arrangement to <file>.", "file"};
     QCommandLineOption play{"play",
                             "Play the selection to its end and report where the transport got "
                             "to. Runs in real time."};
     for (const QCommandLineOption& option :
-         {screenshot, plot, select, apply, exportTo, printAnalysis, play}) {
+         {screenshot, plot, select, apply, exportTo, printAnalysis, play, saveSession}) {
         parser.addOption(option);
     }
     parser.process(app);
 
     sa::ui::MainWindow window;
     const QStringList positional = parser.positionalArguments();
-    if (!positional.isEmpty() && !window.openFile(positional.first().toStdString())) {
+    // A .sa argument is an arrangement, not audio. Sniffing by extension is
+    // right here: the user chose the name, and a session is ours to define.
+    const auto openPositional = [&window](const QString& path) {
+        return path.endsWith(".sa", Qt::CaseInsensitive) ? window.openSession(path.toStdString())
+                                                         : window.openFile(path.toStdString());
+    };
+    if (!positional.isEmpty() && !openPositional(positional.first())) {
         std::fprintf(stderr, "could not open %s\n", qPrintable(positional.first()));
         return 1;
     }
 
     const bool batch = parser.isSet(screenshot) || parser.isSet(plot) || parser.isSet(exportTo) ||
-                       parser.isSet(apply) || parser.isSet(printAnalysis) || parser.isSet(play);
+                       parser.isSet(apply) || parser.isSet(printAnalysis) || parser.isSet(play) ||
+                       parser.isSet(saveSession);
     if (!batch) {
         window.show();
         return QApplication::exec();
@@ -115,6 +123,10 @@ int main(int argc, char** argv) {
     }
     if (parser.isSet(printAnalysis) && !window.printAnalysis()) {
         std::fprintf(stderr, "no measurement to print\n");
+        return 1;
+    }
+    if (parser.isSet(saveSession) && !window.saveSession(parser.value(saveSession).toStdString())) {
+        std::fprintf(stderr, "could not save the session\n");
         return 1;
     }
     if (parser.isSet(exportTo) && !window.exportTo(parser.value(exportTo).toStdString(), false)) {

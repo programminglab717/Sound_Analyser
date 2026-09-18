@@ -75,6 +75,13 @@ public:
 
     [[nodiscard]] const SourceEntry* source(SourceId id) const noexcept;
 
+    /// Record where a source's audio now lives on disk.
+    ///
+    /// Needed when a session is saved: audio generated during editing -- a
+    /// paste, a flatten, a repair -- has no file behind it until one is
+    /// written, and a session that references it by nothing reopens as silence.
+    bool setSourcePath(SourceId id, std::filesystem::path path);
+
     [[nodiscard]] std::size_t sourceCount() const noexcept { return sources_.size(); }
 
     /// Every registered source, in registration order. Needed to serialise a
