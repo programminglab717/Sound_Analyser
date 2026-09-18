@@ -107,6 +107,17 @@ private:
     /// window, and having each caller decide that separately is how they drift.
     [[nodiscard]] TimeSelection targetRange() const noexcept;
 
+    /// Render the range plus the context a spectral edit needs, run `edit` over
+    /// it, and put the result back. The context matters: an edit spreads by up
+    /// to one analysis window either side, and writing back only the selection
+    /// would clip that spread into a click at each seam.
+    template <typename Edit>
+    void applySpectralEdit(const QString& label, Edit&& edit);
+
+    void chooseAttenuate();
+    void healSelection();
+    void selectFrequencyBand(double lowHz, double highHz);
+
     void applyGainDecibels(double decibels, const QString& label);
     void chooseGain();
     void normaliseToTarget();
@@ -140,6 +151,8 @@ private:
     QAction* silenceAction_ = nullptr;
     QAction* trimAction_ = nullptr;
     QAction* normaliseAction_ = nullptr;
+    QAction* attenuateAction_ = nullptr;
+    QAction* healAction_ = nullptr;
     QAction* exportSelectionAction_ = nullptr;
 
     engine::Document document_;

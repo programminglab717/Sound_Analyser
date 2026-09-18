@@ -25,6 +25,8 @@ void SpectrogramView::setPyramid(std::shared_ptr<const spectral::SpectrogramPyra
                                  SampleRate rate, SampleCount totalFrames) {
     pyramid_ = std::move(pyramid);
     imageDirty_ = true;
+    lowHz_ = 0.0;
+    highHz_ = rate.hz() * 0.5;
     // The document's length, not the pyramid's: a file too long to analyse
     // still has a timeline, and the two views must agree on how long it is or
     // they will not scroll together.
@@ -55,6 +57,39 @@ void SpectrogramView::setFloorDecibels(float decibels) {
     floorDb_ = std::clamp(decibels, -160.0f, -6.0f);
     imageDirty_ = true;
     update();
+}
+
+void SpectrogramView::setFrequencySelection(double lowHz, double highHz) {
+    if (lowHz > highHz) {
+        std::swap(lowHz, highHz);
+    }
+    if (lowHz == lowHz_ && highHz == highHz_) {
+        return;
+    }
+    lowHz_ = lowHz;
+    highHz_ = highHz;
+    update();
+}
+
+void SpectrogramView::verticalSelectionChanged(double lowFraction, double highFraction) {
+    const double nyquist = rate_.hz() * 0.5;
+    setFrequencySelection(frequencyAtFraction(scale_, lowFraction, nyquist),
+                          frequencyAtFraction(scale_, highFraction, nyquist));
+    emit frequencySelectionChanged(lowHz_, highHz_);
+}
+
+QRect SpectrogramView::selectionRect(const QRect& plot, int left, int right) const {
+    const double nyquist = rate_.hz() * 0.5;
+    if (nyquist <= 0.0 || highHz_ <= lowHz_) {
+        return QRect{left, 0, right - left, height()};
+    }
+    const auto yFor = [&](double hz) {
+        const double fraction = fractionAtFrequency(scale_, hz, nyquist);
+        return height() - 1 - static_cast<int>(fraction * (height() - 1));
+    };
+    const int top = std::clamp(yFor(highHz_), 0, height() - 1);
+    const int bottom = std::clamp(yFor(lowHz_), 0, height() - 1);
+    return QRect{left, top, right - left, std::max(1, bottom - top + 1)};
 }
 
 void SpectrogramView::viewInvalidated() {

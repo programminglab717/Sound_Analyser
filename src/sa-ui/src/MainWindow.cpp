@@ -2,6 +2,7 @@
 #include <sa/engine/Edits.h>
 #include <sa/io/AudioFile.h>
 #include <sa/io/WavWriter.h>
+#include <sa/spectral/SpectralEdit.h>
 #include <sa/ui/MainWindow.h>
 #include <sa/ui/ViewGeometry.h>
 
@@ -179,6 +180,15 @@ void MainWindow::buildMenus() {
     process->addAction(tr("Fade &out"), this, [this] { applyFade(false); });
     process->addSeparator();
     process->addAction(tr("F&latten"), this, &MainWindow::flattenRange);
+
+    QMenu* repair = menuBar()->addMenu(tr("&Repair"));
+    attenuateAction_ =
+        repair->addAction(tr("&Attenuate selection…"), QKeySequence{Qt::CTRL | Qt::Key_R}, this,
+                          &MainWindow::chooseAttenuate);
+    healAction_ = repair->addAction(tr("&Heal selection"), QKeySequence{Qt::CTRL | Qt::Key_H}, this,
+                                    &MainWindow::healSelection);
+    repair->addAction(tr("Select all &frequencies"), this,
+                      [this] { selectFrequencyBand(0.0, document_.sampleRate().hz() * 0.5); });
 
     QMenu* view = menuBar()->addMenu(tr("&View"));
     view->addAction(tr("Zoom to &fit"), QKeySequence{Qt::Key_F}, this,
@@ -420,6 +430,8 @@ void MainWindow::refreshActions() {
     exportSelectionAction_->setEnabled(selected);
     pasteAction_->setEnabled(document && clipboard_.frames() > 0);
     normaliseAction_->setEnabled(document && meters_->conformGainDb().has_value());
+    attenuateAction_->setEnabled(document);
+    healAction_->setEnabled(document);
 }
 
 void MainWindow::updateStatus() {
@@ -472,6 +484,77 @@ bool MainWindow::applyEdit(const QString& label, Edit&& edit) {
 TimeSelection MainWindow::targetRange() const noexcept {
     const TimeSelection selected = selection();
     return selected.isEmpty() ? TimeSelection{0, document_.duration()} : selected;
+}
+
+void MainWindow::selectFrequencyBand(double lowHz, double highHz) {
+    spectrogram_->setFrequencySelection(lowHz, highHz);
+    updateStatus();
+}
+
+template <typename Edit>
+void MainWindow::applySpectralEdit(const QString& label, Edit&& edit) {
+    const TimeSelection range = targetRange();
+    if (range.isEmpty() || !documentSource_) {
+        return;
+    }
+
+    // Two analysis windows either side: the edit itself reaches one window past
+    // the region by construction, and the second gives the reconstruction room
+    // to settle before the audio is spliced back. Writing back only the
+    // selection would clip that spread into a click at each seam.
+    const SampleCount kContext = 2 * spectral::SpectralEditSettings{}.fftSize;
+    const SampleIndex spanStart = std::max<SampleIndex>(0, range.start - kContext);
+    const SampleIndex spanEnd = std::min<SampleIndex>(document_.duration(), range.end + kContext);
+
+    AudioBuffer span{document_.layout(), spanEnd - spanStart};
+    if (!documentSource_->read(spanStart, span.view())) {
+        status_->setText(tr("Could not read the selection"));
+        return;
+    }
+
+    spectral::SpectralRegion region;
+    region.startSample = range.start - spanStart;
+    region.endSample = range.end - spanStart;
+    region.lowHz = spectrogram_->selectionLowHz();
+    region.highHz = spectrogram_->selectionHighHz();
+
+    const auto status = edit(span.view(), region, document_.sampleRate());
+    if (!status) {
+        status_->setText(
+            tr("%1 failed: %2")
+                .arg(label, QString::fromStdString(std::string{status.error().what()})));
+        return;
+    }
+
+    (void)applyEdit(label, [this, spanStart, &span] {
+        return engine::replaceRange(document_, spanStart, std::move(span)).ok();
+    });
+}
+
+void MainWindow::chooseAttenuate() {
+    if (!hasDocument()) {
+        return;
+    }
+    bool accepted = false;
+    const double decibels =
+        QInputDialog::getDouble(this, tr("Attenuate"), tr("Reduce the selected region by (dB):"),
+                                24.0, 0.0, 120.0, 1, &accepted);
+    if (!accepted || decibels <= 0.0) {
+        return;
+    }
+    // The dialog asks for a reduction, so the sign is flipped here rather than
+    // asking the user to type a minus they will forget.
+    applySpectralEdit(
+        tr("attenuate %1 dB").arg(decibels, 0, 'f', 0),
+        [decibels](AudioBufferView audio, const spectral::SpectralRegion& region, SampleRate rate) {
+            return spectral::attenuateRegion(audio, rate, region, -decibels);
+        });
+}
+
+void MainWindow::healSelection() {
+    applySpectralEdit(tr("heal"),
+                      [](AudioBufferView audio, const spectral::SpectralRegion& region,
+                         SampleRate rate) { return spectral::healRegion(audio, rate, region); });
 }
 
 void MainWindow::applyGainDecibels(double decibels, const QString& label) {
@@ -702,6 +785,39 @@ bool MainWindow::applyOperation(const QString& name) {
             return false;
         }
         applyGainDecibels(decibels, QStringLiteral("gain"));
+        return true;
+    }
+    if (name.startsWith("band:")) {
+        const QString span = name.mid(5);
+        const qsizetype dash = span.indexOf('-', 1);
+        if (dash <= 0) {
+            return false;
+        }
+        bool okLow = false;
+        bool okHigh = false;
+        const double low = span.left(dash).toDouble(&okLow);
+        const double high = span.mid(dash + 1).toDouble(&okHigh);
+        if (!okLow || !okHigh) {
+            return false;
+        }
+        selectFrequencyBand(low, high);
+        return true;
+    }
+    if (name.startsWith("attenuate:")) {
+        bool ok = false;
+        const double decibels = name.mid(10).toDouble(&ok);
+        if (!ok) {
+            return false;
+        }
+        applySpectralEdit(QStringLiteral("attenuate"),
+                          [decibels](AudioBufferView audio, const spectral::SpectralRegion& region,
+                                     SampleRate rate) {
+                              return spectral::attenuateRegion(audio, rate, region, -decibels);
+                          });
+        return true;
+    }
+    if (name == "heal") {
+        healSelection();
         return true;
     }
     if (name == "normalise") {

@@ -355,6 +355,35 @@ Status applyRangeGain(Document& document, SampleIndex start, SampleIndex end, fl
     return Status{};
 }
 
+Status replaceRange(Document& document, SampleIndex start, AudioBuffer audio) {
+    if (start < 0) {
+        return Error{ErrorCode::OutOfRange, "position is negative"};
+    }
+    if (audio.frames() <= 0) {
+        return Error{ErrorCode::InvalidArgument, "no audio to place"};
+    }
+    if (audio.layout().count() != document.layout().count()) {
+        return Error{ErrorCode::InvalidArgument, "channel count does not match the document"};
+    }
+
+    // Without ripple: the range keeps its place on the timeline, which is the
+    // whole point of replacing it in situ.
+    if (auto status = deleteRange(document, start, start + audio.frames(), false); !status) {
+        return status;
+    }
+
+    auto source = document.addSource(
+        std::make_shared<BufferSource>(std::move(audio), document.sampleRate()), "processed");
+    if (!source) {
+        return source.error();
+    }
+    auto clip = document.appendSource(source.value(), start);
+    if (!clip) {
+        return clip.error();
+    }
+    return Status{};
+}
+
 Status flattenRange(Document& document, SampleIndex start, SampleIndex end) {
     if (end <= start) {
         return Error{ErrorCode::InvalidArgument, "range is empty"};
@@ -369,23 +398,7 @@ Status flattenRange(Document& document, SampleIndex start, SampleIndex end) {
     if (auto status = document.render(start, rendered.view()); !status) {
         return status;
     }
-
-    // Without ripple: the range keeps its place on the timeline, which is the
-    // whole point of replacing it in situ.
-    if (auto status = deleteRange(document, start, end, false); !status) {
-        return status;
-    }
-
-    auto source = document.addSource(
-        std::make_shared<BufferSource>(std::move(rendered), document.sampleRate()), "flattened");
-    if (!source) {
-        return source.error();
-    }
-    auto clip = document.appendSource(source.value(), start);
-    if (!clip) {
-        return clip.error();
-    }
-    return Status{};
+    return replaceRange(document, start, std::move(rendered));
 }
 
 Status applyRangeFade(Document& document, SampleIndex start, SampleIndex end, bool fadingIn,

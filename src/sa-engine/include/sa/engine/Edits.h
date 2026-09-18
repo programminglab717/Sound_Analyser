@@ -1,5 +1,6 @@
 #pragma once
 
+#include <sa/core/AudioBuffer.h>
 #include <sa/core/Result.h>
 #include <sa/engine/Document.h>
 
@@ -71,6 +72,14 @@ namespace sa::engine {
 /// silently discard an earlier adjustment.
 [[nodiscard]] Status applyRangeGain(Document& document, SampleIndex start, SampleIndex end,
                                     float factor);
+
+/// Replace [start, start + audio.frames()) with `audio`.
+///
+/// The way processed audio gets back into a document: render a range, run a
+/// spectral repair or any other sample-level operation over it, then put the
+/// result back where it came from. The range keeps its position on the
+/// timeline, so surrounding material does not move.
+[[nodiscard]] Status replaceRange(Document& document, SampleIndex start, AudioBuffer audio);
 
 /// Replace a range with a single clip holding what it currently sounds like.
 ///

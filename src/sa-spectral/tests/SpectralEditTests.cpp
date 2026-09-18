@@ -241,3 +241,42 @@ TEST_CASE("Both channels of a stereo edit are treated the same", "[spectral][edi
         CHECK(toneAmplitude(audio, 1000.0, 8000, 24000, channel) == Approx(0.3).margin(0.02));
     }
 }
+
+TEST_CASE("How much a narrow band can actually remove, and why", "[spectral][edit][attenuate]") {
+    // Asking for 60 dB on a 22 Hz band around a 50 Hz hum does not give 60 dB,
+    // and no mask shape can make it. At 4096 points and 48 kHz the bins are
+    // 11.7 Hz apart and the analysis window's skirts put part of the tone's
+    // energy outside any band that narrow, where the edit correctly leaves it
+    // alone. The achievable figure is measured here rather than asserted from
+    // hope, so that a regression in the mask is distinguishable from the
+    // resolution limit.
+    const auto measure = [](int fftSize, int hopSize) {
+        AudioBuffer audio = makeTones(196608, {{50.0, 0.2}, {1000.0, 0.3}});
+
+        SpectralRegion region;
+        region.startSample = 0;
+        region.endSample = 196608;
+        region.lowHz = 40.0;
+        region.highHz = 62.0;
+
+        SpectralEditSettings settings;
+        settings.fftSize = fftSize;
+        settings.hopSize = hopSize;
+
+        const double before = toneAmplitude(audio, 50.0, 48000, 96000);
+        REQUIRE(attenuateRegion(audio.view(), SampleRate{kRate}, region, -60.0, settings).ok());
+        const double after = toneAmplitude(audio, 50.0, 48000, 96000);
+
+        // The tone well clear of the band must survive whatever the settings.
+        CHECK(toneAmplitude(audio, 1000.0, 48000, 96000) == Approx(0.3).margin(0.01));
+        return 20.0 * std::log10(after / before);
+    };
+
+    const double coarse = measure(4096, 1024);
+    const double fine = measure(16384, 4096);
+
+    CHECK(coarse < -30.0);
+    // A longer window resolves the band, so it gets closer to what was asked.
+    // If this stops holding, the mask has broken, not the physics.
+    CHECK(fine < coarse);
+}

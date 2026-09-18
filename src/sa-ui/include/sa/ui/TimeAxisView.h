@@ -79,6 +79,20 @@ protected:
     /// Views override it to publish a readout.
     virtual void hover(const QPoint& position);
 
+    /// True for a view whose vertical axis is selectable too -- the
+    /// spectrogram, where a drag picks a frequency band as well as a time span.
+    [[nodiscard]] virtual bool selectsVertically() const noexcept { return false; }
+
+    /// Vertical extent of the current drag, as fractions from the bottom of the
+    /// plot. Only called when selectsVertically() is true. A drag with no
+    /// vertical extent -- a click, or a drag along the axis -- reports the full
+    /// range, which reads as "all frequencies" and is what the user means.
+    virtual void verticalSelectionChanged(double lowFraction, double highFraction);
+
+    /// The rectangle the selection overlay shades. Full height by default; a
+    /// view that also selects vertically narrows it.
+    [[nodiscard]] virtual QRect selectionRect(const QRect& plot, int left, int right) const;
+
     SampleRate rate_{48000.0};
     SampleCount totalFrames_ = 0;
     SampleIndex viewStart_ = 0;
@@ -91,9 +105,11 @@ private:
 
     void clampView();
     void emitSelection();
+    void reportVerticalSelection(int fromY, int toY);
 
     Drag drag_ = Drag::None;
     int dragAnchorX_ = 0;
+    int dragAnchorY_ = 0;
     SampleIndex dragAnchorStart_ = 0;
     SampleIndex selectionAnchor_ = 0;
 };

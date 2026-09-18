@@ -71,10 +71,21 @@ struct Plan {
     plan.bins = plan.stft.binCount();
     plan.binHz = rate.hz() / settings.fftSize;
 
-    plan.frequencyFeatherHz =
+    const double wantedFrequencyFeather =
         settings.frequencyFeatherHz > 0.0 ? settings.frequencyFeatherHz : 3.0 * plan.binHz;
-    plan.timeFeather =
+    const SampleCount wantedTimeFeather =
         settings.timeFeather > 0 ? settings.timeFeather : SampleCount{settings.hopSize};
+
+    // The taper sits outside the drawn region -- full strength is reached at its
+    // edges -- so a wide feather does not weaken the edit, it widens its reach.
+    // Three bins is 35 Hz at 4096 points and 48 kHz, which is wider than the
+    // band anyone draws around a mains hum, and attenuating 5 Hz to 97 Hz when
+    // 40 to 62 was asked for is more collateral than a user expects. Capping
+    // the transition at the width of the region itself keeps the edit within
+    // the same order of magnitude as what was drawn.
+    const double width = region.highHz - region.lowHz;
+    plan.frequencyFeatherHz = std::min(wantedFrequencyFeather, width);
+    plan.timeFeather = std::min(wantedTimeFeather, (region.endSample - region.startSample) / 2);
     return plan;
 }
 

@@ -42,15 +42,30 @@ public:
 
     [[nodiscard]] float floorDecibels() const noexcept { return floorDb_; }
 
+    /// The selected frequency band. Defaults to the whole spectrum, which is
+    /// what a time-only selection means.
+    [[nodiscard]] double selectionLowHz() const noexcept { return lowHz_; }
+
+    [[nodiscard]] double selectionHighHz() const noexcept { return highHz_; }
+
+    void setFrequencySelection(double lowHz, double highHz);
+
 signals:
     /// Time, frequency and level under the pointer, for a readout. `hz` is
     /// negative when the pointer is outside the plot.
     void cursorMoved(double seconds, double hz, double decibels);
 
+    void frequencySelectionChanged(double lowHz, double highHz);
+
 protected:
     void paintPlot(QPainter& painter, const QRect& plot) override;
     void paintGutter(QPainter& painter) override;
     void viewInvalidated() override;
+
+    [[nodiscard]] bool selectsVertically() const noexcept override { return true; }
+
+    void verticalSelectionChanged(double lowFraction, double highFraction) override;
+    [[nodiscard]] QRect selectionRect(const QRect& plot, int left, int right) const override;
     void hover(const QPoint& position) override;
     void leaveEvent(QEvent* event) override;
 
@@ -61,6 +76,8 @@ private:
     Colourmap colourmap_ = Colourmap::Magma;
     FrequencyScale scale_ = FrequencyScale::Logarithmic;
     float floorDb_ = -96.0f;
+    double lowHz_ = 0.0;
+    double highHz_ = 0.0;
 
     QImage image_;
     std::vector<std::uint8_t> tile_;

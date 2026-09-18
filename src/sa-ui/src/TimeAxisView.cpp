@@ -208,6 +208,8 @@ void TimeAxisView::mousePressEvent(QMouseEvent* event) {
     }
 
     drag_ = Drag::Selecting;
+    dragAnchorY_ = static_cast<int>(event->position().y());
+    reportVerticalSelection(dragAnchorY_, dragAnchorY_);
     // Shift extends the existing selection from whichever edge is further away,
     // rather than starting a new one.
     if (event->modifiers().testFlag(Qt::ShiftModifier) && !selection_.isEmpty()) {
@@ -242,6 +244,7 @@ void TimeAxisView::mouseMoveEvent(QMouseEvent* event) {
     }
     case Drag::Selecting:
         setSelection(TimeSelection{selectionAnchor_, sampleAtX(x)});
+        reportVerticalSelection(dragAnchorY_, static_cast<int>(event->position().y()));
         emitSelection();
         return;
     case Drag::None:
@@ -262,10 +265,37 @@ void TimeAxisView::mouseDoubleClickEvent(QMouseEvent* event) {
         return;
     }
     setSelection(TimeSelection{0, totalFrames_});
+    verticalSelectionChanged(0.0, 1.0);
     emitSelection();
 }
 
 void TimeAxisView::hover(const QPoint&) {}
+
+void TimeAxisView::verticalSelectionChanged(double, double) {}
+
+QRect TimeAxisView::selectionRect(const QRect&, int left, int right) const {
+    return QRect{left, 0, right - left, height()};
+}
+
+void TimeAxisView::reportVerticalSelection(int fromY, int toY) {
+    if (!selectsVertically() || height() <= 1) {
+        return;
+    }
+    const int top = std::min(fromY, toY);
+    const int bottom = std::max(fromY, toY);
+
+    // A drag of a few pixels is a click that wobbled, not a band selection. The
+    // user who wanted a thin band can zoom; the user who wanted the whole
+    // spectrum should not have to be steady-handed to get it.
+    if (bottom - top < 4) {
+        verticalSelectionChanged(0.0, 1.0);
+        return;
+    }
+    const auto toFraction = [this](int y) {
+        return std::clamp(1.0 - static_cast<double>(y) / (height() - 1), 0.0, 1.0);
+    };
+    verticalSelectionChanged(toFraction(bottom), toFraction(top));
+}
 
 void TimeAxisView::paintEvent(QPaintEvent*) {
     QPainter painter(this);
@@ -278,10 +308,10 @@ void TimeAxisView::paintEvent(QPaintEvent*) {
             const int left = std::max(plot.left(), xForSample(selection_.start));
             const int right = std::min(plot.right() + 1, xForSample(selection_.end));
             if (right > left) {
-                painter.fillRect(QRect{left, 0, right - left, height()}, kSelectionFill);
+                const QRect band = selectionRect(plot, left, right);
+                painter.fillRect(band, kSelectionFill);
                 painter.setPen(kSelectionEdge);
-                painter.drawLine(left, 0, left, height());
-                painter.drawLine(right - 1, 0, right - 1, height());
+                painter.drawRect(band.adjusted(0, 0, -1, -1));
             }
         } else if (selection_.start > 0 || playhead_ >= 0) {
             // An empty selection is still a caret: it says where a paste lands.

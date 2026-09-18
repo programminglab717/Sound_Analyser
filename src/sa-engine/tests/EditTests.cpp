@@ -478,3 +478,35 @@ TEST_CASE("Flattening a range preserves what it sounded like", "[engine][edits][
         REQUIRE(after.channel(0)[i] == Approx(before.channel(0)[i]).margin(1e-4));
     }
 }
+
+TEST_CASE("Replacing a range puts processed audio back in place", "[engine][edits][replace]") {
+    Fixture fixture{1000};
+    Document& document = fixture.document;
+
+    AudioBuffer replacement{ChannelLayout::stereo(), 200};
+    for (SampleCount i = 0; i < 200; ++i) {
+        replacement.channel(0)[i] = -1.0f;
+        replacement.channel(1)[i] = -2.0f;
+    }
+    REQUIRE(replaceRange(document, 400, std::move(replacement)).ok());
+
+    // Length unchanged: surrounding material must not move.
+    CHECK(document.duration() == 1000);
+
+    AudioBuffer out{ChannelLayout::stereo(), 1000};
+    REQUIRE(document.render(0, out.view()).ok());
+    CHECK(out.channel(0)[399] == Approx(399.0f));
+    CHECK(out.channel(0)[400] == Approx(-1.0f));
+    CHECK(out.channel(1)[500] == Approx(-2.0f));
+    CHECK(out.channel(0)[599] == Approx(-1.0f));
+    CHECK(out.channel(0)[600] == Approx(600.0f));
+}
+
+TEST_CASE("Replacing refuses a mismatched or empty buffer", "[engine][edits][replace]") {
+    Fixture fixture{1000};
+    Document& document = fixture.document;
+
+    CHECK_FALSE(replaceRange(document, 0, AudioBuffer{ChannelLayout::stereo(), 0}).ok());
+    CHECK_FALSE(replaceRange(document, 0, AudioBuffer{ChannelLayout::mono(), 100}).ok());
+    CHECK_FALSE(replaceRange(document, -1, AudioBuffer{ChannelLayout::stereo(), 100}).ok());
+}
