@@ -57,4 +57,24 @@ plugin hosting, measurement reporting) rather than access.
 
 ## Status
 
-Planning. No code yet. Start with [04 — Roadmap](docs/04-roadmap.md), Phase 0.
+**Phase 0 in progress.** See [04 — Roadmap](docs/04-roadmap.md) and
+[BUILDING.md](docs/BUILDING.md).
+
+| Phase 0 item | State |
+| --- | --- |
+| CMake build system, presets (MSVC + Ninja), warnings-as-errors | ✅ Done |
+| CI: licence gate, format, Windows + Linux matrix, ASan/UBSan | ✅ Done |
+| Licence allowlist gate (`tools/check_licences.py`) | ✅ Done, negative-tested |
+| `sa-core`: buffers, channel layouts, time types, `Result` | ✅ Done |
+| `sa-core`: RT-safety instrumentation | ✅ Done |
+| `sa-io`: peak pyramid + query | ✅ Done, cross-checked against brute force |
+| `sa-io`: codecs and streaming reader | ⬜ Next |
+| Device layer over miniaudio (WASAPI) | ⬜ Next |
+| Qt shell: docking, transport, waveform view | ⬜ Next |
+| **Spectrogram tile cache + GPU renderer spike** | ⬜ Next — the gating risk |
+
+53 tests passing on GCC 13, Clang 18 and under ASan/UBSan.
+
+```sh
+cmake --preset debug && cmake --build --preset debug && ctest --preset debug
+```

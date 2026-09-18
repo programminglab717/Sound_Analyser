@@ -1,0 +1,18 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "sound-analyser",
+  "version": "0.1.0",
+  "description": "Analysis-first audio repair and mastering workstation",
+  "dependencies": [],
+  "$comment": [
+    "Dependencies are added here as Phase 0/1 progresses. Every addition must",
+    "pass tools/check_licences.py -- see ADR 0006. Planned, all allowlisted:",
+    "  catch2       BSL-1.0      (currently via FetchContent)",
+    "  miniaudio    Unlicense    device I/O, replaces JUCE",
+    "  dr-libs      Unlicense    wav/flac/mp3 decode",
+    "  pffft        BSD-like     FFT -- never FFTW, which is GPL",
+    "  libsndfile   LGPL-2.1     DYNAMIC LINK ONLY",
+    "  onnxruntime  MIT          Phase 4",
+    "  qtbase       LGPL-3.0     DYNAMIC LINK ONLY, Phase 0/1 UI shell"
+  ]
+}

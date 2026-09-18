@@ -1,0 +1,59 @@
+{
+  "$comment": [
+    "Every third-party dependency and every ML model, with its licence.",
+    "tools/check_licences.py validates this file in CI and fails the build on",
+    "anything that breaks the ADR 0006 policy: free in perpetuity, closed-source",
+    "permitted, no revenue/seat/unit cap.",
+    "",
+    "Adding a dependency means adding it here first. The gate also cross-checks",
+    "that anything CMake fetches or vcpkg installs is declared."
+  ],
+
+  "policy": {
+    "allowedLicences": [
+      "MIT", "MIT-0", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0",
+      "BSL-1.0", "Unlicense", "public-domain", "Zlib", "CC0-1.0",
+      "LGPL-2.1", "LGPL-3.0"
+    ],
+    "dynamicLinkRequired": ["LGPL-2.1", "LGPL-3.0"],
+    "deniedLicences": [
+      "GPL-2.0", "GPL-3.0", "AGPL-3.0", "SSPL-1.0",
+      "CC-BY-NC-4.0", "CC-BY-NC-SA-4.0", "research-only", "non-commercial",
+      "commercial", "proprietary", "unverified"
+    ]
+  },
+
+  "dependencies": [
+    {
+      "name": "catch2",
+      "licence": "BSL-1.0",
+      "linkage": "static",
+      "scope": "test",
+      "url": "https://github.com/catchorg/Catch2",
+      "purpose": "Test framework. Test-only, never shipped."
+    }
+  ],
+
+  "models": [],
+
+  "$plannedComment": [
+    "Planned additions, all pre-checked against the policy. Move each into",
+    "'dependencies' when actually wired up:",
+    "  miniaudio   Unlicense    static   device I/O (replaces JUCE)",
+    "  dr_libs     Unlicense    static   wav/flac/mp3 decode",
+    "  pffft       BSD-3-Clause static   FFT -- NEVER FFTW, which is GPL",
+    "  r8brain     MIT          static   resampling",
+    "  qtbase      LGPL-3.0     DYNAMIC  UI shell",
+    "  libsndfile  LGPL-2.1     DYNAMIC  audio file I/O",
+    "  ffmpeg      LGPL-2.1     DYNAMIC  containers -- never --enable-gpl",
+    "  onnxruntime MIT          dynamic  ML inference (Phase 4)",
+    "  clap        MIT          static   plugin hosting (Phase 5)",
+    "  crashpad    Apache-2.0   static   crash reporting (Phase 5)",
+    "Models (Phase 4), weights licence not code licence:",
+    "  whisper     MIT          transcription",
+    "  silero-vad  MIT          voice activity detection",
+    "  rnnoise     BSD-3-Clause denoise",
+    "REJECTED: demucs/htdemucs (weights research-only), open-unmix UMXL",
+    "  (CC-BY-NC-SA), FFTW (GPL), Rubber Band (GPL/commercial)."
+  ]
+}
