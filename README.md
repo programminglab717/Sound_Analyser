@@ -77,19 +77,21 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | `sa-device`: WASAPI, ALSA, null backend | ✅ Done — never run on real hardware |
 | `sa-transport`: playback with a playhead | ✅ Done |
 | `sa-ui`: waveform, spectrogram, rulers, meters, editing, repair | ✅ Done |
-| Resampling, time-stretch, pitch-shift | 🔄 In progress |
-| Noise profile learning and spectral denoise | ⬜ Next |
-| `sa-cli`: headless batch driver | ⬜ Next |
+| Resampling: any ratio, streaming, real-time safe | ✅ Done |
+| Noise profile learning and spectral denoise | ✅ Done |
+| Mastering: filters, true-peak limiting, normalisation | ✅ Done |
+| `sa-cli`: headless batch driver | ✅ Done — five commands, tested end to end |
+| Time-stretch and pitch-shift | ⬜ Next |
+| Markers and regions in the interface; a draggable EQ curve | ⬜ Next |
 | GPU shader renderer | ⬜ An optimisation, not a requirement — the CPU path fits in the frame budget |
 
-**483 tests passing on GCC 13 and under ASan/UBSan with leak detection.** CI runs
-the same suite on MSVC 19 (Visual Studio 18) and Clang; the Windows result for
-the newest modules -- the WASAPI backend and the FLAC and MP3 decoders -- is the
-run in flight rather than a result already in hand, and this line says so until
-it is.
+**544 tests passing on GCC 13 and under ASan/UBSan with leak detection.** CI runs
+the same suite on MSVC 19 (Visual Studio 18), and the most recent run was green
+on all ten jobs -- both Windows configurations included -- and produced a
+packaged Windows build as an artifact.
 
-Two things the tests check that are worth naming, because each one covers a whole
-chain rather than a unit:
+Three things the tests check that are worth naming, because each one covers a
+whole chain rather than a unit:
 
 - **Measure, normalise, export, re-measure lands on −23.000 LUFS** against EBU
   R128's −23.0. The K-weighting, the gating, the gain verb, the render and the
@@ -97,6 +99,12 @@ chain rather than a unit:
 - **Editing is compared sample by sample.** Ten operations are driven through the
   window headlessly, exported, and checked against what they should have
   produced. All ten are bit-exact.
+- **Processing is checked against theory, not against itself.** A second-order
+  Butterworth has a magnitude anyone can write down; the filter is held to that
+  figure to a tenth of a decibel rather than to "it got quieter", and to a
+  twentieth of one in the band it was not pointed at. The same standard applies
+  to the limiter, which is judged by a band-limited reconstruction that shares
+  no code with the detector it was built against.
 
 ### What is not true yet
 

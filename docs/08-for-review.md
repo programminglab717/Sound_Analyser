@@ -29,6 +29,8 @@ Then open something real — a recording of your own, not a test tone — and tr
 | Play | Space |
 | Measure | The panel on the right; it follows the selection |
 | Fix the level | Process ▸ Normalise to target, after picking a target in the panel |
+| Filter | Process ▸ Filter, or Ctrl+F. High-pass at 80 Hz is the one to try first on anything with rumble in it |
+| Limit | Process ▸ Limiter. It holds a true-peak ceiling rather than approaching it |
 | Repair | Draw a box round a hum or a click, then Repair ▸ Attenuate or Heal |
 | Denoise | Select a passage of noise alone ▸ Repair ▸ Learn noise profile, then select the whole thing ▸ Repair ▸ Reduce noise |
 | Save | File ▸ Save session, reopen it, check nothing was lost |

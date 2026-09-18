@@ -2,6 +2,7 @@
 #include <sa/device/NullAudioDevice.h>
 #include <sa/dsp/Dynamics.h>
 #include <sa/dsp/OfflineLimiter.h>
+#include <sa/dsp/ParametricEq.h>
 #include <sa/dsp/StereoLink.h>
 #include <sa/engine/BufferSource.h>
 #include <sa/engine/Consolidate.h>
@@ -28,6 +29,7 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <numbers>
 
 namespace sa::ui {
 
@@ -208,6 +210,8 @@ void MainWindow::buildMenus() {
     QMenu* process = menuBar()->addMenu(tr("&Process"));
     process->addAction(tr("&Gain…"), QKeySequence{Qt::CTRL | Qt::Key_G}, this,
                        &MainWindow::chooseGain);
+    process->addAction(tr("&Filter…"), QKeySequence{Qt::CTRL | Qt::Key_F}, this,
+                       &MainWindow::chooseFilter);
     process->addAction(tr("&Limiter…"), QKeySequence{Qt::CTRL | Qt::SHIFT | Qt::Key_L}, this,
                        &MainWindow::chooseLimiter);
     normaliseAction_ =
@@ -928,6 +932,158 @@ void MainWindow::chooseGain() {
     }
 }
 
+void MainWindow::chooseFilter() {
+    if (!hasDocument()) {
+        return;
+    }
+
+    // Three shapes rather than a full parametric EQ. A proper EQ wants a curve
+    // you can drag over the analyser, which is a different piece of work; these
+    // three are what corrective editing actually reaches for, and a high-pass
+    // to lose rumble is the single most-used filter in repair. Spectral
+    // attenuation can take out a band, but it cannot roll one off smoothly, and
+    // rumble wants a slope rather than a hole.
+    const QStringList shapes{tr("High-pass (remove rumble below)"),
+                             tr("Low-pass (remove hiss above)"), tr("Peak or dip at")};
+    bool accepted = false;
+    const QString shape =
+        QInputDialog::getItem(this, tr("Filter"), tr("Shape:"), shapes, 0, false, &accepted);
+    if (!accepted) {
+        return;
+    }
+    const int index = shapes.indexOf(shape);
+
+    const double frequency =
+        QInputDialog::getDouble(this, tr("Filter"), tr("Frequency (Hz):"),
+                                index == 0 ? 80.0 : (index == 1 ? 12000.0 : 1000.0), 10.0,
+                                document_.sampleRate().hz() * 0.45, 1, &accepted);
+    if (!accepted) {
+        return;
+    }
+
+    double gainDb = 0.0;
+    if (index == 2) {
+        gainDb = QInputDialog::getDouble(this, tr("Filter"), tr("Gain (dB), negative to cut:"),
+                                         -6.0, -24.0, 24.0, 1, &accepted);
+        if (!accepted) {
+            return;
+        }
+    }
+
+    const int type = index == 0 ? static_cast<int>(dsp::FilterType::HighPass)
+                                : (index == 1 ? static_cast<int>(dsp::FilterType::LowPass)
+                                              : static_cast<int>(dsp::FilterType::Peaking));
+    const QString label =
+        index == 2 ? tr("%1 dB at %2 Hz").arg(gainDb, 0, 'f', 1).arg(frequency, 0, 'f', 0)
+                   : tr("%1 at %2 Hz")
+                         .arg(index == 0 ? tr("high-pass") : tr("low-pass"))
+                         .arg(frequency, 0, 'f', 0);
+    applyFilter(type, frequency, dsp::kButterworthQ, gainDb, label);
+}
+
+void MainWindow::applyFilter(int filterType, double frequency, double q, double gainDb,
+                             const QString& label) {
+    const TimeSelection range = targetRange();
+    if (range.isEmpty() || !documentSource_) {
+        return;
+    }
+
+    const double rate = document_.sampleRate().hz();
+    const double period = rate / std::max(frequency, 1.0);
+
+    // A biquad has memory, so starting it cold at the selection's edge steps out
+    // of silence into signal and clicks. It gets a run-up outside the range to
+    // settle in, and only the range itself is written back. Twenty periods of
+    // the corner settles a Q of 0.7 far below the last bit; the quarter-second
+    // floor is there for the high corners, where twenty periods is nothing.
+    const auto context = static_cast<SampleCount>(std::max(0.25 * rate, 20.0 * period));
+    const SampleIndex spanStart = std::max<SampleIndex>(0, range.start - context);
+
+    AudioBuffer span{document_.layout(), range.end - spanStart};
+    if (!documentSource_->read(spanStart, span.view())) {
+        status_->setText(tr("Could not read the selection"));
+        return;
+    }
+
+    const int channels = document_.layout().count();
+    const SampleCount offset = range.start - spanStart;
+
+    // The range as it stands, kept back for the edge blends below.
+    AudioBuffer original{document_.layout(), range.length()};
+    for (int channel = 0; channel < channels; ++channel) {
+        std::copy_n(span.channel(channel) + offset, original.frames(), original.channel(channel));
+    }
+
+    dsp::FilterSpec spec;
+    spec.type = static_cast<dsp::FilterType>(filterType);
+    spec.frequency = frequency;
+    spec.q = q;
+    spec.gainDb = gainDb;
+
+    for (int channel = 0; channel < channels; ++channel) {
+        auto eq = dsp::ParametricEq::create(document_.sampleRate());
+        if (!eq) {
+            status_->setText(tr("Could not build the filter: %1")
+                                 .arg(QString::fromStdString(std::string{eq.error().what()})));
+            return;
+        }
+        dsp::EqBand band;
+        band.filter = spec;
+        if (!eq.value().addBand(band)) {
+            status_->setText(tr("Those filter settings are not usable"));
+            return;
+        }
+        eq.value().processInPlace(span.channel(channel), span.frames());
+    }
+
+    // Write back only the range. The run-up was there to settle the filter, not
+    // to be applied to audio the user did not select.
+    AudioBuffer applied{document_.layout(), range.length()};
+    for (int channel = 0; channel < channels; ++channel) {
+        std::copy_n(span.channel(channel) + offset, applied.frames(), applied.channel(channel));
+    }
+
+    // Filtering part of a file leaves a step at each end of it: inside the range
+    // the removed band is gone, outside it is still there, and the jump between
+    // the two is a click. Measured on a 40 Hz rumble high-passed at 80 Hz, the
+    // join stepped by 0.166 where the steps either side of it were 0.053.
+    //
+    // Blending across a couple of periods of the corner frequency spreads that
+    // step over the wavelength that caused it. It costs the very edges of the
+    // range, which is why the length follows the corner rather than being
+    // fixed: a 12 kHz low-pass gives up a fraction of a millisecond, an 80 Hz
+    // high-pass gives up 25 ms, and each is the shortest blend its own step can
+    // hide behind. An end with nothing beyond it has no step to hide, so it is
+    // filtered to the last sample.
+    const auto blend = std::min<SampleCount>(
+        applied.frames() / 4, static_cast<SampleCount>(std::max(0.002 * rate, 2.0 * period)));
+    const bool blendHead = range.start > 0;
+    const bool blendTail = range.end < document_.duration();
+    if (blend > 0 && (blendHead || blendTail)) {
+        for (int channel = 0; channel < channels; ++channel) {
+            float* out = applied.channel(channel);
+            const float* was = original.channel(channel);
+            for (SampleCount i = 0; i < blend; ++i) {
+                // Raised cosine, so the blend has no corner of its own in it.
+                const double weight =
+                    0.5 - 0.5 * std::cos(std::numbers::pi * (static_cast<double>(i) + 0.5) /
+                                         static_cast<double>(blend));
+                if (blendHead) {
+                    out[i] = static_cast<float>(weight * out[i] + (1.0 - weight) * was[i]);
+                }
+                if (blendTail) {
+                    const SampleCount j = applied.frames() - 1 - i;
+                    out[j] = static_cast<float>(weight * out[j] + (1.0 - weight) * was[j]);
+                }
+            }
+        }
+    }
+
+    (void)applyEdit(label, [this, &range, &applied] {
+        return engine::replaceRange(document_, range.start, std::move(applied)).ok();
+    });
+}
+
 void MainWindow::chooseLimiter() {
     if (!hasDocument()) {
         return;
@@ -1252,6 +1408,26 @@ bool MainWindow::applyOperation(const QString& name) {
                 return spectral::denoise(audio, rate, noiseProfile_, region.startSample,
                                          region.endSample, settings);
             });
+        return true;
+    }
+    if (name.startsWith("highpass:")) {
+        bool ok = false;
+        const double frequency = name.mid(9).toDouble(&ok);
+        if (!ok) {
+            return false;
+        }
+        applyFilter(static_cast<int>(dsp::FilterType::HighPass), frequency, dsp::kButterworthQ, 0.0,
+                    QStringLiteral("high-pass"));
+        return true;
+    }
+    if (name.startsWith("lowpass:")) {
+        bool ok = false;
+        const double frequency = name.mid(8).toDouble(&ok);
+        if (!ok) {
+            return false;
+        }
+        applyFilter(static_cast<int>(dsp::FilterType::LowPass), frequency, dsp::kButterworthQ, 0.0,
+                    QStringLiteral("low-pass"));
         return true;
     }
     if (name.startsWith("limit:")) {

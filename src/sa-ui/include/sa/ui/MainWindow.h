@@ -172,6 +172,9 @@ private:
     void applyGainDecibels(double decibels, const QString& label);
     void chooseGain();
     void chooseLimiter();
+    void chooseFilter();
+    void applyFilter(int filterType, double frequency, double q, double gainDb,
+                     const QString& label);
     void limitTo(double ceilingDb);
     void normaliseToTarget();
     void applyFade(bool fadingIn);
