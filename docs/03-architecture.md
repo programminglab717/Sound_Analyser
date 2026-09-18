@@ -213,7 +213,16 @@ not have.
 
 ## 8. Rendering
 
-Spectrogram rendering is a shader, not a loop. Magnitude tiles upload as
+**A GPU is an optimisation here, not a requirement.** The Phase 0 spike measured
+CPU scaling to screen resolution at 11.59 ms against a 16.67 ms frame budget at
+1080p -- it fits, with roughly 30% to spare. Only 4K exceeded the budget, at
+47.58 ms. So the CPU renderer is the shipping baseline and every machine can run
+the product; the shader path is what buys headroom at high resolutions and on
+weak CPUs. Treating the GPU as a prerequisite was a mistake in the original
+framing: this is audio, and the data volumes are small enough that the CPU keeps
+up at ordinary screen sizes.
+
+Where a shader is used, spectrogram rendering is a shader, not a loop. Magnitude tiles upload as
 single-channel textures; a fragment shader applies log scaling, dynamic range
 windowing and the colourmap. Consequences: colourmap and contrast changes are
 free (no recompute), and zoom interpolation happens in hardware.
