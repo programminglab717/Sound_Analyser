@@ -6,6 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <numbers>
+#include <utility>
 #include <vector>
 
 using namespace sa;
@@ -333,4 +334,67 @@ TEST_CASE("The meter's error is bounded, and its direction is known",
 
     // And more oversampling must not make it worse.
     CHECK(measureError(0.40, 16) > measureError(0.40, 4) - 0.01);
+}
+
+TEST_CASE("The exact offline reading does not under-read where the meter does",
+          "[analysis][truepeak][exact]") {
+    // Same signals as the accuracy test above, where the streaming meter loses
+    // up to 0.44 dB. This one has no filter, so it should not lose anything.
+    constexpr int kOversampledBy = 16;
+    constexpr SampleCount kFrames = 4096;
+
+    const auto compare = [](double ratio) {
+        double streamingWorst = 1000.0;
+        double exactWorst = 1000.0;
+
+        for (int shift = 0; shift < kOversampledBy; ++shift) {
+            std::vector<double> fine(static_cast<std::size_t>(kFrames) * kOversampledBy);
+            for (std::size_t i = 0; i < fine.size(); ++i) {
+                const double t =
+                    (static_cast<double>(i) + shift / double(kOversampledBy)) / kOversampledBy;
+                const double envelope = std::exp(-std::pow((t - kFrames * 0.5) / 40.0, 2.0));
+                fine[i] = envelope * std::sin(2.0 * std::numbers::pi * ratio * t);
+            }
+            double trueMax = 0.0;
+            for (const double value : fine) {
+                trueMax = std::max(trueMax, std::abs(value));
+            }
+
+            AudioBuffer audio{ChannelLayout::mono(), kFrames};
+            for (SampleCount i = 0; i < kFrames; ++i) {
+                audio.channel(0)[i] =
+                    static_cast<float>(fine[static_cast<std::size_t>(i) * kOversampledBy]);
+            }
+
+            const auto streaming = TruePeakMeter::measureDbtp(audio.constView(), 4);
+            const auto exact = exactTruePeakDbtp(audio.constView());
+            REQUIRE(streaming.hasValue());
+            REQUIRE(exact.hasValue());
+
+            const double reference = 20.0 * std::log10(trueMax);
+            streamingWorst = std::min(streamingWorst, streaming.value() - reference);
+            exactWorst = std::min(exactWorst, exact.value() - reference);
+        }
+        return std::pair{streamingWorst, exactWorst};
+    };
+
+    for (const double ratio : {0.30, 0.40, 0.47}) {
+        const auto [streaming, exact] = compare(ratio);
+        INFO("ratio " << ratio << ": streaming " << streaming << " dB, exact " << exact << " dB");
+        // The exact reading is never worse than the streaming one, and is
+        // within a hundredth of a decibel of the truth.
+        CHECK(exact >= streaming - 0.001);
+        CHECK(exact > -0.05);
+        CHECK(exact < 0.10);
+    }
+
+    // And the case that motivated all of this: at 0.40 the streaming meter
+    // loses about 0.44 dB and the exact reading loses nothing.
+    const auto [streaming, exact] = compare(0.40);
+    CHECK(streaming < -0.2);
+    CHECK(exact > -0.05);
+}
+
+TEST_CASE("The exact reading refuses an empty buffer", "[analysis][truepeak][exact]") {
+    CHECK_FALSE(exactTruePeakDbtp(ConstAudioBufferView{}).hasValue());
 }

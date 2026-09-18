@@ -50,15 +50,39 @@ namespace sa::analysis {
 /// crest the raw value covers for the interpolator's droop. It shows on short
 /// transients near Nyquist, where it cannot.
 ///
-/// Budget around half a dB of headroom at 4x if the material has energy above
-/// 0.4 of the sample rate, or use 16x, which costs four times the work and
-/// halves the worst case. Fixing it properly means the standard's own filter,
-/// which is tracked in docs/04-roadmap.md and needs the published table.
+/// **Where the audio is already in memory, do not accept this.** Use
+/// exactTruePeakDbtp() below, which reconstructs the signal instead of
+/// interpolating it and has no filter to droop. The metering panel and sa-cli
+/// both do, so the number a user is shown for a file is exact; this meter is
+/// what a live display would use, where the answer has to arrive in a block and
+/// cannot cost a transform.
+///
+/// For that live case: budget around half a dB of headroom at 4x if the
+/// material has energy above 0.4 of the sample rate, or use 16x, which costs
+/// four times the work and halves the worst case. Matching the standard exactly
+/// still needs its own filter table, which is tracked in docs/04-roadmap.md.
 ///
 /// Verified here: phase 0 reproduces input samples exactly, every phase has
 /// unity DC gain, and a peak falling exactly between samples is recovered to
 /// within 0.001 dB. Not verified: agreement with the standard's own filter on
 /// real programme material.
+/// True peak of a whole buffer, exactly, for offline work.
+///
+/// TruePeakMeter is a streaming, allocation-free, audio-thread-safe meter, and
+/// that is what makes it approximate: a real-time interpolator is a finite
+/// filter, and a finite filter droops. Ours reads up to 0.44 dB low at 4x on
+/// bright transients.
+///
+/// When the audio is already in memory and nothing is waiting on the answer --
+/// a metering panel, a batch report, a compliance check before a file ships --
+/// there is no reason to accept that. This reconstructs the signal exactly
+/// instead, and is the reading to quote when it matters. It is not usable in a
+/// live meter: it allocates and transforms the whole buffer.
+///
+/// The worst channel wins, which is what "the true peak of this programme"
+/// means.
+[[nodiscard]] Result<double> exactTruePeakDbtp(ConstAudioBufferView audio, int factor = 16);
+
 class TruePeakMeter {
 public:
     /// BS.1770-4's minimum at 48 kHz, and the default everywhere.

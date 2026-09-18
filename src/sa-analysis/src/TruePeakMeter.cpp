@@ -1,4 +1,5 @@
 #include <sa/analysis/TruePeakMeter.h>
+#include <sa/dsp/ExactTruePeak.h>
 
 #include <algorithm>
 #include <cmath>
@@ -6,6 +7,21 @@
 #include <numbers>
 
 namespace sa::analysis {
+
+Result<double> exactTruePeakDbtp(ConstAudioBufferView audio, int factor) {
+    if (audio.isEmpty()) {
+        return Error{ErrorCode::InvalidArgument, "no audio"};
+    }
+    double worst = kDecibelFloor;
+    for (int channel = 0; channel < audio.channelCount(); ++channel) {
+        auto measured = dsp::exactTruePeakDbtp(audio.channel(channel), audio.frames(), factor);
+        if (!measured) {
+            return measured.error();
+        }
+        worst = std::max(worst, measured.value());
+    }
+    return worst;
+}
 
 namespace {
 

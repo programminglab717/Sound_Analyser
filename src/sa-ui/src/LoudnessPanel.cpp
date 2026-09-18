@@ -63,6 +63,36 @@ constexpr SampleCount kBlockFrames = 65536;
 
     out.loudness = loudness.value().measurement();
     out.truePeakDbtp = peaks.value().truePeakDbtp();
+
+    // The streaming meter is an interpolator, and an interpolator droops: ours
+    // reads up to 0.44 dB low on bright transients. Where the range is small
+    // enough to hold, measure it exactly instead and quote that, because a
+    // true-peak number that reads low is the one that ships a master over the
+    // ceiling.
+    //
+    // The bound is on the range being measured, not the file. A selection is
+    // usually short even when the programme is not.
+    constexpr std::size_t kExactBudgetBytes = 400'000'000;
+    const auto bytes = static_cast<std::size_t>(length) *
+                       static_cast<std::size_t>(info.channelCount()) * sizeof(float);
+    if (done > 0 && bytes <= kExactBudgetBytes) {
+        AudioBuffer whole{info.layout, done};
+        SampleCount filled = 0;
+        while (filled < done) {
+            AudioBufferView view = whole.view().subRange(filled, done - filled);
+            const auto read = source.read(start + filled, view);
+            if (!read || read.value() <= 0) {
+                break;
+            }
+            filled += read.value();
+        }
+        if (filled == done) {
+            if (auto exact = analysis::exactTruePeakDbtp(whole.constView()); exact) {
+                out.truePeakDbtp = exact.value();
+            }
+        }
+    }
+
     out.statistics = statistics.value().statistics(out.truePeakDbtp, out.loudness.integratedLufs);
     return done > 0;
 }

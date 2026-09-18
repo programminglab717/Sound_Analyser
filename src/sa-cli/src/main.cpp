@@ -172,6 +172,11 @@ struct Measurement {
     sa::analysis::LoudnessMeasurement loudness;
     double truePeakDbtp = sa::analysis::kDecibelFloor;
     sa::analysis::SignalStatistics statistics;
+
+    /// Whether the true peak above is the exact reconstruction or the streaming
+    /// meter's estimate. A compliance report that does not say which is one
+    /// nobody can check.
+    bool truePeakIsExact = false;
 };
 
 /// Stream the whole source through all three meters.
@@ -203,6 +208,23 @@ struct Measurement {
 
     out.loudness = loudness.value().measurement();
     out.truePeakDbtp = peaks.value().truePeakDbtp();
+
+    // Exact where the file fits. The streaming meter is an interpolator and
+    // interpolators droop: ours reads up to 0.44 dB low on bright transients,
+    // and a compliance report wrong in that direction is worse than none.
+    constexpr std::size_t kExactBudgetBytes = 800'000'000;
+    const auto bytes = static_cast<std::size_t>(info.frameCount) *
+                       static_cast<std::size_t>(info.channelCount()) * sizeof(float);
+    if (cursor > 0 && bytes <= kExactBudgetBytes) {
+        sa::AudioBuffer whole{info.layout, cursor};
+        if (const auto read = source.read(0, whole.view()); read && read.value() == cursor) {
+            if (auto exact = sa::analysis::exactTruePeakDbtp(whole.constView()); exact) {
+                out.truePeakDbtp = exact.value();
+                out.truePeakIsExact = true;
+            }
+        }
+    }
+
     out.statistics = statistics.value().statistics(out.truePeakDbtp, out.loudness.integratedLufs);
     return true;
 }

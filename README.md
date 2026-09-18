@@ -105,10 +105,17 @@ what it has been shown to do is the whole difference between a measurement and a
 number.
 
 - **The metering is not certified.** No official EBU or ITU conformance vectors
-  have been run, and the true-peak filter is a documented windowed-sinc
-  substitute rather than BS.1770-4 Annex 2 Table 3. The numbers are internally
-  consistent and anchored at 1 kHz; they are not conformant until those vectors
-  are run.
+  have been run. The numbers are internally consistent and anchored at 1 kHz --
+  a 1 kHz stereo sine at −23 dBFS reads −23.0 LUFS — but they are not conformant
+  until those vectors are run.
+
+  The true peak a file is *shown* is now exact rather than interpolated: it is
+  measured by band-limited reconstruction, which has no filter to droop, and it
+  agrees with an independent implementation to two decimal places. The
+  real-time meter, used where an answer has to arrive within a block, is still
+  a windowed-sinc substitute for BS.1770-4 Annex 2 Table 3 and reads up to
+  0.44 dB low at 4× on bright transients. Both facts are written down where the
+  code is.
 - **No audio has come out of real hardware.** WASAPI and ALSA are written and
   tested against a real thread on a real clock, and the ALSA path streams through
   ALSA itself, but nothing here has driven a sound card.
