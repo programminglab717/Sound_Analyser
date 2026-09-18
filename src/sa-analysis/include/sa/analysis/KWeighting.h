@@ -2,17 +2,26 @@
 
 #include <sa/core/Result.h>
 #include <sa/core/Types.h>
+#include <sa/dsp/Biquad.h>
 
 namespace sa::analysis {
 
 /// Biquad coefficients in transposed direct form II, a0 normalised to 1.
-struct BiquadCoefficients {
-    double b0 = 1.0;
-    double b1 = 0.0;
-    double b2 = 0.0;
-    double a1 = 0.0;
-    double a2 = 0.0;
-};
+/// The one biquad coefficient type in the codebase.
+///
+/// This was briefly declared separately here and in sa-dsp with an identical
+/// layout. Two structurally identical types that mean the same thing are worse
+/// than a dependency: a function taking one cannot accept the other, so every
+/// boundary between metering and filtering would need a conversion shim that
+/// exists only to launder a name.
+///
+/// sa-analysis therefore depends on sa-dsp. Filters are a primitive; measuring
+/// with them is built on top, so the dependency runs the right way even though
+/// the two modules sit side by side in the architecture's module map.
+///
+/// Note this is only the coefficient POD. BiquadState below stays separate from
+/// dsp::Biquad on purpose -- see its comment.
+using BiquadCoefficients = dsp::BiquadCoefficients;
 
 /// One channel's worth of biquad state.
 ///

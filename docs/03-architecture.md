@@ -29,6 +29,13 @@ Each module is a separate static library with its own tests. Dependencies point
 downward only; `sa-dsp` and `sa-analysis` must never include a UI header. That
 rule is what keeps the UI toolkit a replaceable decision rather than a rewrite.
 
+`sa-analysis` sits **above** `sa-dsp` rather than beside it: filters are a
+primitive, and measuring with them is built on top. That was settled when both
+modules independently grew an identical `BiquadCoefficients`. Two structurally
+identical types meaning the same thing are worse than a dependency, because
+every boundary between them needs a conversion shim that exists only to launder
+a name.
+
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │ sa-app        shell, entitlements, updater, crash reporting   │

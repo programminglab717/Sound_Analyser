@@ -6,7 +6,9 @@ add_library(sa-analysis STATIC ${SA_ANALYSIS_SOURCES})
 add_library(sa::analysis ALIAS sa-analysis)
 
 target_include_directories(sa-analysis PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(sa-analysis PUBLIC sa-core)
+# sa-dsp for the shared biquad coefficient type: filters are a primitive,
+# measuring with them is built on top.
+target_link_libraries(sa-analysis PUBLIC sa-core sa-dsp)
 target_link_libraries(sa-analysis PRIVATE sa-warnings)
 
 if(SA_BUILD_TESTS AND SA_ANALYSIS_TESTS)
