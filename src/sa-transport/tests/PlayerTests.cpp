@@ -1,4 +1,5 @@
 #include <sa/core/RealtimeGuard.h>
+#include <sa/device/AudioDeviceBackend.h>
 #include <sa/device/AudioDeviceManager.h>
 #include <sa/device/NullAudioDevice.h>
 #include <sa/transport/Player.h>
@@ -53,12 +54,24 @@ private:
 
 /// Opens a null device, which runs a real thread on a real clock but plays to
 /// nothing -- which is exactly what a test wants.
+///
+/// The backend list is explicit rather than the platform's, for two reasons.
+/// The first version asked for the platform default and failed on a headless
+/// Windows runner, where WASAPI lists a default endpoint that is not there.
+/// The second reason is worse and would not have shown up in CI at all: on a
+/// developer's machine the platform default *is* there, and the whole suite
+/// would have played through their speakers.
 std::unique_ptr<device::AudioDevice> openNullDevice(int channels = 2, int blockFrames = 256) {
     device::AudioDeviceConfig config;
     config.outputChannels = channels;
     config.inputChannels = 0;
     config.bufferFrames = blockFrames;
-    auto opened = device::AudioDeviceManager{}.openDefault(config);
+
+    std::vector<std::unique_ptr<device::AudioDeviceBackend>> backends;
+    backends.push_back(std::make_unique<device::NullAudioBackend>());
+    device::AudioDeviceManager manager{std::move(backends)};
+
+    auto opened = manager.openDefault(config);
     REQUIRE(opened.hasValue());
     return std::move(opened).value();
 }
@@ -90,7 +103,10 @@ TEST_CASE("Creating a player validates its device", "[transport][player]") {
     device::AudioDeviceConfig inputOnly;
     inputOnly.outputChannels = 0;
     inputOnly.inputChannels = 2;
-    if (auto opened = device::AudioDeviceManager{}.openDefault(inputOnly); opened) {
+    std::vector<std::unique_ptr<device::AudioDeviceBackend>> backends;
+    backends.push_back(std::make_unique<device::NullAudioBackend>());
+    device::AudioDeviceManager manager{std::move(backends)};
+    if (auto opened = manager.openDefault(inputOnly); opened) {
         CHECK_FALSE(Player::create(std::move(opened).value()).hasValue());
     }
 

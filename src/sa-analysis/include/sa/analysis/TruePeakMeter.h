@@ -23,16 +23,42 @@ namespace sa::analysis {
 /// how much oversampling BS.1770-4 asks for -- it wants an effective rate of at
 /// least 192 kHz, which 4x delivers from 48 kHz upward.
 ///
-/// **Conformance caveat.** BS.1770-4 Annex 2 specifies a particular 48-tap
-/// polyphase FIR (12 taps per phase, Table 3). That table is not reproduced
-/// here -- transcribing it from memory would be worse than not using it -- so
-/// this uses a Blackman-Harris windowed sinc of kTapsPerPhase taps per phase
-/// instead. It is a longer and flatter filter than the standard's, which means
-/// readings may come out marginally *higher* than a reference implementation
-/// rather than lower. Verified here: phase 0 reproduces input samples exactly,
-/// every phase has unity DC gain, and a peak falling exactly between samples is
-/// recovered to within 0.001 dB. Not verified: agreement with the standard's
-/// own filter on real programme material.
+/// **Conformance caveat, and the direction of the error.** BS.1770-4 Annex 2
+/// specifies a particular 48-tap polyphase FIR (12 taps per phase, Table 3).
+/// That table is not reproduced here -- transcribing it from memory would be
+/// worse than not using it -- so this uses a Blackman-Harris windowed sinc of
+/// kTapsPerPhase taps per phase instead.
+///
+/// **This meter under-reads, and by how much depends on frequency.** Measured
+/// against signals whose true peak is known by construction -- built at 16x,
+/// band-limited, decimated, so the fine waveform *is* the reconstruction and
+/// its maximum is the answer:
+///
+///     tone at      error at 4x   error at 16x
+///     0.20 rate      -0.02 dB      -0.00 dB
+///     0.30 rate      -0.04 dB      -0.00 dB
+///     0.40 rate      -0.44 dB      -0.03 dB
+///     0.45 rate      -0.12 dB      -0.10 dB
+///     0.47 rate      -0.20 dB      -0.20 dB
+///
+/// An earlier version of this comment said readings "may come out marginally
+/// higher than a reference implementation rather than lower". That was wrong,
+/// and wrong in the dangerous direction: a true-peak meter that reads low tells
+/// an engineer they are under the ceiling when they are over it. The error was
+/// not visible in the tests because a steady tone hides it -- every raw sample
+/// is also a peak candidate, so when the tone eventually lands near its own
+/// crest the raw value covers for the interpolator's droop. It shows on short
+/// transients near Nyquist, where it cannot.
+///
+/// Budget around half a dB of headroom at 4x if the material has energy above
+/// 0.4 of the sample rate, or use 16x, which costs four times the work and
+/// halves the worst case. Fixing it properly means the standard's own filter,
+/// which is tracked in docs/04-roadmap.md and needs the published table.
+///
+/// Verified here: phase 0 reproduces input samples exactly, every phase has
+/// unity DC gain, and a peak falling exactly between samples is recovered to
+/// within 0.001 dB. Not verified: agreement with the standard's own filter on
+/// real programme material.
 class TruePeakMeter {
 public:
     /// BS.1770-4's minimum at 48 kHz, and the default everywhere.

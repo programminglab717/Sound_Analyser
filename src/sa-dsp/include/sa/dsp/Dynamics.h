@@ -3,6 +3,7 @@
 #include <sa/core/Result.h>
 #include <sa/core/Types.h>
 #include <sa/dsp/EnvelopeFollower.h>
+#include <sa/dsp/TruePeakDetector.h>
 
 #include <vector>
 
@@ -33,6 +34,13 @@
 /// and a signal crosses zero twice per cycle, so without an envelope the
 /// comparison is remade -- and reversed -- hundreds of times a second.
 ///
+/// Every processor also exposes those steps as two halves: detect() turns a
+/// sample into a level, applyDetected() turns a level into a processed sample.
+/// Nothing is gained by calling them separately on one channel -- processSample()
+/// is exactly the two in sequence -- but the split is what lets StereoLink share
+/// one sidechain across a pair without any of the four gain computers being
+/// written twice. See StereoLink.h.
+///
 /// Every process() is allocation-free and lock-free. Construction and parameter
 /// changes are not audio-thread work.
 namespace sa::dsp {
@@ -60,6 +68,8 @@ struct CompressorSettings {
 /// Downward compressor.
 class Compressor {
 public:
+    using Settings = CompressorSettings;
+
     [[nodiscard]] static Result<Compressor> create(SampleRate rate,
                                                    const CompressorSettings& settings = {});
 
@@ -72,6 +82,17 @@ public:
     void reset() noexcept { smoother_.reset(0.0); }
 
     [[nodiscard]] float processSample(float input) noexcept;
+
+    /// The detector half: the level the gain computer will be asked about. A
+    /// compressor detects on the sample magnitude directly, so this has no
+    /// state of its own -- it is still a member rather than a free function
+    /// because the other three processors' detectors do.
+    [[nodiscard]] double detect(float input) noexcept;
+
+    /// The rest: gain computer, smoother, multiply. `level` is a linear
+    /// magnitude, not decibels, so that a stereo link can blend two channels'
+    /// levels without a silent channel dragging the blend to the silence floor.
+    [[nodiscard]] float applyDetected(float input, double level) noexcept;
 
     /// `input` and `output` may alias. A non-positive count is a no-op.
     void process(const float* input, float* output, SampleCount count) noexcept;
@@ -115,6 +136,8 @@ struct ExpanderSettings {
 /// Downward expander: everything below the threshold is pushed further down.
 class Expander {
 public:
+    using Settings = ExpanderSettings;
+
     [[nodiscard]] static Result<Expander> create(SampleRate rate,
                                                  const ExpanderSettings& settings = {});
 
@@ -125,6 +148,11 @@ public:
     void reset() noexcept;
 
     [[nodiscard]] float processSample(float input) noexcept;
+
+    /// Advances the peak detector and returns its output as a linear magnitude.
+    [[nodiscard]] double detect(float input) noexcept;
+
+    [[nodiscard]] float applyDetected(float input, double level) noexcept;
 
     void process(const float* input, float* output, SampleCount count) noexcept;
 
@@ -167,6 +195,8 @@ struct GateSettings {
 /// Noise gate with hysteresis and hold.
 class Gate {
 public:
+    using Settings = GateSettings;
+
     [[nodiscard]] static Result<Gate> create(SampleRate rate, const GateSettings& settings = {});
 
     [[nodiscard]] const GateSettings& settings() const noexcept { return settings_; }
@@ -176,6 +206,13 @@ public:
     void reset() noexcept;
 
     [[nodiscard]] float processSample(float input) noexcept;
+
+    /// Advances the peak detector and returns its output as a linear magnitude.
+    [[nodiscard]] double detect(float input) noexcept;
+
+    /// Makes the open/closed decision from `level` and applies the result, so a
+    /// linked pair opens and closes together rather than one channel at a time.
+    [[nodiscard]] float applyDetected(float input, double level) noexcept;
 
     void process(const float* input, float* output, SampleCount count) noexcept;
 
@@ -213,6 +250,28 @@ struct LimiterSettings {
     /// still respects the ceiling, at the cost of distorting the transients it
     /// catches.
     double lookAheadSeconds = 0.005;
+    /// Measure the peak between the samples as well as on them.
+    ///
+    /// Off by default, and the default is a judgement rather than an oversight.
+    /// Turning it on changes what "the ceiling" means -- a sample-peak limiter
+    /// aiming at -0.3 dBFS leaves the samples at -0.3, a true-peak one leaves
+    /// them wherever they have to sit for the *reconstruction* to stay at -0.3,
+    /// which on dense material is a decibel or more lower. It also costs
+    /// oversampling * TruePeakDetector::kTapsPerPhase multiplies a sample and
+    /// adds the detector's latency. A master bound for a lossy encoder wants it
+    /// on; a gain stage inside a chain does not.
+    bool truePeak = false;
+    /// Oversampling factor for the inter-sample detector. Fixed at
+    /// construction: changing it would mean rebuilding the filter table, which
+    /// is not audio-thread work.
+    ///
+    /// 8 rather than BS.1770-4's minimum of 4 because a limiter and a meter
+    /// want different things from the same filter. Both miss a peak that falls
+    /// between two oversampled points; for a meter that is a reading a fraction
+    /// of a decibel low, for a limiter it is an overshoot past a ceiling it
+    /// promised. Measured worst case for a steady tone: 0.42 dB at 4x, 0.09 dB
+    /// at 8x.
+    int oversampling = 8;
 };
 
 /// Brickwall peak limiter with look-ahead.
@@ -225,34 +284,65 @@ struct LimiterSettings {
 /// reduction on one sample rather than an overshoot, and the guarantee holds
 /// regardless of the settings, including with no look-ahead at all.
 ///
-/// This limits **sample** peaks. Inter-sample peaks, which appear only after
-/// reconstruction in a DAC or a lossy encoder, can still exceed the ceiling;
-/// catching those needs oversampled detection, which is a separate processor.
-/// This is why mastering practice leaves the ceiling at -1 dBFS rather than 0.
+/// With LimiterSettings::truePeak off, this limits **sample** peaks, and
+/// inter-sample peaks -- which appear only once a DAC or a lossy decoder
+/// reconstructs the waveform -- can still exceed the ceiling. That is why
+/// mastering practice leaves the ceiling at -1 dBFS rather than 0.
+///
+/// With it on, the detector is an oversampled reconstruction (TruePeakDetector)
+/// and the ceiling applies to what the reconstruction reaches, not to the
+/// samples. Two things are worth being precise about:
+///
+///   * The **sample** ceiling is still guaranteed exactly, by the same clamp as
+///     before. The inter-sample ceiling is guaranteed only as far as the
+///     detector can see -- an interpolator samples the reconstruction on a
+///     finite grid, so a peak between two grid points is missed by however much
+///     the waveform curves in between. The residual is measured in
+///     TruePeakTests rather than assumed.
+///   * The latency grows by TruePeakDetector::latencySamples(), because the
+///     detector cannot describe a sample until it has seen half a filter past
+///     it. latencySamples() reports the total; a host that does not compensate
+///     will hear the track drift.
 class Limiter {
 public:
     /// Longest look-ahead the delay line is sized for at construction.
     /// Bounding it is what lets setSettings() stay allocation-free.
     static constexpr double kMaxLookAheadSeconds = 0.020;
 
+    using Settings = LimiterSettings;
+
     [[nodiscard]] static Result<Limiter> create(SampleRate rate,
                                                 const LimiterSettings& settings = {});
 
     [[nodiscard]] const LimiterSettings& settings() const noexcept { return settings_; }
 
-    /// Changing the look-ahead re-points the delay line's read head, which
-    /// steps over whatever was in flight. Do it between blocks, not under a
-    /// signal.
+    /// Changing the look-ahead or the true-peak switch re-points the delay
+    /// line's read head, which steps over whatever was in flight. Do it between
+    /// blocks, not under a signal. Changing the oversampling factor is rejected
+    /// rather than obeyed: it is the one parameter that would have to allocate.
     [[nodiscard]] Status setSettings(const LimiterSettings& settings);
 
     void reset() noexcept;
 
-    /// Delay the look-ahead introduces, in samples. A host that does not
-    /// compensate by this much will hear the limited track drift behind
-    /// everything else.
-    [[nodiscard]] SampleCount latencySamples() const noexcept { return lookAheadSamples_; }
+    /// Total delay through the limiter, in samples: the look-ahead, plus the
+    /// inter-sample detector's own latency when it is switched on. A host that
+    /// does not compensate by this much will hear the limited track drift
+    /// behind everything else.
+    [[nodiscard]] SampleCount latencySamples() const noexcept { return audioDelaySamples_; }
 
     [[nodiscard]] float processSample(float input) noexcept;
+
+    /// The detector half: the level the ceiling is measured against. That is
+    /// the sample magnitude, or the inter-sample peak around the sample
+    /// TruePeakDetector::latencySamples() back when truePeak is on.
+    [[nodiscard]] double detect(float input) noexcept;
+
+    /// The rest: the look-ahead window, the smoother, the delay line and the
+    /// ceiling clamp. `level` is what the ceiling is applied to, so a linked
+    /// pair given the same level applies the same gain to both channels --
+    /// including through the clamp, which is otherwise the one place a link
+    /// could still move the image.
+    [[nodiscard]] float applyDetected(float input, double level) noexcept;
 
     void process(const float* input, float* output, SampleCount count) noexcept;
 
@@ -280,11 +370,23 @@ private:
     SampleRate rate_;
     LimiterSettings settings_;
     AttackReleaseSmoother smoother_;
+    TruePeakDetector detector_;
 
     std::vector<float> delay_;
+    /// The detected level for each delayed sample, so that the clamp at the
+    /// output can be made against the same number the gain was computed from
+    /// rather than against the sample it happens to land on.
+    std::vector<float> detected_;
     SampleCount delayCapacity_ = 0;
     SampleCount writeIndex_ = 0;
     SampleCount lookAheadSamples_ = 0;
+    /// How far the audio is delayed: the look-ahead, plus the detector's
+    /// latency when true-peak detection is on. The level ring is read at the
+    /// look-ahead alone, because the level written at a given step already
+    /// describes a sample the detector's latency further back -- which is
+    /// exactly what keeps the two aligned.
+    SampleCount audioDelaySamples_ = 0;
+    SampleCount detectorLatency_ = 0;
 
     std::vector<double> windowValues_;
     std::vector<SampleIndex> windowPositions_;

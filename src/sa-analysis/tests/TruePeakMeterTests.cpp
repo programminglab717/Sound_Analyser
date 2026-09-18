@@ -270,3 +270,67 @@ TEST_CASE("process allocates nothing", "[analysis][truepeak][rt]") {
 
     CHECK(scope.count() == 0);
 }
+
+TEST_CASE("The meter's error is bounded, and its direction is known",
+          "[analysis][truepeak][accuracy]") {
+    // Against a signal whose true peak is known by construction rather than by
+    // another interpolator of ours. The waveform is built at 16x, band-limited
+    // by its own envelope, and decimated by taking every 16th sample -- so the
+    // fine waveform *is* the band-limited reconstruction of the result and its
+    // maximum is the answer.
+    //
+    // A steady tone cannot be used for this. Every raw sample is also a peak
+    // candidate, so a long tone eventually lands near its own crest and the raw
+    // value covers for the interpolator's droop, hiding the error completely.
+    // That is why this uses a short burst, and why the error went unnoticed
+    // long enough to be documented backwards.
+    constexpr int kOversampledBy = 16;
+    constexpr SampleCount kFrames = 4096;
+
+    const auto measureError = [](double ratio, int oversampling) {
+        double worst = 1000.0;
+        for (int shift = 0; shift < kOversampledBy; ++shift) {
+            std::vector<double> fine(static_cast<std::size_t>(kFrames) * kOversampledBy);
+            for (std::size_t i = 0; i < fine.size(); ++i) {
+                const double t =
+                    (static_cast<double>(i) + shift / double(kOversampledBy)) / kOversampledBy;
+                const double envelope = std::exp(-std::pow((t - kFrames * 0.5) / 40.0, 2.0));
+                fine[i] = envelope * std::sin(2.0 * std::numbers::pi * ratio * t);
+            }
+            double trueMax = 0.0;
+            for (const double value : fine) {
+                trueMax = std::max(trueMax, std::abs(value));
+            }
+
+            AudioBuffer audio{ChannelLayout::mono(), kFrames};
+            for (SampleCount i = 0; i < kFrames; ++i) {
+                audio.channel(0)[i] =
+                    static_cast<float>(fine[static_cast<std::size_t>(i) * kOversampledBy]);
+            }
+            const auto reading = TruePeakMeter::measureDbtp(audio.constView(), oversampling);
+            REQUIRE(reading.hasValue());
+            worst = std::min(worst, reading.value() - 20.0 * std::log10(trueMax));
+        }
+        return worst;
+    };
+
+    // Low and mid frequencies are essentially exact.
+    CHECK(measureError(0.20, 4) > -0.10);
+    CHECK(measureError(0.30, 4) > -0.10);
+
+    // Near the top the filter droops. These bounds are the measured values with
+    // a little margin, and they are here to stop the error growing unnoticed --
+    // not to bless it.
+    CHECK(measureError(0.40, 4) > -0.60);
+    CHECK(measureError(0.47, 4) > -0.40);
+
+    // It never reads high. That is the property worth guarding: an over-reading
+    // meter costs headroom, an under-reading one ships a master over the
+    // ceiling.
+    for (const double ratio : {0.20, 0.30, 0.40, 0.45, 0.47}) {
+        CHECK(measureError(ratio, 4) < 0.05);
+    }
+
+    // And more oversampling must not make it worse.
+    CHECK(measureError(0.40, 16) > measureError(0.40, 4) - 0.01);
+}

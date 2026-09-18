@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <string>
+#include <utility>
 
 namespace sa::dsp {
 
@@ -116,7 +117,24 @@ namespace {
     if (settings.lookAheadSeconds > Limiter::kMaxLookAheadSeconds) {
         return Error{ErrorCode::InvalidArgument, "look-ahead is longer than the limiter supports"};
     }
+    if (settings.oversampling < TruePeakDetector::kMinimumOversampling ||
+        settings.oversampling > TruePeakDetector::kMaximumOversampling) {
+        return Error{ErrorCode::OutOfRange, "true-peak oversampling must be 2..16"};
+    }
     return checkTime(settings.lookAheadSeconds, "look-ahead");
+}
+
+/// Builds the limiter's detector at construction.
+///
+/// The factor is clamped rather than reported on, because a constructor has no
+/// way to return an error and create() has already rejected anything out of
+/// range. Clamping makes the create() call below one that cannot fail, which is
+/// what makes taking its value here safe rather than merely unlikely to throw.
+[[nodiscard]] TruePeakDetector makeDetector(int oversampling) {
+    const int clamped = std::clamp(oversampling, TruePeakDetector::kMinimumOversampling,
+                                   TruePeakDetector::kMaximumOversampling);
+    Result<TruePeakDetector> detector = TruePeakDetector::create(clamped);
+    return std::move(detector).value();
 }
 
 } // namespace
@@ -181,8 +199,12 @@ Status Compressor::setSettings(const CompressorSettings& settings) {
     return {};
 }
 
-float Compressor::processSample(float input) noexcept {
-    const double levelDb = gainToDecibels(static_cast<double>(input));
+double Compressor::detect(float input) noexcept {
+    return std::abs(static_cast<double>(input));
+}
+
+float Compressor::applyDetected(float input, double level) noexcept {
+    const double levelDb = gainToDecibels(level);
     // The smoother tracks reduction rather than gain, so more reduction is
     // "up" and the attack coefficient applies to clamping down. That is what
     // the attack control means on a compressor.
@@ -190,6 +212,10 @@ float Compressor::processSample(float input) noexcept {
     const double smoothed = smoother_.process(reductionDb);
     const double gain = decibelsToGain(settings_.makeupGainDb - smoothed);
     return static_cast<float>(static_cast<double>(input) * gain);
+}
+
+float Compressor::processSample(float input) noexcept {
+    return applyDetected(input, detect(input));
 }
 
 void Compressor::process(const float* input, float* output, SampleCount count) noexcept {
@@ -241,8 +267,11 @@ void Expander::reset() noexcept {
     smoother_.reset(0.0);
 }
 
-float Expander::processSample(float input) noexcept {
-    const double level = detector_.process(std::abs(static_cast<double>(input)));
+double Expander::detect(float input) noexcept {
+    return detector_.process(std::abs(static_cast<double>(input)));
+}
+
+float Expander::applyDetected(float input, double level) noexcept {
     const double targetDb = expanderGainDb(settings_, gainToDecibels(level));
     // Here the smoother tracks gain, so rising is the expander opening -- which
     // is what attack means on an expander, the opposite convention to the
@@ -250,6 +279,10 @@ float Expander::processSample(float input) noexcept {
     const double smoothed = smoother_.process(targetDb);
     const double gain = decibelsToGain(settings_.makeupGainDb + smoothed);
     return static_cast<float>(static_cast<double>(input) * gain);
+}
+
+float Expander::processSample(float input) noexcept {
+    return applyDetected(input, detect(input));
 }
 
 void Expander::process(const float* input, float* output, SampleCount count) noexcept {
@@ -302,8 +335,11 @@ void Gate::reset() noexcept {
     open_ = false;
 }
 
-float Gate::processSample(float input) noexcept {
-    const double level = detector_.process(std::abs(static_cast<double>(input)));
+double Gate::detect(float input) noexcept {
+    return detector_.process(std::abs(static_cast<double>(input)));
+}
+
+float Gate::applyDetected(float input, double level) noexcept {
     const double levelDb = gainToDecibels(level);
 
     if (levelDb > settings_.thresholdDb) {
@@ -323,6 +359,10 @@ float Gate::processSample(float input) noexcept {
     return static_cast<float>(static_cast<double>(input) * decibelsToGain(smoothed));
 }
 
+float Gate::processSample(float input) noexcept {
+    return applyDetected(input, detect(input));
+}
+
 void Gate::process(const float* input, float* output, SampleCount count) noexcept {
     for (SampleCount i = 0; i < count; ++i) {
         output[i] = processSample(input[i]);
@@ -333,12 +373,16 @@ void Gate::process(const float* input, float* output, SampleCount count) noexcep
 // Limiter
 // ---------------------------------------------------------------------------
 
-Limiter::Limiter(SampleRate rate, const LimiterSettings& settings) : rate_(rate) {
-    // Size for the longest look-ahead the limiter will ever be asked for, so
-    // that every later parameter change is a change of offsets only.
+Limiter::Limiter(SampleRate rate, const LimiterSettings& settings)
+    : rate_(rate), detector_(makeDetector(settings.oversampling)) {
+    // Size for the longest look-ahead the limiter will ever be asked for, plus
+    // the inter-sample detector's own latency, so that every later parameter
+    // change -- including switching true-peak detection on -- is a change of
+    // offsets only.
     const SampleCount maximum = secondsToSamples(kMaxLookAheadSeconds, rate);
-    delayCapacity_ = maximum + 1;
+    delayCapacity_ = maximum + detector_.latencySamples() + 1;
     delay_.assign(static_cast<std::size_t>(delayCapacity_), 0.0f);
+    detected_.assign(static_cast<std::size_t>(delayCapacity_), 0.0f);
     // The window spans look-ahead + 1 sample positions, and the wedge never
     // holds more entries than the window holds positions.
     windowValues_.assign(static_cast<std::size_t>(maximum + 2), 0.0);
@@ -348,10 +392,26 @@ Limiter::Limiter(SampleRate rate, const LimiterSettings& settings) : rate_(rate)
 }
 
 void Limiter::applySettings(const LimiterSettings& settings) noexcept {
+    const bool wasTruePeak = settings_.truePeak;
     settings_ = settings;
+    // The detector is built once, so settings() reports the factor that is
+    // actually running rather than one a caller hoped for.
+    settings_.oversampling = detector_.oversampling();
+    detectorLatency_ = settings.truePeak ? detector_.latencySamples() : 0;
     lookAheadSamples_ = secondsToSamples(settings.lookAheadSeconds, rate_);
-    lookAheadSamples_ = std::clamp<SampleCount>(lookAheadSamples_, 0, delayCapacity_ - 1);
+    lookAheadSamples_ =
+        std::clamp<SampleCount>(lookAheadSamples_, 0, delayCapacity_ - 1 - detectorLatency_);
+    audioDelaySamples_ = lookAheadSamples_ + detectorLatency_;
     ceilingGain_ = decibelsToGain(settings.ceilingDb);
+
+    if (settings_.truePeak && !wasTruePeak) {
+        // Whatever is in the detector's delay line is whatever was passing
+        // through when it was last switched on, which may be minutes of audio
+        // ago. Clearing it costs one filter length of under-reading at the
+        // switch; keeping it risks the same length of over-reading, and an
+        // unexplained dip is worse than a known one.
+        detector_.reset();
+    }
 
     // Attack is a fifth of the look-ahead, not the whole of it: after five time
     // constants the envelope is 99.3% of the way down, so by the moment the
@@ -376,12 +436,18 @@ Status Limiter::setSettings(const LimiterSettings& settings) {
     if (const Status status = validate(settings); !status) {
         return status;
     }
+    if (settings.oversampling != detector_.oversampling()) {
+        return Error{ErrorCode::InvalidArgument,
+                     "oversampling is fixed at construction -- build a new limiter to change it"};
+    }
     applySettings(settings);
     return {};
 }
 
 void Limiter::reset() noexcept {
     std::fill(delay_.begin(), delay_.end(), 0.0f);
+    std::fill(detected_.begin(), detected_.end(), 0.0f);
+    detector_.reset();
     writeIndex_ = 0;
     windowHead_ = 0;
     windowCount_ = 0;
@@ -413,25 +479,53 @@ double Limiter::slideWindow(double requiredDb) noexcept {
     return windowValues_[static_cast<std::size_t>(windowHead_)];
 }
 
-float Limiter::processSample(float input) noexcept {
-    const double arriving = static_cast<double>(input);
-    const double requiredDb = std::max(0.0, gainToDecibels(arriving) - settings_.ceilingDb);
+double Limiter::detect(float input) noexcept {
+    if (!settings_.truePeak) {
+        return std::abs(static_cast<double>(input));
+    }
+    // The answer describes the sample detectorLatency_ back, not the one just
+    // fed. That is why the audio is delayed by the look-ahead *and* the
+    // detector's latency while the level ring is read at the look-ahead alone:
+    // the two offsets differ by exactly the lag the detector introduces, so the
+    // level and the sample it describes meet again at the output.
+    return detector_.process(input);
+}
+
+float Limiter::applyDetected(float input, double level) noexcept {
+    const double requiredDb = std::max(0.0, gainToDecibels(level) - settings_.ceilingDb);
     const double windowMaximum = slideWindow(requiredDb);
     const double smoothedDb = smoother_.process(windowMaximum);
 
     delay_[static_cast<std::size_t>(writeIndex_)] = input;
-    const SampleCount readIndex =
+    detected_[static_cast<std::size_t>(writeIndex_)] = static_cast<float>(level);
+    const SampleCount audioIndex =
+        (writeIndex_ + delayCapacity_ - audioDelaySamples_) % delayCapacity_;
+    const SampleCount levelIndex =
         (writeIndex_ + delayCapacity_ - lookAheadSamples_) % delayCapacity_;
-    const float delayed = delay_[static_cast<std::size_t>(readIndex)];
+    const float delayed = delay_[static_cast<std::size_t>(audioIndex)];
+    const double delayedLevel =
+        static_cast<double>(detected_[static_cast<std::size_t>(levelIndex)]);
     writeIndex_ = (writeIndex_ + 1) % delayCapacity_;
     ++position_;
 
     // The clamp, in linear gain rather than decibels so that the product below
     // lands on the ceiling exactly rather than a logarithm's worth away from it.
-    const double magnitude = std::abs(static_cast<double>(delayed));
+    //
+    // It is made against the larger of the sample and the level that was
+    // detected for it. Those are the same number for a sample-peak limiter. For
+    // a true-peak one the level is the higher of the two, so the clamp holds the
+    // reconstruction to the ceiling rather than the samples -- and because the
+    // level is whatever it was handed, a linked stereo pair clamps by the same
+    // amount on both channels instead of pulling the image towards the quieter
+    // one.
+    const double magnitude = std::max(std::abs(static_cast<double>(delayed)), delayedLevel);
     const double ceiling = magnitude > ceilingGain_ ? ceilingGain_ / magnitude : 1.0;
     appliedGain_ = std::min(decibelsToGain(-smoothedDb), ceiling);
     return static_cast<float>(static_cast<double>(delayed) * appliedGain_);
+}
+
+float Limiter::processSample(float input) noexcept {
+    return applyDetected(input, detect(input));
 }
 
 void Limiter::process(const float* input, float* output, SampleCount count) noexcept {

@@ -3,6 +3,7 @@
 #include <sa/engine/Document.h>
 #include <sa/engine/DocumentSource.h>
 #include <sa/engine/UndoHistory.h>
+#include <sa/spectral/Denoise.h>
 #include <sa/transport/Player.h>
 #include <sa/ui/Colourmap.h>
 #include <sa/ui/LoudnessPanel.h>
@@ -140,6 +141,8 @@ private:
     void stopPlayback();
     void followPlayhead();
 
+    void learnNoiseProfile();
+    void chooseDenoise();
     void chooseAttenuate();
     void healSelection();
     void selectFrequencyBand(double lowHz, double highHz);
@@ -179,6 +182,7 @@ private:
     QAction* normaliseAction_ = nullptr;
     QAction* attenuateAction_ = nullptr;
     QAction* healAction_ = nullptr;
+    QAction* denoiseAction_ = nullptr;
     QAction* exportSelectionAction_ = nullptr;
 
     QAction* playAction_ = nullptr;
@@ -192,6 +196,7 @@ private:
     std::shared_ptr<const spectral::SpectrogramPyramid> spectra_;
 
     AudioBuffer clipboard_;
+    spectral::NoiseProfile noiseProfile_;
     std::filesystem::path openedPath_;
     std::filesystem::path sessionPath_;
     QString spectrogramNote_;

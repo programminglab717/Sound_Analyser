@@ -1,4 +1,5 @@
 #include <sa/device/AudioDeviceManager.h>
+#include <sa/device/NullAudioDevice.h>
 #include <sa/engine/BufferSource.h>
 #include <sa/engine/Consolidate.h>
 #include <sa/engine/Edits.h>
@@ -209,6 +210,13 @@ void MainWindow::buildMenus() {
                           &MainWindow::chooseAttenuate);
     healAction_ = repair->addAction(tr("&Heal selection"), QKeySequence{Qt::CTRL | Qt::Key_H}, this,
                                     &MainWindow::healSelection);
+    repair->addSeparator();
+    repair->addAction(tr("&Learn noise profile from selection"),
+                      QKeySequence{Qt::CTRL | Qt::SHIFT | Qt::Key_N}, this,
+                      &MainWindow::learnNoiseProfile);
+    denoiseAction_ = repair->addAction(tr("Reduce &noise…"), QKeySequence{Qt::CTRL | Qt::Key_D},
+                                       this, &MainWindow::chooseDenoise);
+    repair->addSeparator();
     repair->addAction(tr("Select all &frequencies"), this,
                       [this] { selectFrequencyBand(0.0, document_.sampleRate().hz() * 0.5); });
 
@@ -544,6 +552,7 @@ void MainWindow::refreshActions() {
     normaliseAction_->setEnabled(document && meters_->conformGainDb().has_value());
     attenuateAction_->setEnabled(document);
     healAction_->setEnabled(document);
+    denoiseAction_->setEnabled(document && !noiseProfile_.isEmpty());
 }
 
 void MainWindow::updateStatus() {
@@ -619,12 +628,22 @@ void MainWindow::togglePlayback() {
         config.outputChannels = document_.layout().count();
         config.inputChannels = 0;
 
+        // openOrFallback rather than openDefault: a default endpoint that is
+        // listed but cannot be opened -- held in exclusive mode, or a driver
+        // that has gone away -- should cost the user the next device in the
+        // list, not playback altogether.
         device::AudioDeviceManager manager;
-        auto opened = manager.openDefault(config);
+        auto opened = manager.openOrFallback("", config);
         if (!opened) {
             status_->setText(tr("No audio output: %1")
                                  .arg(QString::fromStdString(std::string{opened.error().what()})));
             return;
+        }
+        // The last resort in that chain is a device that plays to nothing.
+        // Using it without saying so would move the playhead and make no sound,
+        // which is a worse answer than an honest one.
+        if (opened.value()->description().id == device::NullAudioBackend::kDeviceId) {
+            status_->setText(tr("No sound card was available -- playback will run silently"));
         }
         auto created = transport::Player::create(std::move(opened).value());
         if (!created) {
@@ -723,6 +742,62 @@ void MainWindow::applySpectralEdit(const QString& label, Edit&& edit) {
     (void)applyEdit(label, [this, spanStart, &span] {
         return engine::replaceRange(document_, spanStart, std::move(span)).ok();
     });
+}
+
+void MainWindow::learnNoiseProfile() {
+    const TimeSelection selected = selection();
+    if (selected.isEmpty() || !documentSource_) {
+        status_->setText(tr("Select a passage of noise on its own, then learn from it"));
+        return;
+    }
+
+    AudioBuffer passage{document_.layout(), selected.length()};
+    if (!documentSource_->read(selected.start, passage.view())) {
+        status_->setText(tr("Could not read the selection"));
+        return;
+    }
+
+    auto learned = spectral::NoiseProfile::learn(passage.constView(), document_.sampleRate(), 0,
+                                                 passage.frames());
+    if (!learned) {
+        status_->setText(tr("Could not learn a profile: %1")
+                             .arg(QString::fromStdString(std::string{learned.error().what()})));
+        return;
+    }
+
+    noiseProfile_ = std::move(learned).value();
+    refreshActions();
+    status_->setText(
+        tr("Learned a noise profile from %1 s -- now select what to clean and reduce noise")
+            .arg(samplesToSeconds(selected.length(), document_.sampleRate()), 0, 'f', 2));
+}
+
+void MainWindow::chooseDenoise() {
+    if (noiseProfile_.isEmpty()) {
+        status_->setText(tr("Learn a noise profile first, from a passage of noise on its own"));
+        return;
+    }
+    bool accepted = false;
+    const double decibels =
+        QInputDialog::getDouble(this, tr("Reduce noise"), tr("Reduce the noise floor by (dB):"),
+                                12.0, 1.0, 48.0, 1, &accepted);
+    if (!accepted) {
+        return;
+    }
+
+    applySpectralEdit(tr("reduce noise %1 dB").arg(decibels, 0, 'f', 0),
+                      [this, decibels](AudioBufferView audio,
+                                       const spectral::SpectralRegion& region, SampleRate rate) {
+                          spectral::DenoiseSettings settings;
+                          settings.reductionDb = decibels;
+                          // The whole span is cleaned rather than just the
+                          // region's frequency band: a noise profile describes
+                          // the spectrum, and applying it to a slice of that
+                          // spectrum leaves the rest of the hiss in place with
+                          // a step where the band ended.
+                          return spectral::denoise(audio, rate, noiseProfile_, region.startSample,
+                                                   region.endSample, settings);
+                      });
 }
 
 void MainWindow::chooseAttenuate() {
@@ -1012,6 +1087,27 @@ bool MainWindow::applyOperation(const QString& name) {
     }
     if (name == "heal") {
         healSelection();
+        return true;
+    }
+    if (name == "learnnoise") {
+        learnNoiseProfile();
+        return true;
+    }
+    if (name.startsWith("denoise:")) {
+        bool ok = false;
+        const double decibels = name.mid(8).toDouble(&ok);
+        if (!ok || noiseProfile_.isEmpty()) {
+            return false;
+        }
+        applySpectralEdit(
+            QStringLiteral("reduce noise"),
+            [this, decibels](AudioBufferView audio, const spectral::SpectralRegion& region,
+                             SampleRate rate) {
+                spectral::DenoiseSettings settings;
+                settings.reductionDb = decibels;
+                return spectral::denoise(audio, rate, noiseProfile_, region.startSample,
+                                         region.endSample, settings);
+            });
         return true;
     }
     if (name == "normalise") {

@@ -1,4 +1,5 @@
 add_library(sa-spectral STATIC
+    src/Denoise.cpp
     src/SpectralEdit.cpp
     src/SpectrogramPyramid.cpp
 )
@@ -10,6 +11,7 @@ target_link_libraries(sa-spectral PRIVATE sa-warnings)
 
 if(SA_BUILD_TESTS)
     add_executable(sa-spectral-tests
+        tests/DenoiseTests.cpp
         tests/SpectralEditTests.cpp
         tests/SpectrogramPyramidTests.cpp
     )

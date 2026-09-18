@@ -5,8 +5,11 @@ add_library(sa-dsp STATIC
     src/EnvelopeFollower.cpp
     src/Fft.cpp
     src/ParametricEq.cpp
+    src/Resampler.cpp
     src/Stft.cpp
+    src/TruePeakDetector.cpp
     src/Window.cpp
+    src/WindowedSinc.cpp
 )
 add_library(sa::dsp ALIAS sa-dsp)
 
@@ -20,7 +23,10 @@ if(SA_BUILD_TESTS)
         tests/DynamicsTests.cpp
         tests/FftTests.cpp
         tests/ParametricEqTests.cpp
+        tests/ResamplerTests.cpp
+        tests/StereoLinkTests.cpp
         tests/StftTests.cpp
+        tests/TruePeakTests.cpp
         tests/WindowTests.cpp
     )
     target_link_libraries(sa-dsp-tests PRIVATE sa-dsp sa-warnings Catch2::Catch2WithMain)

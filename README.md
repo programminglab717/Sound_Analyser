@@ -44,6 +44,7 @@ plugin hosting, measurement reporting) rather than access.
 | [04 — Roadmap](docs/04-roadmap.md) | Six delivery phases with exit criteria, team shape, risk register |
 | [05 — Licensing & dependencies](docs/05-licensing-and-dependencies.md) | Dependency-by-dependency legal analysis, and the traps |
 | [06 — Spike: spectrogram at 60 fps](docs/06-spike-spectrogram.md) | The Phase 0 gating risk, measured |
+| [07 — Work queue](docs/07-autonomous-queue.md) | What is next, what is blocked, and on what |
 | [ADRs](docs/adr/) | Architecture decision records for the choices that are expensive to reverse |
 
 ## Decisions already locked
@@ -51,35 +52,68 @@ plugin hosting, measurement reporting) rather than access.
 | Decision | Choice | Why |
 | -------- | ------ | --- |
 | Audience | Analysis-first repair & mastering | Clearest differentiation; "analyser" is the moat |
-| Stack | C++20 + Qt 6 (LGPL) + miniaudio + CLAP | Real-time safe; every dependency free in perpetuity with no revenue cap |
+| Stack | C++20 + Qt 6 (LGPL, dynamic) | Real-time safe; every dependency free in perpetuity with no revenue cap. The audio device layer, the FFT and the file I/O were written rather than taken, which is why the dependency count is six |
 | Licensing | Closed-source, free at launch → freemium | **No licence purchases, ever** — see [ADR 0006](docs/adr/0006-permissive-only-dependencies.md) |
 | ML | Core differentiator, on-device via ONNX Runtime | Privacy, no per-user cost, works offline |
 | Dependencies | Permissive-only, CI-enforced | Free forever · closed-source OK · no revenue cap |
 
 ## Status
 
-**Phase 0 in progress.** See [04 — Roadmap](docs/04-roadmap.md) and
+**Phase 0 and the core of Phase 1 are done: the application runs, edits, repairs,
+measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 [BUILDING.md](docs/BUILDING.md).
 
-| Phase 0 item | State |
+| Area | State |
 | --- | --- |
-| CMake build system, presets (MSVC + Ninja), warnings-as-errors | ✅ Done |
-| CI: licence gate, format, Windows + Linux matrix, ASan/UBSan | ✅ Done |
-| Licence allowlist gate (`tools/check_licences.py`) | ✅ Done, negative-tested |
-| `sa-core`: buffers, channel layouts, time types, `Result` | ✅ Done |
-| `sa-core`: RT-safety instrumentation | ✅ Done |
-| `sa-io`: peak pyramid + query | ✅ Done, cross-checked against brute force |
-| `sa-dsp`: FFT, windows, STFT | ✅ Done — round-trip is a CI gate |
-| `sa-spectral`: spectrogram pyramid | ✅ Done |
-| **Spectrogram spike** | ✅ [Thesis survives](docs/06-spike-spectrogram.md) |
-| `sa-io`: codecs and streaming reader | ⬜ Next |
-| Device layer over miniaudio (WASAPI) | ⬜ Next |
-| Qt shell: docking, transport, waveform view | ⬜ Next |
-| GPU shader renderer | ⬜ Needs hardware — remaining Phase 0 risk |
+| Build, presets, warnings-as-errors, CI on Windows and Linux | ✅ Done |
+| Licence allowlist gate (`tools/check_licences.py`) | ✅ Done, negative-tested three ways |
+| `sa-core`: buffers, channel layouts, time types, `Result`, RT instrumentation | ✅ Done |
+| `sa-dsp`: FFT, windows, STFT, biquads, EQ, dynamics | ✅ Done — STFT round trip is a CI gate |
+| `sa-io`: WAV, AIFF, FLAC, MP3, peak pyramid, WAV writer | ✅ Done |
+| `sa-analysis`: LUFS, true peak, statistics, compliance targets | ✅ Done — see the caveat below |
+| `sa-spectral`: spectrogram pyramid, attenuate and heal | ✅ Done |
+| `sa-engine`: non-destructive document, edits, undo, sessions | ✅ Done |
+| `sa-device`: WASAPI, ALSA, null backend | ✅ Done — never run on real hardware |
+| `sa-transport`: playback with a playhead | ✅ Done |
+| `sa-ui`: waveform, spectrogram, rulers, meters, editing, repair | ✅ Done |
+| Resampling, time-stretch, pitch-shift | 🔄 In progress |
+| Noise profile learning and spectral denoise | ⬜ Next |
+| `sa-cli`: headless batch driver | ⬜ Next |
+| GPU shader renderer | ⬜ An optimisation, not a requirement — the CPU path fits in the frame budget |
 
-**376 tests passing on GCC 13, Clang 18, MSVC 19 (Visual Studio 18), and under
-ASan/UBSan.** CI is green on Windows and Linux — see the CI badge on the
-branch.
+**483 tests passing on GCC 13 and under ASan/UBSan with leak detection.** CI runs
+the same suite on MSVC 19 (Visual Studio 18) and Clang; the Windows result for
+the newest modules -- the WASAPI backend and the FLAC and MP3 decoders -- is the
+run in flight rather than a result already in hand, and this line says so until
+it is.
+
+Two things the tests check that are worth naming, because each one covers a whole
+chain rather than a unit:
+
+- **Measure, normalise, export, re-measure lands on −23.000 LUFS** against EBU
+  R128's −23.0. The K-weighting, the gating, the gain verb, the render and the
+  WAV writer all have to be right for that to happen.
+- **Editing is compared sample by sample.** Ten operations are driven through the
+  window headlessly, exported, and checked against what they should have
+  produced. All ten are bit-exact.
+
+### What is not true yet
+
+Stated here rather than buried, because the gap between what a tool claims and
+what it has been shown to do is the whole difference between a measurement and a
+number.
+
+- **The metering is not certified.** No official EBU or ITU conformance vectors
+  have been run, and the true-peak filter is a documented windowed-sinc
+  substitute rather than BS.1770-4 Annex 2 Table 3. The numbers are internally
+  consistent and anchored at 1 kHz; they are not conformant until those vectors
+  are run.
+- **No audio has come out of real hardware.** WASAPI and ALSA are written and
+  tested against a real thread on a real clock, and the ALSA path streams through
+  ALSA itself, but nothing here has driven a sound card.
+- **Nothing has been compiled by MSVC except through CI.** That is what CI is
+  for, and it is green, but no one has built this on a developer's Windows
+  machine.
 
 ```sh
 cmake --preset debug && cmake --build --preset debug && ctest --preset debug
