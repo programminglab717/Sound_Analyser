@@ -1,6 +1,7 @@
 add_library(sa-engine STATIC
     src/Clip.cpp
     src/Document.cpp
+    src/DocumentSource.cpp
     src/Edits.cpp
     src/SessionFile.cpp
     src/Timeline.cpp
@@ -15,6 +16,7 @@ target_link_libraries(sa-engine PRIVATE sa-warnings)
 
 if(SA_BUILD_TESTS)
     add_executable(sa-engine-tests
+        tests/DocumentSourceTests.cpp
         tests/DocumentTests.cpp
         tests/EditTests.cpp
         tests/SessionTests.cpp

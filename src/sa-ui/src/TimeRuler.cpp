@@ -1,6 +1,7 @@
 #include <sa/ui/TimeRuler.h>
 
 #include <QPainter>
+#include <algorithm>
 
 namespace sa::ui {
 
@@ -10,6 +11,7 @@ constexpr QColor kBackground{0x16, 0x17, 0x1d};
 constexpr QColor kTick{0x4a, 0x4e, 0x5e};
 constexpr QColor kLabel{0xa8, 0xad, 0xbd};
 constexpr QColor kPlayhead{0xff, 0x9f, 0x43};
+constexpr QColor kSelectionBand{0x4d, 0x9d, 0xe0, 0x4d};
 constexpr int kTickLength = 6;
 
 } // namespace
@@ -33,6 +35,14 @@ void TimeRuler::setViewRange(SampleIndex start, SampleCount length) {
     update();
 }
 
+void TimeRuler::setSelection(TimeSelection selection) {
+    if (selection == selection_) {
+        return;
+    }
+    selection_ = selection;
+    update();
+}
+
 void TimeRuler::setPlayhead(SampleIndex position) {
     playhead_ = position;
     update();
@@ -49,6 +59,21 @@ void TimeRuler::paintEvent(QPaintEvent*) {
 
     const double startSeconds = static_cast<double>(viewStart_) / rate_.hz();
     const double spanSeconds = static_cast<double>(viewLength_) / rate_.hz();
+
+    // The selected span, so the ruler answers "how much is that" without the
+    // user having to read two numbers off it and subtract.
+    if (!selection_.isEmpty()) {
+        const auto toX = [&](SampleIndex sample) {
+            const double fraction =
+                static_cast<double>(sample - viewStart_) / static_cast<double>(viewLength_);
+            return kGutterWidth + static_cast<int>(fraction * plotWidth);
+        };
+        const int left = std::max(kGutterWidth, toX(selection_.start));
+        const int right = std::min(width(), toX(selection_.end));
+        if (right > left) {
+            painter.fillRect(QRect{left, 0, right - left, height()}, kSelectionBand);
+        }
+    }
 
     QFont small = font();
     small.setPointSizeF(std::max(7.0, small.pointSizeF() - 1.5));

@@ -119,6 +119,13 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python3 tools/ui_smoke_test.py ./build/release/bin/sound-analyser --keep artefacts/window.png
+      # Drawing the right picture and editing the right samples are separate
+      # claims. An editor that cuts the wrong four seconds would pass the check
+      # above, because that one stops at the picture.
+      - name: Edit and verify the samples
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python3 tools/ui_edit_test.py ./build/release/bin/sound-analyser
       - name: Upload the rendering
         if: always()
         uses: actions/upload-artifact@v4

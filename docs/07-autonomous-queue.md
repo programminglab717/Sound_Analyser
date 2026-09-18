@@ -1,11 +1,24 @@
 # 07 — Autonomous work queue
 
-Working order for unattended sessions. The rule for what belongs here: it must
-be **fully verifiable in this environment** — Linux, no GPU, no display, no
-audio hardware, no Windows — plus GitHub Actions for real MSVC builds.
+Working order. The rule for what belongs here: it must be **verifiable** —
+either locally (Linux, no GPU, no audio hardware, no Windows), through GitHub
+Actions for real MSVC builds, or by the product owner, who is available for
+testing and approvals.
 
-Anything needing a product decision, a purchase, or hardware goes in
-§Blocked instead, and waits.
+That last clause is new and it moved a lot of work. Two things previously listed
+as blocked were not:
+
+- **The UI was never blocked.** Qt renders headlessly under
+  `QT_QPA_PLATFORM=offscreen`, so a window can be built, screenshotted and
+  *looked at* in this environment. `tools/ui_smoke_test.py` now reads the
+  rendered pixels back in CI.
+- **A GPU was never required.** The Phase 0 spike measured CPU rendering at
+  11.59 ms against a 16.67 ms frame budget at 1080p. It fits with 30% to spare.
+  The shader path is an optimisation for 4K and above, not an entry ticket.
+
+Audio hardware is still not present here, but the owner can run a build, so
+backends are written, unit-tested against the abstraction, and confirmed by
+them.
 
 ---
 
@@ -16,8 +29,12 @@ green before starting the next**. CI is the only real-hardware check available,
 and treating local green as sufficient is exactly how several bugs reached the
 branch unnoticed.
 
-1. **Drive Windows CI to green.** In progress. Nothing else starts until the
-   suite passes on MSVC debug and release.
+0. **Drive Windows CI to green.** Done. The suite passes on MSVC debug and
+   release, and on Linux debug, release and asan.
+1. **A runnable vertical slice.** In progress, and now ahead of everything
+   below, because a product nobody can run cannot be judged. Open, look,
+   select, play, edit, save. The analysis layers are further along than the
+   surface that exposes them, and that is the wrong way round.
 2. **True-peak limiting.** The feature spec lists "limiter (true-peak)" as P1
    and the current limiter guards sample peaks only, so inter-sample peaks can
    still exceed the ceiling after reconstruction. Needs oversampled detection;
@@ -53,18 +70,13 @@ branch unnoticed.
   if it is, this jumps to the top of the list, because it converts the metering
   from "internally consistent" to "conformant" and that gap is currently the
   biggest overstatement risk in the project.
-- **The Qt shell.** Could be written and compiled through CI without ever being
-  seen. Whether that is worth doing blind is a judgement call: UI written
-  without looking at it is usually wrong in ways tests do not catch. Not started
-  unattended without a reason.
 
-## Blocked — do not attempt unattended
+## Blocked — needs someone or something not here
 
 | Item | Needs |
 | --- | --- |
-| GPU shader renderer | Real GPU across Intel/AMD/NVIDIA. Phase 0's last open risk. |
-| WASAPI/ASIO backend | Audio hardware. The abstraction and null backend exist. |
-| Visual verification of any UI | A display. |
+| GPU shader renderer | Real GPU across Intel/AMD/NVIDIA. No longer a Phase 0 risk — it is an optimisation. |
+| Confirming audio actually comes out | The owner running a build. Backends and tests are written here. |
 | True-peak filter conformance | BS.1770-4 Annex 2 Table 3, transcribed from the published standard rather than memory. |
 | Platform compliance targets | Checking against live platform documentation before they ship as presets. |
 | Product name, pricing, licence sign-off | A person. |

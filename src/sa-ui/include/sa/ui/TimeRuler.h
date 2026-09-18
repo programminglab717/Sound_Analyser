@@ -21,6 +21,8 @@ public:
     void setSampleRate(SampleRate rate);
     void setViewRange(SampleIndex start, SampleCount length);
 
+    void setSelection(TimeSelection selection);
+
     /// Where the transport is, in samples. Negative hides it.
     void setPlayhead(SampleIndex position);
 
@@ -31,6 +33,7 @@ private:
     SampleRate rate_{48000.0};
     SampleIndex viewStart_ = 0;
     SampleCount viewLength_ = 0;
+    TimeSelection selection_;
     SampleIndex playhead_ = -1;
 };
 

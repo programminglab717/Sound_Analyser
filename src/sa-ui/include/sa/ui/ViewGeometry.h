@@ -1,5 +1,7 @@
 #pragma once
 
+#include <sa/core/Types.h>
+
 #include <string>
 #include <vector>
 
@@ -13,6 +15,21 @@ namespace sa::ui {
 /// shared constant guarantees that without any of them knowing about the
 /// others.
 inline constexpr int kGutterWidth = 62;
+
+/// A selected span of time, in samples. Empty means nothing is selected and the
+/// `start` is a caret: where a paste or an insert would land.
+struct TimeSelection {
+    SampleIndex start = 0;
+    SampleIndex end = 0;
+
+    [[nodiscard]] bool isEmpty() const noexcept { return end <= start; }
+
+    [[nodiscard]] SampleCount length() const noexcept { return isEmpty() ? 0 : end - start; }
+
+    [[nodiscard]] friend bool operator==(const TimeSelection& a, const TimeSelection& b) noexcept {
+        return a.start == b.start && a.end == b.end;
+    }
+};
 
 /// How the vertical axis of a spectrogram maps to frequency.
 enum class FrequencyScale {

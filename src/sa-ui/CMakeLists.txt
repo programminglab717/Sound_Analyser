@@ -16,11 +16,13 @@ add_library(sa-ui STATIC
     src/Colourmap.cpp
     src/MainWindow.cpp
     src/SpectrogramView.cpp
+    src/TimeAxisView.cpp
     src/TimeRuler.cpp
     src/ViewGeometry.cpp
     src/WaveformView.cpp
     include/sa/ui/MainWindow.h
     include/sa/ui/SpectrogramView.h
+    include/sa/ui/TimeAxisView.h
     include/sa/ui/TimeRuler.h
     include/sa/ui/WaveformView.h
 )

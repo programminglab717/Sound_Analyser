@@ -2,12 +2,31 @@
 
 #include <QApplication>
 #include <QCommandLineParser>
+#include <cstdio>
+
+namespace {
+
+/// Parse "1.5-3.0" into a pair of seconds. Returns false on anything else.
+bool parseSpan(const QString& text, double& from, double& to) {
+    const qsizetype dash = text.indexOf('-', 1);
+    if (dash <= 0) {
+        return false;
+    }
+    bool okFrom = false;
+    bool okTo = false;
+    from = text.left(dash).toDouble(&okFrom);
+    to = text.mid(dash + 1).toDouble(&okTo);
+    return okFrom && okTo;
+}
+
+} // namespace
 
 /// Entry point.
 ///
-/// `--screenshot <file>` loads, renders and saves without user interaction,
-/// which is how the interface is checked in an environment with no display and
-/// how CI proves the load-analyse-draw path still works end to end.
+/// The batch options exist so the interface can be driven and checked in an
+/// environment with no display. They are not a substitute for `sa-cli`, which
+/// drives the engine with no Qt at all; they check that *this window* wires the
+/// engine up correctly, which is a different claim.
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     QApplication::setApplicationName("Sound Analyser");
@@ -19,31 +38,74 @@ int main(int argc, char** argv) {
     parser.addPositionalArgument("file", "Audio file to open");
 
     QCommandLineOption screenshot{"screenshot", "Render the window to <png> and exit.", "png"};
-    parser.addOption(screenshot);
     QCommandLineOption plot{"screenshot-spectrogram",
                             "Render the spectrogram plot alone to <png> and exit.", "png"};
-    parser.addOption(plot);
+    QCommandLineOption select{"select",
+                              "Select <from>-<to> in seconds before --apply runs. For anything "
+                              "with more than one step, put select: inside --apply instead: Qt "
+                              "keeps only the last value of a repeated option, so alternating "
+                              "--select and --apply silently drops all but the final pair.",
+                              "span"};
+    QCommandLineOption apply{
+        "apply",
+        "Comma-separated operations, applied in order: select:<from>-<to> (seconds), cut, copy, "
+        "paste, delete, silence, trim, undo, redo, selectall, deselect.",
+        "ops"};
+    QCommandLineOption exportTo{"export", "Write the edited document to <wav>.", "wav"};
+    for (const QCommandLineOption& option : {screenshot, plot, select, apply, exportTo}) {
+        parser.addOption(option);
+    }
     parser.process(app);
 
     sa::ui::MainWindow window;
     const QStringList positional = parser.positionalArguments();
-    if (!positional.isEmpty()) {
-        window.openFile(positional.first().toStdString());
+    if (!positional.isEmpty() && !window.openFile(positional.first().toStdString())) {
+        std::fprintf(stderr, "could not open %s\n", qPrintable(positional.first()));
+        return 1;
     }
 
-    if (parser.isSet(screenshot) || parser.isSet(plot)) {
-        window.resize(1280, 760);
+    const bool batch = parser.isSet(screenshot) || parser.isSet(plot) || parser.isSet(exportTo) ||
+                       parser.isSet(apply);
+    if (!batch) {
         window.show();
-        bool saved = true;
-        if (parser.isSet(screenshot)) {
-            saved = window.saveScreenshot(parser.value(screenshot).toStdString());
-        }
-        if (saved && parser.isSet(plot)) {
-            saved = window.saveSpectrogramImage(parser.value(plot).toStdString());
-        }
-        return saved ? 0 : 1;
+        return QApplication::exec();
     }
 
+    window.resize(1280, 760);
     window.show();
-    return QApplication::exec();
+
+    if (parser.isSet(select)) {
+        double from = 0.0;
+        double to = 0.0;
+        if (!parseSpan(parser.value(select), from, to)) {
+            std::fprintf(stderr, "could not parse --select %s\n", qPrintable(parser.value(select)));
+            return 2;
+        }
+        window.selectSeconds(from, to);
+    }
+
+    if (parser.isSet(apply)) {
+        const QStringList operations = parser.value(apply).split(',', Qt::SkipEmptyParts);
+        for (const QString& operation : operations) {
+            if (!window.applyOperation(operation.trimmed())) {
+                std::fprintf(stderr, "unknown operation %s\n", qPrintable(operation));
+                return 2;
+            }
+        }
+    }
+
+    if (parser.isSet(exportTo) && !window.exportTo(parser.value(exportTo).toStdString(), false)) {
+        std::fprintf(stderr, "export failed\n");
+        return 1;
+    }
+    if (parser.isSet(screenshot) &&
+        !window.saveScreenshot(parser.value(screenshot).toStdString())) {
+        std::fprintf(stderr, "screenshot failed\n");
+        return 1;
+    }
+    if (parser.isSet(plot) && !window.saveSpectrogramImage(parser.value(plot).toStdString())) {
+        std::fprintf(stderr, "spectrogram screenshot failed\n");
+        return 1;
+    }
+    return 0;
 }
