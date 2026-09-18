@@ -1,3 +1,4 @@
+#include <sa/device/AudioDeviceManager.h>
 #include <sa/engine/BufferSource.h>
 #include <sa/engine/Edits.h>
 #include <sa/io/AudioFile.h>
@@ -16,6 +17,7 @@
 #include <QMenuBar>
 #include <QSplitter>
 #include <QStatusBar>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <cmath>
 #include <cstdio>
@@ -99,6 +101,14 @@ MainWindow::MainWindow() {
     statusBar()->addWidget(status_, 1);
     statusBar()->addPermanentWidget(readout_);
 
+    // 30 Hz: fast enough that the playhead looks continuous, slow enough that
+    // it costs nothing. The position it reads is frames the callback has
+    // actually played, not frames queued, so it does not run ahead of the
+    // sound.
+    playheadTimer_ = new QTimer{this};
+    playheadTimer_->setInterval(33);
+    connect(playheadTimer_, &QTimer::timeout, this, &MainWindow::followPlayhead);
+
     buildMenus();
     refreshActions();
 
@@ -180,6 +190,12 @@ void MainWindow::buildMenus() {
     process->addAction(tr("Fade &out"), this, [this] { applyFade(false); });
     process->addSeparator();
     process->addAction(tr("F&latten"), this, &MainWindow::flattenRange);
+
+    QMenu* transport = menuBar()->addMenu(tr("&Transport"));
+    playAction_ = transport->addAction(tr("&Play"), QKeySequence{Qt::Key_Space}, this,
+                                       &MainWindow::togglePlayback);
+    transport->addAction(tr("&Stop"), QKeySequence{Qt::Key_Escape | Qt::SHIFT}, this,
+                         &MainWindow::stopPlayback);
 
     QMenu* repair = menuBar()->addMenu(tr("&Repair"));
     attenuateAction_ =
@@ -475,6 +491,9 @@ bool MainWindow::applyEdit(const QString& label, Edit&& edit) {
         status_->setText(tr("%1 did not apply").arg(label));
         return false;
     }
+    // The player is streaming from the document source that is about to be
+    // replaced. Stopping first is not politeness, it is the lifetime rule.
+    stopPlayback();
     history_->commit(document_, label.toStdString());
     rebuildCaches();
     refreshViews();
@@ -484,6 +503,85 @@ bool MainWindow::applyEdit(const QString& label, Edit&& edit) {
 TimeSelection MainWindow::targetRange() const noexcept {
     const TimeSelection selected = selection();
     return selected.isEmpty() ? TimeSelection{0, document_.duration()} : selected;
+}
+
+void MainWindow::togglePlayback() {
+    if (player_ && player_->isPlaying()) {
+        stopPlayback();
+        return;
+    }
+    if (!hasDocument() || !documentSource_) {
+        return;
+    }
+
+    // The device is opened on first use rather than at startup: a tool that
+    // grabs the sound card the moment it launches is a tool people close before
+    // using anything else.
+    if (!player_) {
+        device::AudioDeviceConfig config;
+        config.sampleRate = document_.sampleRate();
+        config.outputChannels = document_.layout().count();
+        config.inputChannels = 0;
+
+        device::AudioDeviceManager manager;
+        auto opened = manager.openDefault(config);
+        if (!opened) {
+            status_->setText(tr("No audio output: %1")
+                                 .arg(QString::fromStdString(std::string{opened.error().what()})));
+            return;
+        }
+        auto created = transport::Player::create(std::move(opened).value());
+        if (!created) {
+            status_->setText(tr("Could not start playback: %1")
+                                 .arg(QString::fromStdString(std::string{created.error().what()})));
+            return;
+        }
+        player_.emplace(std::move(created).value());
+    }
+
+    const TimeSelection selected = selection();
+    const SampleIndex from = selected.isEmpty() ? selected.start : selected.start;
+    const SampleIndex to = selected.isEmpty() ? document_.duration() : selected.end;
+    if (to <= from) {
+        return;
+    }
+
+    if (auto status = player_->play(documentSource_, from, to); !status) {
+        status_->setText(tr("Could not play: %1")
+                             .arg(QString::fromStdString(std::string{status.error().what()})));
+        return;
+    }
+    playAction_->setText(tr("&Stop"));
+    playheadTimer_->start();
+}
+
+void MainWindow::stopPlayback() {
+    if (player_) {
+        player_->stop();
+    }
+    playheadTimer_->stop();
+    playAction_->setText(tr("&Play"));
+    for (TimeAxisView* view :
+         {static_cast<TimeAxisView*>(waveform_), static_cast<TimeAxisView*>(spectrogram_)}) {
+        view->setPlayhead(-1);
+    }
+    ruler_->setPlayhead(-1);
+}
+
+void MainWindow::followPlayhead() {
+    if (!player_) {
+        return;
+    }
+    const SampleIndex position = player_->position();
+    waveform_->setPlayhead(position);
+    spectrogram_->setPlayhead(position);
+    ruler_->setPlayhead(position);
+
+    const TimeSelection selected = selection();
+    const SampleIndex end = selected.isEmpty() ? document_.duration() : selected.end;
+    if (position >= end) {
+        stopPlayback();
+    }
 }
 
 void MainWindow::selectFrequencyBand(double lowHz, double highHz) {
@@ -905,6 +1003,36 @@ bool MainWindow::exportTo(const std::filesystem::path& path, bool selectionOnly)
                          .arg(QString::fromStdString(formatTime(
                                   samplesToSeconds(written, document_.sampleRate()), 60.0)),
                               QString::fromStdString(path.filename().string())));
+    return true;
+}
+
+bool MainWindow::playToEnd(int timeoutMs) {
+    togglePlayback();
+    if (!player_ || !player_->isPlaying()) {
+        return false;
+    }
+
+    const TimeSelection selected = selection();
+    const SampleIndex end = selected.isEmpty() ? document_.duration() : selected.end;
+
+    QElapsedTimer clock;
+    clock.start();
+    while (player_->isPlaying() && player_->position() < end) {
+        if (clock.elapsed() > timeoutMs) {
+            stopPlayback();
+            return false;
+        }
+        QApplication::processEvents(QEventLoop::WaitForMoreEvents, 20);
+    }
+
+    const SampleIndex reached = player_->position();
+    const std::uint64_t dropouts = player_->underruns();
+    stopPlayback();
+
+    std::printf("played_to=%lld\nplayed_from=%lld\nunderruns=%llu\n",
+                static_cast<long long>(reached), static_cast<long long>(selected.start),
+                static_cast<unsigned long long>(dropouts));
+    std::fflush(stdout);
     return true;
 }
 

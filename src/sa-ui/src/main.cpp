@@ -55,8 +55,11 @@ int main(int argc, char** argv) {
     QCommandLineOption exportTo{"export", "Write the edited document to <wav>.", "wav"};
     QCommandLineOption printAnalysis{"print-analysis",
                                      "Print the measured loudness and peaks on stdout."};
+    QCommandLineOption play{"play",
+                            "Play the selection to its end and report where the transport got "
+                            "to. Runs in real time."};
     for (const QCommandLineOption& option :
-         {screenshot, plot, select, apply, exportTo, printAnalysis}) {
+         {screenshot, plot, select, apply, exportTo, printAnalysis, play}) {
         parser.addOption(option);
     }
     parser.process(app);
@@ -69,7 +72,7 @@ int main(int argc, char** argv) {
     }
 
     const bool batch = parser.isSet(screenshot) || parser.isSet(plot) || parser.isSet(exportTo) ||
-                       parser.isSet(apply) || parser.isSet(printAnalysis);
+                       parser.isSet(apply) || parser.isSet(printAnalysis) || parser.isSet(play);
     if (!batch) {
         window.show();
         return QApplication::exec();
@@ -106,6 +109,10 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    if (parser.isSet(play) && !window.playToEnd()) {
+        std::fprintf(stderr, "playback did not complete\n");
+        return 1;
+    }
     if (parser.isSet(printAnalysis) && !window.printAnalysis()) {
         std::fprintf(stderr, "no measurement to print\n");
         return 1;

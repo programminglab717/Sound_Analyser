@@ -3,6 +3,7 @@
 #include <sa/engine/Document.h>
 #include <sa/engine/DocumentSource.h>
 #include <sa/engine/UndoHistory.h>
+#include <sa/transport/Player.h>
 #include <sa/ui/Colourmap.h>
 #include <sa/ui/LoudnessPanel.h>
 #include <sa/ui/SpectrogramView.h>
@@ -16,6 +17,7 @@
 
 class QAction;
 class QLabel;
+class QTimer;
 
 namespace sa::ui {
 
@@ -58,6 +60,15 @@ public:
     /// Spin the event loop until no measurement is outstanding, or `timeoutMs`
     /// passes. Returns false on timeout.
     [[nodiscard]] bool waitForAnalysis(int timeoutMs = 120000);
+
+    /// Play the current selection to its end, pumping the event loop so the
+    /// playhead advances, then report where it got to. Returns false if
+    /// playback could not start or did not finish within `timeoutMs`.
+    ///
+    /// This is how the transport is checked without a sound card: the null
+    /// device runs a real thread on a real clock, so everything except the
+    /// final hand-off to hardware is exercised.
+    [[nodiscard]] bool playToEnd(int timeoutMs = 120000);
 
     /// Print the completed measurement as key=value lines on stdout, so a test
     /// can check the numbers rather than the pixels showing them.
@@ -114,6 +125,12 @@ private:
     template <typename Edit>
     void applySpectralEdit(const QString& label, Edit&& edit);
 
+    /// Play from the selection, or from the caret to the end when there is no
+    /// selection. Pressing it again stops.
+    void togglePlayback();
+    void stopPlayback();
+    void followPlayhead();
+
     void chooseAttenuate();
     void healSelection();
     void selectFrequencyBand(double lowHz, double highHz);
@@ -154,6 +171,10 @@ private:
     QAction* attenuateAction_ = nullptr;
     QAction* healAction_ = nullptr;
     QAction* exportSelectionAction_ = nullptr;
+
+    QAction* playAction_ = nullptr;
+    QTimer* playheadTimer_ = nullptr;
+    std::optional<transport::Player> player_;
 
     engine::Document document_;
     std::optional<engine::UndoHistory> history_;

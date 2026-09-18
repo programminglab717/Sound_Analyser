@@ -250,6 +250,41 @@ def main() -> int:
         if not failures:
             print("  ok  gain: -6 dB moved loudness and peak by exactly 6 dB")
 
+        # Playback, against the null device. That device runs a real thread on a
+        # real clock, so this exercises the ring, the render worker, the
+        # callback and the position counter -- everything except the final
+        # hand-off to hardware, which no machine without a sound card can check.
+        print("\ntransport:")
+        played = subprocess.run(
+            [str(arguments.binary), str(source), "--apply", "select:4-6", "--play"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        transport = {}
+        for line in played.stdout.splitlines():
+            key, _, value = line.partition("=")
+            try:
+                transport[key] = int(value)
+            except ValueError:
+                pass
+
+        if played.returncode != 0:
+            failures.append(f"play: exited {played.returncode} -- {played.stderr}")
+        elif transport.get("played_from") != 4 * SAMPLE_RATE:
+            failures.append(f"play: started at {transport.get('played_from')}, wanted 192000")
+        elif not (2 * SAMPLE_RATE <= transport.get("played_to", 0) - 4 * SAMPLE_RATE < 2.2 * SAMPLE_RATE):
+            failures.append(
+                f"play: reached {transport.get('played_to')}, wanted about 288000"
+            )
+        elif transport.get("underruns", -1) != 0:
+            failures.append(f"play: {transport.get('underruns')} underruns")
+        else:
+            print(
+                f"  ok  played {transport['played_from']} to {transport['played_to']}, "
+                "no underruns"
+            )
+
     if failures:
         print()
         for failure in failures:
