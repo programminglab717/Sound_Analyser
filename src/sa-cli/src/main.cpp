@@ -25,6 +25,7 @@
 #include <sa/spectral/Denoise.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -412,8 +413,13 @@ int normalise(const Options& options) {
         const auto& candidate = sa::analysis::allTargets()[i];
         std::string name{candidate.name};
         std::string wanted = *targetName;
-        std::transform(name.begin(), name.end(), name.begin(), ::tolower);
-        std::transform(wanted.begin(), wanted.end(), wanted.begin(), ::tolower);
+        // Through unsigned char: std::tolower takes an int whose value must be
+        // representable as unsigned char, and a plain char is signed on most
+        // platforms, so a byte above 127 is undefined behaviour the compiler
+        // will not warn about.
+        const auto lower = [](unsigned char c) { return static_cast<char>(std::tolower(c)); };
+        std::transform(name.begin(), name.end(), name.begin(), lower);
+        std::transform(wanted.begin(), wanted.end(), wanted.begin(), lower);
         if (name == wanted) {
             target = &candidate;
             break;

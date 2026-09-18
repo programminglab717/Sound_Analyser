@@ -24,7 +24,7 @@ from pathlib import Path
 # Symbol patterns and the header that is meant to provide them. Deliberately
 # incomplete: it covers what has actually bitten, not everything that could.
 REQUIRED = {
-    "<algorithm>": r"\bstd::(max|min|clamp|sort|stable_sort|fill|fill_n|copy|copy_n|reverse|unique|find|find_if|lower_bound|upper_bound|swap_ranges|all_of|any_of|none_of|count_if)\s*[(<]",
+    "<algorithm>": r"\bstd::(max|min|clamp|sort|stable_sort|fill|fill_n|copy|copy_n|copy_if|transform|reverse|unique|find|find_if|lower_bound|upper_bound|swap_ranges|all_of|any_of|none_of|count_if|remove_if|rotate|shuffle|minmax)\s*[(<]",
     "<numeric>": r"\bstd::(accumulate|inner_product|iota|reduce)\s*[(<]",
     "<cstring>": r"\bstd::(memcpy|memset|memmove|strlen|strncmp|strcmp)\s*\(",
     "<cmath>": r"\bstd::(sqrt|pow|log10|log2|log|exp|sin|cos|tan|atan2|fabs|floor|ceil|round|lround|hypot|fmod|isfinite|isnan)\s*\(",
@@ -44,6 +44,21 @@ REQUIRED = {
     "<numbers>": r"\bstd::numbers::",
     "<filesystem>": r"\bstd::filesystem::",
     "<cstdio>": r"\bstd::(printf|fprintf|snprintf|fputs|fflush)\s*\(",
+    # ::tolower and friends are C library names that MSVC does not hand out for
+    # free. They are written with a leading :: as often as with std::, so the
+    # pattern has to catch both.
+    "<cctype>": r"(\bstd::|(?<![\w:]):{2})(tolower|toupper|isalpha|isdigit|isspace|isalnum|isprint)\s*\(",
+    # std::abs is deliberately absent: the floating-point overloads come from
+    # <cmath>, which is the right header for what this codebase does with it,
+    # and listing it here as well would flag every correct use.
+    "<cstdlib>": r"\bstd::(strtol|strtod|atoi|getenv|exit)\s*\(",
+    "<fstream>": r"\bstd::(ifstream|ofstream|fstream)\b",
+    "<sstream>": r"\bstd::(istringstream|ostringstream|stringstream)\b",
+    "<map>": r"\bstd::(map|multimap)\s*<",
+    "<unordered_map>": r"\bstd::unordered_map\s*<",
+    "<span>": r"\bstd::span\s*<",
+    "<chrono>": r"\bstd::chrono::",
+    "<random>": r"\bstd::(mt19937|random_device|uniform_real_distribution|uniform_int_distribution|normal_distribution)\b",
 }
 
 
@@ -67,12 +82,25 @@ def direct_includes(text: str) -> tuple[set[str], set[str]]:
 
 
 def main() -> int:
-    roots = [Path(p) for p in sys.argv[1:]] or [Path("src")]
+    # The whole tree is always indexed, because resolving an include needs the
+    # header it names wherever that lives. Arguments narrow what is *reported*,
+    # not what is read: checking one module against a partial index reports
+    # every include satisfied by another module as missing, which is a tool that
+    # cries wolf and therefore a tool nobody runs.
+    index_root = Path("src")
+    reported = [Path(p) for p in sys.argv[1:]] or [index_root]
+
     files: dict[Path, str] = {}
-    for root in roots:
+    for path in sorted(index_root.rglob("*")):
+        if path.suffix in (".cpp", ".h"):
+            files[path] = path.read_text(encoding="utf-8", errors="replace")
+    for root in reported:
         for path in sorted(root.rglob("*")):
             if path.suffix in (".cpp", ".h"):
-                files[path] = path.read_text(encoding="utf-8", errors="replace")
+                files.setdefault(path, path.read_text(encoding="utf-8", errors="replace"))
+
+    def is_reported(path: Path) -> bool:
+        return any(path == root or root in path.parents for root in reported)
 
     # Map a project header's include-path spelling to its file, so "sa/dsp/Fft.h"
     # resolves wherever it lives.
@@ -98,6 +126,8 @@ def main() -> int:
 
     problems = []
     for path, text in files.items():
+        if not is_reported(path):
+            continue
         code = strip_comments(text)
         available = reachable_standard(path, set())
         for header, pattern in REQUIRED.items():
@@ -111,7 +141,8 @@ def main() -> int:
         print(f"\n{len(problems)} missing include(s). Every standard library ships a different")
         print("set of transitive includes; relying on one is how a Windows build breaks.")
         return 1
-    print(f"includes: {len(files)} files checked, every standard header used is included")
+    checked = sum(1 for path in files if is_reported(path))
+    print(f"includes: {checked} files checked, every standard header used is included")
     return 0
 
 

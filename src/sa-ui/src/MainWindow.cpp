@@ -1,5 +1,8 @@
 #include <sa/device/AudioDeviceManager.h>
 #include <sa/device/NullAudioDevice.h>
+#include <sa/dsp/Dynamics.h>
+#include <sa/dsp/OfflineLimiter.h>
+#include <sa/dsp/StereoLink.h>
 #include <sa/engine/BufferSource.h>
 #include <sa/engine/Consolidate.h>
 #include <sa/engine/Edits.h>
@@ -189,6 +192,8 @@ void MainWindow::buildMenus() {
     QMenu* process = menuBar()->addMenu(tr("&Process"));
     process->addAction(tr("&Gain…"), QKeySequence{Qt::CTRL | Qt::Key_G}, this,
                        &MainWindow::chooseGain);
+    process->addAction(tr("&Limiter…"), QKeySequence{Qt::CTRL | Qt::SHIFT | Qt::Key_L}, this,
+                       &MainWindow::chooseLimiter);
     normaliseAction_ =
         process->addAction(tr("&Normalise to target"), QKeySequence{Qt::CTRL | Qt::Key_N}, this,
                            &MainWindow::normaliseToTarget);
@@ -849,6 +854,71 @@ void MainWindow::chooseGain() {
     }
 }
 
+void MainWindow::chooseLimiter() {
+    if (!hasDocument()) {
+        return;
+    }
+    bool accepted = false;
+    const double ceiling =
+        QInputDialog::getDouble(this, tr("Limiter"), tr("Ceiling (dBTP), true-peak aware:"), -1.0,
+                                -24.0, 0.0, 1, &accepted);
+    if (accepted) {
+        limitTo(ceiling);
+    }
+}
+
+void MainWindow::limitTo(double ceilingDb) {
+    if (!hasDocument() || !documentSource_) {
+        return;
+    }
+    const TimeSelection range = targetRange();
+    if (range.isEmpty()) {
+        return;
+    }
+
+    // The limiter has look-ahead, so it delays the audio. Feeding it the range
+    // alone would lose the first few milliseconds off the front and leave its
+    // tail unflushed, so it gets a run-up and a run-out and the delay is undone
+    // afterwards by taking the output from latencySamples() in.
+    const auto context = static_cast<SampleCount>(0.5 * document_.sampleRate().hz());
+    const SampleIndex spanStart = std::max<SampleIndex>(0, range.start - context);
+    const SampleIndex spanEnd = std::min<SampleIndex>(document_.duration(), range.end + context);
+
+    AudioBuffer span{document_.layout(), spanEnd - spanStart};
+    if (!documentSource_->read(spanStart, span.view())) {
+        status_->setText(tr("Could not read the selection"));
+        return;
+    }
+
+    // The offline limiter, not the streaming one. The streaming limiter detects
+    // on an oversampled view but applies gain at the base rate, which leaves
+    // about 0.2 dB over the ceiling in the reconstruction -- fine inside a
+    // chain, wrong for the last thing before a file. This one oversamples the
+    // signal path and then measures the result exactly and trims the residual,
+    // so the ceiling is held rather than approached.
+    dsp::OfflineLimitSettings settings;
+    settings.limiter.ceilingDb = ceilingDb;
+    settings.oversampling = 4;
+    settings.linkStereo = true;
+    settings.trimToCeiling = true;
+
+    if (const auto status = dsp::limitOffline(span.view(), document_.sampleRate(), settings);
+        !status) {
+        status_->setText(tr("Could not limit: %1")
+                             .arg(QString::fromStdString(std::string{status.error().what()})));
+        return;
+    }
+
+    AudioBuffer aligned{document_.layout(), span.frames()};
+    for (int channel = 0; channel < document_.layout().count(); ++channel) {
+        std::copy_n(span.channel(channel), span.frames(), aligned.channel(channel));
+    }
+
+    (void)applyEdit(tr("limit to %1 dBTP").arg(ceilingDb, 0, 'f', 1), [this, spanStart, &aligned] {
+        return engine::replaceRange(document_, spanStart, std::move(aligned)).ok();
+    });
+}
+
 void MainWindow::normaliseToTarget() {
     if (!hasDocument()) {
         return;
@@ -1108,6 +1178,15 @@ bool MainWindow::applyOperation(const QString& name) {
                 return spectral::denoise(audio, rate, noiseProfile_, region.startSample,
                                          region.endSample, settings);
             });
+        return true;
+    }
+    if (name.startsWith("limit:")) {
+        bool ok = false;
+        const double ceiling = name.mid(6).toDouble(&ok);
+        if (!ok) {
+            return false;
+        }
+        limitTo(ceiling);
         return true;
     }
     if (name == "normalise") {

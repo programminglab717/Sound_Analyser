@@ -149,6 +149,8 @@ private:
 
     void applyGainDecibels(double decibels, const QString& label);
     void chooseGain();
+    void chooseLimiter();
+    void limitTo(double ceilingDb);
     void normaliseToTarget();
     void applyFade(bool fadingIn);
     void flattenRange();

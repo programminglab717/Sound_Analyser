@@ -5,6 +5,8 @@ add_library(sa-dsp STATIC
     src/EnvelopeFollower.cpp
     src/Fft.cpp
     src/ParametricEq.cpp
+    src/ExactTruePeak.cpp
+    src/OfflineLimiter.cpp
     src/Resampler.cpp
     src/Stft.cpp
     src/TruePeakDetector.cpp
@@ -23,6 +25,8 @@ if(SA_BUILD_TESTS)
         tests/DynamicsTests.cpp
         tests/FftTests.cpp
         tests/ParametricEqTests.cpp
+        tests/ExactTruePeakTests.cpp
+        tests/OfflineLimiterTests.cpp
         tests/ResamplerTests.cpp
         tests/StereoLinkTests.cpp
         tests/StftTests.cpp
