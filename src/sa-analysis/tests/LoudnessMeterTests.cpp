@@ -220,7 +220,12 @@ TEST_CASE("The absolute gate drops silent blocks", "[analysis][loudness]") {
     // The ungated average would land near 3 LU lower, so this margin is what
     // distinguishes a working gate from no gate at all.
     CHECK(gated.integratedLufs > reference.integratedLufs - kPowerSumLu + 1.0);
-    CHECK(gated.gatedBlockCount < reference.gatedBlockCount * 2);
+    // Only the handful of blocks touching the boundary survive from the silent
+    // half -- the filter rings for a few milliseconds past the cut, so this is
+    // a small bound rather than an exact count.
+    INFO("gated blocks " << gated.gatedBlockCount << " vs reference "
+                         << reference.gatedBlockCount);
+    CHECK(gated.gatedBlockCount <= reference.gatedBlockCount + 6);
 }
 
 TEST_CASE("The relative gate drops a quiet passage that clears -70", "[analysis][loudness]") {
@@ -242,9 +247,12 @@ TEST_CASE("The relative gate drops a quiet passage that clears -70", "[analysis]
     const auto gated = measureOrFail(withTail, rate, layout);
 
     CHECK(gated.integratedLufs == Approx(reference.integratedLufs).margin(0.15));
-    // The tail is loud enough to survive the absolute gate, which is the whole
-    // point of the fixture.
-    CHECK(gated.gatedBlockCount > reference.gatedBlockCount * 3 / 2);
+    // Every block of the tail clears -70 LUFS, so the absolute gate lets all of
+    // them through and only the relative gate can have removed them. If this
+    // count dropped, the fixture would be testing the wrong gate.
+    INFO("gated blocks " << gated.gatedBlockCount << " vs reference "
+                         << reference.gatedBlockCount);
+    CHECK(gated.gatedBlockCount > reference.gatedBlockCount * 2);
 }
 
 TEST_CASE("Loudness range spans the quiet and loud halves", "[analysis][loudness]") {

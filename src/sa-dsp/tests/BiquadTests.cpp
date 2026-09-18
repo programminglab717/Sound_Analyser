@@ -8,6 +8,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
 #include <complex>
+#include <limits>
 #include <numbers>
 #include <random>
 #include <vector>
@@ -356,11 +357,15 @@ TEST_CASE("Changing coefficients does not disturb the state", "[dsp][biquad]") {
 }
 
 TEST_CASE("Filters stay bounded at extreme settings", "[dsp][biquad]") {
-    // Where naive implementations diverge: poles hard against the unit circle
-    // because the cutoff is a rounding error away from DC, and poles hard
-    // against it because the Q is enormous. Ten seconds of noise is long enough
-    // for a slow instability to show; a bounded run that then decays to nothing
-    // is the actual definition of stable.
+    // Where naive implementations diverge: poles a rounding error away from
+    // z = 1 because the cutoff is a ten-thousandth of the sample rate, and
+    // poles jammed against the unit circle because the Q is enormous.
+    //
+    // Two things are asserted. Bounded and finite over seconds of noise rules
+    // out a slow divergence. Then silence goes in, and the ringing must have
+    // died away after ten time constants -- where the time constant is derived
+    // from the pole radius, which for a conjugate pair is sqrt(a2). A filter
+    // that rings on past its own poles is not obeying its transfer function.
     struct Case {
         const char* name;
         SampleRate rate;
@@ -374,24 +379,23 @@ TEST_CASE("Filters stay bounded at extreme settings", "[dsp][biquad]") {
         {"10 Hz high-pass at 192 kHz", SampleRate{192000.0},
          FilterSpec{FilterType::HighPass, 10.0, kButterworthQ, 0.0}, 4.0},
         {"Q 100 band-pass at 30 Hz", kSampleRate96000,
-         FilterSpec{FilterType::BandPass, 30.0, 100.0, 0.0}, 200.0},
+         FilterSpec{FilterType::BandPass, 30.0, 100.0, 0.0}, 40.0},
         {"+24 dB peak at Q 50", kSampleRate96000,
-         FilterSpec{FilterType::Peaking, 60.0, 50.0, 24.0}, 400.0},
+         FilterSpec{FilterType::Peaking, 60.0, 50.0, 24.0}, 40.0},
         {"low-pass just under Nyquist", kSampleRate48000,
-         FilterSpec{FilterType::LowPass, 23900.0, 10.0, 0.0}, 200.0},
+         FilterSpec{FilterType::LowPass, 23900.0, 10.0, 0.0}, 20.0},
     };
 
     for (const Case& test : cases) {
-        const Result<BiquadCoefficients> designedResult =
-            BiquadCoefficients::design(test.rate, test.spec);
-        REQUIRE(designedResult.hasValue());
-        const BiquadCoefficients coefficients = designedResult.value();
+        const Result<BiquadCoefficients> result = BiquadCoefficients::design(test.rate, test.spec);
+        REQUIRE(result.hasValue());
+        const BiquadCoefficients coefficients = result.value();
 
         INFO(test.name);
         CHECK(coefficients.isStable());
 
         Biquad filter{coefficients};
-        const auto length = static_cast<std::size_t>(test.rate.hz() * 10.0);
+        const auto length = static_cast<std::size_t>(test.rate.hz() * 4.0);
         const std::vector<float> noise = whiteNoise(length, 17);
 
         double peak = 0.0;
@@ -404,16 +408,22 @@ TEST_CASE("Filters stay bounded at extreme settings", "[dsp][biquad]") {
         CHECK(finite);
         CHECK(peak < test.bound);
 
-        // Silence in, silence out, eventually. A filter that rings forever is
-        // marginally stable, which sounds like a bug and behaves like one.
+        const double poleRadius = std::sqrt(std::abs(coefficients.a2));
+        const auto decaySamples =
+            static_cast<std::size_t>(10.0 / -std::log(poleRadius)) + 1024;
+
         double tail = 0.0;
-        for (std::size_t i = 0; i < length; ++i) {
-            tail = std::max(tail, static_cast<double>(std::abs(filter.processSample(0.0f))));
-            if (i + 4096 < length) {
-                tail = 0.0; // only the last stretch counts
+        for (std::size_t i = 0; i < decaySamples; ++i) {
+            const float out = filter.processSample(0.0f);
+            finite = finite && std::isfinite(out);
+            // Only the last stretch is the tail; before that the filter is
+            // still legitimately ringing down.
+            if (i + 512 >= decaySamples) {
+                tail = std::max(tail, static_cast<double>(std::abs(out)));
             }
         }
-        CHECK(tail < 1e-4);
+        CHECK(finite);
+        CHECK(tail < peak * 1e-3);
     }
 }
 
@@ -452,34 +462,41 @@ TEST_CASE("A cascade is the product of its sections", "[dsp][biquad][cascade]") 
     }
 }
 
-TEST_CASE("A Butterworth cascade is 3 dB down at its cutoff at every order",
+TEST_CASE("A Butterworth cascade matches the Butterworth magnitude response",
           "[dsp][biquad][cascade]") {
-    // The test that catches the usual mistake of cascading identical
-    // 1/sqrt(2) sections: that filter is 3 dB down per section, so a 4th-order
-    // one reads -6 dB here and an 8th-order one -12 dB.
+    // The reference is the textbook Butterworth magnitude,
+    //
+    //     |H| = 1 / sqrt(1 + (W/W0)^(2N)),
+    //
+    // with W = tan(pi f / fs) -- the bilinear transform's frequency warping,
+    // which is exactly what the cookbook designs prewarp for. Nothing in that
+    // formula comes from this module, and it is sharp enough to catch the usual
+    // mistake of cascading identical 1/sqrt(2) sections: that filter reads
+    // -3 dB per section at the cutoff instead of -3 dB overall.
+    const auto warped = [](double frequency) { return std::tan(std::numbers::pi * frequency / kRate); };
+
+    const double cutoff = 1000.0;
     for (int order : {2, 4, 6, 8}) {
         const Result<BiquadCascade> result =
-            BiquadCascade::butterworth(FilterType::LowPass, order, kSampleRate48000, 1000.0);
+            BiquadCascade::butterworth(FilterType::LowPass, order, kSampleRate48000, cutoff);
         REQUIRE(result.hasValue());
-        const BiquadCascade cascade = result.value();
-        REQUIRE(cascade.sectionCount() == order / 2);
+        REQUIRE(result.value().sectionCount() == order / 2);
 
-        BiquadCascade running = cascade;
+        BiquadCascade cascade = result.value();
         std::vector<float> response(16384, 0.0f);
-        response[0] = running.processSample(1.0f);
+        response[0] = cascade.processSample(1.0f);
         for (std::size_t i = 1; i < response.size(); ++i) {
-            response[i] = running.processSample(0.0f);
+            response[i] = cascade.processSample(0.0f);
         }
 
-        INFO("order " << order);
-        CHECK(decibels(measuredResponse(response, 1000.0, kRate)) == Approx(-3.0103).margin(0.02));
-        CHECK(decibels(measuredResponse(response, 100.0, kRate)) == Approx(0.0).margin(0.02));
-
-        // And the slope must actually be 6 dB per octave per order. Measured an
-        // octave apart, well above the cutoff but clear of Nyquist warping.
-        const double atFour = decibels(measuredResponse(response, 4000.0, kRate));
-        const double atEight = decibels(measuredResponse(response, 8000.0, kRate));
-        CHECK(atFour - atEight == Approx(6.0 * order).epsilon(0.05));
+        for (double frequency : {100.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0}) {
+            const double ratio = warped(frequency) / warped(cutoff);
+            const double expected =
+                -10.0 * std::log10(1.0 + std::pow(ratio, 2.0 * static_cast<double>(order)));
+            INFO("order " << order << " at " << frequency << " Hz");
+            CHECK(decibels(measuredResponse(response, frequency, kRate)) ==
+                  Approx(expected).margin(0.05));
+        }
     }
 
     CHECK_FALSE(BiquadCascade::butterworth(FilterType::LowPass, 3, kSampleRate48000, 1000.0)

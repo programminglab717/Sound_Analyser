@@ -28,6 +28,29 @@ double decibels(double magnitudeRatio) {
     return 20.0 * std::log10(magnitudeRatio);
 }
 
+/// The analogue corner frequency and Q a bilinear-transformed second-order
+/// section came from, recovered from its denominator.
+///
+/// For every stage here the denominator is (1 + K/Q + K^2) normalised, so
+/// (1 + a1 + a2) / (1 - a1 + a2) is exactly K^2 and the rest follows. Reading
+/// the corner back out of the coefficients tests rate adaptation directly,
+/// rather than inferring it from a magnitude probe -- which would be muddied by
+/// the fact that BS.1770 leaves the RLB numerator un-normalised.
+struct Corner {
+    double frequencyHz = 0.0;
+    double q = 0.0;
+};
+
+Corner recoverCorner(const BiquadCoefficients& c, SampleRate rate) {
+    const double k = std::sqrt((1.0 + c.a1 + c.a2) / (1.0 - c.a1 + c.a2));
+    const double a0 = 4.0 / (1.0 - c.a1 + c.a2);
+
+    Corner corner;
+    corner.frequencyHz = rate.hz() * std::atan(k) / std::numbers::pi;
+    corner.q = k / (a0 - 1.0 - k * k);
+    return corner;
+}
+
 KWeightingCoefficients coefficientsOrFail(SampleRate rate) {
     auto result = kWeightingFor(rate);
     REQUIRE(result.hasValue());
@@ -66,18 +89,41 @@ TEST_CASE("The derivation reproduces the coefficients BS.1770-4 prints", "[analy
 TEST_CASE("Corner frequencies stay put as the sample rate changes", "[analysis][kweighting]") {
     // The failure this guards against is reusing the 48 kHz table everywhere,
     // which drags both corners along with the rate: at 96 kHz the RLB corner
-    // would sit at 76 Hz rather than 38 Hz.
-    //
-    // A second-order high pass is down by exactly its Q at its own corner, so
-    // the corner is observable without knowing anything else about the filter.
-    const double expected = decibels(kKWeightingPrototype.highPassQ);
-
+    // would sit at 76 Hz rather than 38 Hz, and at 192 kHz at 153 Hz.
     for (double hz : {8000.0, 22050.0, 44100.0, 48000.0, 96000.0, 192000.0, 384000.0}) {
         const SampleRate rate{hz};
         const auto c = coefficientsOrFail(rate);
         INFO("rate " << hz);
-        CHECK(decibels(magnitude(c.highPass, kKWeightingPrototype.highPassFrequencyHz, rate)) ==
-              Approx(expected).margin(0.01));
+
+        const Corner highPass = recoverCorner(c.highPass, rate);
+        CHECK(highPass.frequencyHz ==
+              Approx(kKWeightingPrototype.highPassFrequencyHz).epsilon(1e-9));
+        CHECK(highPass.q == Approx(kKWeightingPrototype.highPassQ).epsilon(1e-9));
+
+        const Corner shelf = recoverCorner(c.shelf, rate);
+        CHECK(shelf.frequencyHz == Approx(kKWeightingPrototype.shelfFrequencyHz).epsilon(1e-9));
+        CHECK(shelf.q == Approx(kKWeightingPrototype.shelfQ).epsilon(1e-9));
+    }
+}
+
+TEST_CASE("The RLB numerator is left un-normalised, as the standard has it",
+          "[analysis][kweighting]") {
+    // BS.1770-4 prints the stage 2 numerator as exactly (1, -2, 1) rather than
+    // dividing it by a0 as a textbook design would. That leaves the stage with
+    // a small passband gain of a0 -- about +0.043 dB at 48 kHz -- which is part
+    // of what the -0.691 offset is cancelling. Normalising it "properly" would
+    // shift every reading by that much, so it is pinned here.
+    for (double hz : {44100.0, 48000.0, 96000.0}) {
+        const SampleRate rate{hz};
+        const auto c = coefficientsOrFail(rate);
+        INFO("rate " << hz);
+        CHECK(c.highPass.b0 == 1.0);
+        CHECK(c.highPass.b1 == -2.0);
+        CHECK(c.highPass.b2 == 1.0);
+        // Well above the 38 Hz corner and well below Nyquist: the asymptote.
+        const double a0 = 4.0 / (1.0 - c.highPass.a1 + c.highPass.a2);
+        CHECK(magnitude(c.highPass, 2000.0, rate) == Approx(a0).epsilon(1e-3));
+        CHECK(a0 > 1.0);
     }
 }
 
@@ -141,29 +187,35 @@ TEST_CASE("The difference equation delivers the transfer function's gain",
           "[analysis][kweighting]") {
     // Runs the filter for real and compares the steady-state amplitude with the
     // analytic response, which is what ties BiquadState to the coefficients.
+    //
+    // Amplitude is read from RMS over a whole number of cycles rather than from
+    // the largest sample: at 8 kHz there are only six samples per cycle and
+    // none of them need land near a peak.
     const SampleRate rate = kSampleRate48000;
     const auto c = coefficientsOrFail(rate);
+    const int settle = 24000;
+    const int measured = 24000;
 
     for (double frequency : {50.0, 1000.0, 8000.0}) {
         BiquadState shelf;
         BiquadState highPass;
-        double observed = 0.0;
-        const int samples = 48000;
+        double sumOfSquares = 0.0;
 
-        for (int i = 0; i < samples; ++i) {
+        for (int i = 0; i < settle + measured; ++i) {
             const double x = std::sin(2.0 * std::numbers::pi * frequency *
                                       static_cast<double>(i) / rate.hz());
             const double y = highPass.process(c.highPass, shelf.process(c.shelf, x));
-            // Skip the first half second so the transient has died away.
-            if (i > samples / 2) {
-                observed = std::max(observed, std::abs(y));
+            if (i >= settle) {
+                sumOfSquares += y * y;
             }
         }
 
+        const double observed =
+            std::sqrt(2.0 * sumOfSquares / static_cast<double>(measured));
         const double expected =
             magnitude(c.shelf, frequency, rate) * magnitude(c.highPass, frequency, rate);
         INFO("frequency " << frequency);
-        CHECK(observed == Approx(expected).epsilon(1e-3));
+        CHECK(observed == Approx(expected).epsilon(1e-6));
     }
 }
 
