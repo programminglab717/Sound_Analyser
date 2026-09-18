@@ -68,7 +68,12 @@ std::string encodePath(const std::filesystem::path& path,
     }
     std::error_code error;
     const auto relative = std::filesystem::relative(path, baseDirectory, error);
-    if (error || relative.empty() || relative.native().starts_with("..")) {
+    // Compare the first path component rather than the string. path::native()
+    // is std::wstring on Windows, so a narrow literal does not convert there --
+    // and a component comparison is more precise anyway: starts_with("..")
+    // would also match a file genuinely named "..archive".
+    const bool climbsOut = relative.begin() != relative.end() && *relative.begin() == "..";
+    if (error || relative.empty() || climbsOut) {
         return path.generic_string();
     }
     return relative.generic_string();

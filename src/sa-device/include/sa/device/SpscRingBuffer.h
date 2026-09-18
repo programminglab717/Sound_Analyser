@@ -71,6 +71,14 @@ namespace sa::device {
 /// of capacity and makes `capacity` a lie at the call site. The doubled range
 /// costs one compare-and-subtract per advance instead, and keeps the indices
 /// small enough that they can never overflow.
+#if defined(_MSC_VER)
+#pragma warning(push)
+// C4324: structure was padded due to alignment specifier. That padding is the
+// point -- the two indices are deliberately placed on separate cache lines so
+// the producer and consumer do not fight over one. MSVC is reporting success.
+#pragma warning(disable : 4324)
+#endif
+
 class SpscRingBuffer {
 public:
     /// Ceiling on capacity, in samples (1 GiB of float). Keeps the doubled
@@ -259,5 +267,9 @@ private:
     alignas(kCacheLineSize) std::atomic<std::size_t> writeIndex_{0};
     alignas(kCacheLineSize) std::atomic<std::size_t> readIndex_{0};
 };
+
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
 } // namespace sa::device
