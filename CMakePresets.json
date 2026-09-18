@@ -44,11 +44,10 @@
     {
       "name": "windows-base",
       "hidden": true,
-      "generator": "Visual Studio 17 2022",
-      "architecture": "x64",
       "binaryDir": "${sourceDir}/build/${presetName}",
       "cacheVariables": {
-        "SA_BUILD_TESTS": "ON"
+        "SA_BUILD_TESTS": "ON",
+        "CMAKE_GENERATOR_PLATFORM": "x64"
       },
       "condition": {
         "type": "equals",

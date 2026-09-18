@@ -17,7 +17,7 @@ jobs:
     name: Licence gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Check dependency and model licences
         run: python3 tools/check_licences.py
 
@@ -25,7 +25,7 @@ jobs:
     name: Formatting
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Check clang-format
         run: |
           files=$(find src -name '*.cpp' -o -name '*.h')
@@ -48,11 +48,20 @@ jobs:
           - os: ubuntu-latest
             preset: release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Ninja
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      # Print the toolchain before configuring: when this job broke, the cause
+      # was a pinned Visual Studio version the runner image no longer had, and
+      # the failure said nothing about what it did have.
+      - name: Show available Visual Studio installs
+        if: runner.os == 'Windows'
+        run: |
+          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -all -products * -format value -property displayName
+        continue-on-error: true
 
       - name: Configure
         run: cmake --preset ${{ matrix.preset }}
@@ -68,7 +77,7 @@ jobs:
     needs: licences
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install Ninja
         run: sudo apt-get update && sudo apt-get install -y ninja-build
       - name: Configure

@@ -56,8 +56,14 @@ public:
     [[nodiscard]] bool isEmpty() const noexcept { return count_ == 0; }
 
     /// Speaker at `index`, or Speaker::Unknown if out of range.
+    ///
+    /// The kMaxChannels bound is redundant with count_ at runtime -- count_ can
+    /// never exceed it -- but the compiler cannot prove that, and at -O2 it
+    /// flags the subscript on the branch it cannot rule out. Stating the bound
+    /// makes the guarantee explicit rather than inferred, and it also holds if
+    /// count_ is ever corrupted by a bad deserialisation.
     [[nodiscard]] Speaker at(int index) const noexcept {
-        if (index < 0 || index >= count_) {
+        if (index < 0 || index >= count_ || index >= kMaxChannels) {
             return Speaker::Unknown;
         }
         return speakers_[static_cast<std::size_t>(index)];
