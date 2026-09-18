@@ -69,7 +69,9 @@ public:
     /// EQ untouched.
     [[nodiscard]] Status setSampleRate(SampleRate rate);
 
-    [[nodiscard]] float processSample(float input) noexcept { return cascade_.processSample(input); }
+    [[nodiscard]] float processSample(float input) noexcept {
+        return cascade_.processSample(input);
+    }
 
     /// `input` and `output` may alias. A non-positive count is a no-op.
     void process(const float* input, float* output, SampleCount count) noexcept {

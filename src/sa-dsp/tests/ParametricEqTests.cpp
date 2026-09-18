@@ -36,8 +36,7 @@ double measuredDb(ParametricEq& eq, double frequency, int length = 16384) {
     std::complex<double> sum{0.0, 0.0};
     for (int i = 0; i < length; ++i) {
         const float out = eq.processSample(i == 0 ? 1.0f : 0.0f);
-        const double angle =
-            -2.0 * std::numbers::pi * frequency * static_cast<double>(i) / kRate;
+        const double angle = -2.0 * std::numbers::pi * frequency * static_cast<double>(i) / kRate;
         sum += static_cast<double>(out) * std::complex<double>{std::cos(angle), std::sin(angle)};
     }
     return 20.0 * std::log10(std::abs(sum));
@@ -100,11 +99,11 @@ TEST_CASE("The drawn curve is the curve being heard", "[dsp][eq]") {
     // the filters, the display slowly stops describing the audio.
     ParametricEq eq = makeEq();
     REQUIRE(eq.addBand(peak(200.0, 0.8, 8.0)).hasValue());
-    REQUIRE(eq.addBand(EqBand{FilterSpec{FilterType::HighShelf, 6000.0, kButterworthQ, -10.0},
-                              true})
-                .hasValue());
-    REQUIRE(eq.addBand(EqBand{FilterSpec{FilterType::LowPass, 15000.0, 1.2, 0.0}, true})
-                .hasValue());
+    REQUIRE(
+        eq.addBand(EqBand{FilterSpec{FilterType::HighShelf, 6000.0, kButterworthQ, -10.0}, true})
+            .hasValue());
+    REQUIRE(
+        eq.addBand(EqBand{FilterSpec{FilterType::LowPass, 15000.0, 1.2, 0.0}, true}).hasValue());
 
     for (double frequency : {30.0, 200.0, 1000.0, 6000.0, 15000.0, 20000.0}) {
         INFO("frequency " << frequency);

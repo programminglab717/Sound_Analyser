@@ -11,7 +11,8 @@ namespace {
 
 [[nodiscard]] Status checkTime(double seconds, const char* what) {
     if (!std::isfinite(seconds) || seconds < 0.0) {
-        return Error{ErrorCode::InvalidArgument, std::string{what} + " must be finite and not negative"};
+        return Error{ErrorCode::InvalidArgument,
+                     std::string{what} + " must be finite and not negative"};
     }
     return {};
 }
@@ -35,6 +36,87 @@ namespace {
         return Error{ErrorCode::InvalidArgument, "knee width must be finite and not negative"};
     }
     return {};
+}
+
+// Settings are validated before a processor is built from them, never after.
+// A time constant is turned into a sample count during construction, and
+// converting a NaN to an integer is undefined -- so an unchecked settings
+// struct must never reach a constructor in the first place.
+
+[[nodiscard]] Status validate(const CompressorSettings& settings) {
+    if (const Status status = checkLevel(settings.thresholdDb, "threshold"); !status) {
+        return status;
+    }
+    if (const Status status = checkRatio(settings.ratio); !status) {
+        return status;
+    }
+    if (const Status status = checkTime(settings.attackSeconds, "attack"); !status) {
+        return status;
+    }
+    if (const Status status = checkTime(settings.releaseSeconds, "release"); !status) {
+        return status;
+    }
+    if (const Status status = checkKnee(settings.kneeDb); !status) {
+        return status;
+    }
+    return checkLevel(settings.makeupGainDb, "makeup gain");
+}
+
+[[nodiscard]] Status validate(const ExpanderSettings& settings) {
+    if (const Status status = checkLevel(settings.thresholdDb, "threshold"); !status) {
+        return status;
+    }
+    if (const Status status = checkRatio(settings.ratio); !status) {
+        return status;
+    }
+    if (const Status status = checkTime(settings.attackSeconds, "attack"); !status) {
+        return status;
+    }
+    if (const Status status = checkTime(settings.releaseSeconds, "release"); !status) {
+        return status;
+    }
+    if (const Status status = checkKnee(settings.kneeDb); !status) {
+        return status;
+    }
+    if (const Status status = checkLevel(settings.makeupGainDb, "makeup gain"); !status) {
+        return status;
+    }
+    return checkTime(settings.detectorSeconds, "detector");
+}
+
+[[nodiscard]] Status validate(const GateSettings& settings) {
+    if (const Status status = checkLevel(settings.thresholdDb, "threshold"); !status) {
+        return status;
+    }
+    if (!std::isfinite(settings.hysteresisDb) || settings.hysteresisDb < 0.0) {
+        return Error{ErrorCode::InvalidArgument, "hysteresis must be finite and not negative"};
+    }
+    if (const Status status = checkTime(settings.attackSeconds, "attack"); !status) {
+        return status;
+    }
+    if (const Status status = checkTime(settings.holdSeconds, "hold"); !status) {
+        return status;
+    }
+    if (const Status status = checkTime(settings.releaseSeconds, "release"); !status) {
+        return status;
+    }
+    if (!std::isfinite(settings.rangeDb) || settings.rangeDb > 0.0) {
+        return Error{ErrorCode::InvalidArgument, "range must be finite and not positive"};
+    }
+    return checkTime(settings.detectorSeconds, "detector");
+}
+
+[[nodiscard]] Status validate(const LimiterSettings& settings) {
+    if (const Status status = checkLevel(settings.ceilingDb, "ceiling"); !status) {
+        return status;
+    }
+    if (const Status status = checkTime(settings.releaseSeconds, "release"); !status) {
+        return status;
+    }
+    if (settings.lookAheadSeconds > Limiter::kMaxLookAheadSeconds) {
+        return Error{ErrorCode::InvalidArgument, "look-ahead is longer than the limiter supports"};
+    }
+    return checkTime(settings.lookAheadSeconds, "look-ahead");
 }
 
 } // namespace
@@ -84,33 +166,16 @@ Result<Compressor> Compressor::create(SampleRate rate, const CompressorSettings&
     if (!rate.isValid()) {
         return Error{ErrorCode::InvalidArgument, "sample rate is not a usable audio rate"};
     }
-    Compressor compressor{rate, settings};
-    if (const Status status = compressor.setSettings(settings); !status) {
+    if (const Status status = validate(settings); !status) {
         return status.error();
     }
-    return compressor;
+    return Compressor{rate, settings};
 }
 
 Status Compressor::setSettings(const CompressorSettings& settings) {
-    if (const Status status = checkLevel(settings.thresholdDb, "threshold"); !status) {
+    if (const Status status = validate(settings); !status) {
         return status;
     }
-    if (const Status status = checkRatio(settings.ratio); !status) {
-        return status;
-    }
-    if (const Status status = checkTime(settings.attackSeconds, "attack"); !status) {
-        return status;
-    }
-    if (const Status status = checkTime(settings.releaseSeconds, "release"); !status) {
-        return status;
-    }
-    if (const Status status = checkKnee(settings.kneeDb); !status) {
-        return status;
-    }
-    if (const Status status = checkLevel(settings.makeupGainDb, "makeup gain"); !status) {
-        return status;
-    }
-
     settings_ = settings;
     smoother_.setTimes(settings.attackSeconds, settings.releaseSeconds, rate_);
     return {};
@@ -141,6 +206,10 @@ Expander::Expander(SampleRate rate, const ExpanderSettings& settings) noexcept
     : rate_(rate), settings_(settings) {
     detector_.setTimes(0.0, settings.detectorSeconds, rate);
     smoother_.setTimes(settings.attackSeconds, settings.releaseSeconds, rate);
+    // Starts fully open, unlike the gate. There is no level-independent
+    // "closed" gain for an expander to start at, and starting transparent means
+    // the worst a seek can do is leave one release period unexpanded -- rather
+    // than fading the first note in from wherever the guess happened to land.
     smoother_.reset(0.0);
 }
 
@@ -148,36 +217,16 @@ Result<Expander> Expander::create(SampleRate rate, const ExpanderSettings& setti
     if (!rate.isValid()) {
         return Error{ErrorCode::InvalidArgument, "sample rate is not a usable audio rate"};
     }
-    Expander expander{rate, settings};
-    if (const Status status = expander.setSettings(settings); !status) {
+    if (const Status status = validate(settings); !status) {
         return status.error();
     }
-    return expander;
+    return Expander{rate, settings};
 }
 
 Status Expander::setSettings(const ExpanderSettings& settings) {
-    if (const Status status = checkLevel(settings.thresholdDb, "threshold"); !status) {
+    if (const Status status = validate(settings); !status) {
         return status;
     }
-    if (const Status status = checkRatio(settings.ratio); !status) {
-        return status;
-    }
-    if (const Status status = checkTime(settings.attackSeconds, "attack"); !status) {
-        return status;
-    }
-    if (const Status status = checkTime(settings.releaseSeconds, "release"); !status) {
-        return status;
-    }
-    if (const Status status = checkKnee(settings.kneeDb); !status) {
-        return status;
-    }
-    if (const Status status = checkLevel(settings.makeupGainDb, "makeup gain"); !status) {
-        return status;
-    }
-    if (const Status status = checkTime(settings.detectorSeconds, "detector"); !status) {
-        return status;
-    }
-
     settings_ = settings;
     // The detector rises instantly and falls with its own constant: a peak
     // envelope, not a smoothed one. Anything slower on the way up would let a
@@ -230,36 +279,16 @@ Result<Gate> Gate::create(SampleRate rate, const GateSettings& settings) {
     if (!rate.isValid()) {
         return Error{ErrorCode::InvalidArgument, "sample rate is not a usable audio rate"};
     }
-    Gate gate{rate, settings};
-    if (const Status status = gate.setSettings(settings); !status) {
+    if (const Status status = validate(settings); !status) {
         return status.error();
     }
-    return gate;
+    return Gate{rate, settings};
 }
 
 Status Gate::setSettings(const GateSettings& settings) {
-    if (const Status status = checkLevel(settings.thresholdDb, "threshold"); !status) {
+    if (const Status status = validate(settings); !status) {
         return status;
     }
-    if (!std::isfinite(settings.hysteresisDb) || settings.hysteresisDb < 0.0) {
-        return Error{ErrorCode::InvalidArgument, "hysteresis must be finite and not negative"};
-    }
-    if (const Status status = checkTime(settings.attackSeconds, "attack"); !status) {
-        return status;
-    }
-    if (const Status status = checkTime(settings.holdSeconds, "hold"); !status) {
-        return status;
-    }
-    if (const Status status = checkTime(settings.releaseSeconds, "release"); !status) {
-        return status;
-    }
-    if (!std::isfinite(settings.rangeDb) || settings.rangeDb > 0.0) {
-        return Error{ErrorCode::InvalidArgument, "range must be finite and not positive"};
-    }
-    if (const Status status = checkTime(settings.detectorSeconds, "detector"); !status) {
-        return status;
-    }
-
     applySettings(settings);
     return {};
 }
@@ -337,30 +366,16 @@ Result<Limiter> Limiter::create(SampleRate rate, const LimiterSettings& settings
     if (!rate.isValid()) {
         return Error{ErrorCode::InvalidArgument, "sample rate is not a usable audio rate"};
     }
-    if (!std::isfinite(settings.lookAheadSeconds) || settings.lookAheadSeconds < 0.0 ||
-        settings.lookAheadSeconds > kMaxLookAheadSeconds) {
-        return Error{ErrorCode::InvalidArgument, "look-ahead is outside the supported range"};
-    }
-
-    Limiter limiter{rate, settings};
-    if (const Status status = limiter.setSettings(settings); !status) {
+    if (const Status status = validate(settings); !status) {
         return status.error();
     }
-    return limiter;
+    return Limiter{rate, settings};
 }
 
 Status Limiter::setSettings(const LimiterSettings& settings) {
-    if (const Status status = checkLevel(settings.ceilingDb, "ceiling"); !status) {
+    if (const Status status = validate(settings); !status) {
         return status;
     }
-    if (const Status status = checkTime(settings.releaseSeconds, "release"); !status) {
-        return status;
-    }
-    if (!std::isfinite(settings.lookAheadSeconds) || settings.lookAheadSeconds < 0.0 ||
-        settings.lookAheadSeconds > kMaxLookAheadSeconds) {
-        return Error{ErrorCode::InvalidArgument, "look-ahead is outside the supported range"};
-    }
-
     applySettings(settings);
     return {};
 }
@@ -391,8 +406,7 @@ double Limiter::slideWindow(double requiredDb) noexcept {
     ++windowCount_;
 
     const SampleIndex oldest = position_ - lookAheadSamples_;
-    while (windowCount_ > 0 &&
-           windowPositions_[static_cast<std::size_t>(windowHead_)] < oldest) {
+    while (windowCount_ > 0 && windowPositions_[static_cast<std::size_t>(windowHead_)] < oldest) {
         windowHead_ = (windowHead_ + 1) % capacity;
         --windowCount_;
     }
@@ -406,7 +420,8 @@ float Limiter::processSample(float input) noexcept {
     const double smoothedDb = smoother_.process(windowMaximum);
 
     delay_[static_cast<std::size_t>(writeIndex_)] = input;
-    const SampleCount readIndex = (writeIndex_ + delayCapacity_ - lookAheadSamples_) % delayCapacity_;
+    const SampleCount readIndex =
+        (writeIndex_ + delayCapacity_ - lookAheadSamples_) % delayCapacity_;
     const float delayed = delay_[static_cast<std::size_t>(readIndex)];
     writeIndex_ = (writeIndex_ + 1) % delayCapacity_;
     ++position_;

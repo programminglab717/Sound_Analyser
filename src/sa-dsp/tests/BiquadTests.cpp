@@ -50,8 +50,7 @@ std::complex<double> measuredResponse(const std::vector<float>& response, double
                                       double rate) {
     std::complex<double> sum{0.0, 0.0};
     for (std::size_t i = 0; i < response.size(); ++i) {
-        const double angle =
-            -2.0 * std::numbers::pi * frequency * static_cast<double>(i) / rate;
+        const double angle = -2.0 * std::numbers::pi * frequency * static_cast<double>(i) / rate;
         sum += static_cast<double>(response[i]) *
                std::complex<double>{std::cos(angle), std::sin(angle)};
     }
@@ -101,10 +100,9 @@ TEST_CASE("Designers reject parameters that would not produce a filter", "[dsp][
     CHECK_FALSE(BiquadCoefficients::lowPass(kSampleRate48000, 30000.0).hasValue());
     CHECK_FALSE(BiquadCoefficients::lowPass(kSampleRate48000, 1000.0, 0.0).hasValue());
     CHECK_FALSE(BiquadCoefficients::lowPass(kSampleRate48000, 1000.0, -1.0).hasValue());
-    CHECK_FALSE(
-        BiquadCoefficients::peaking(kSampleRate48000, 1000.0, 1.0,
-                                    std::numeric_limits<double>::quiet_NaN())
-            .hasValue());
+    CHECK_FALSE(BiquadCoefficients::peaking(kSampleRate48000, 1000.0, 1.0,
+                                            std::numeric_limits<double>::quiet_NaN())
+                    .hasValue());
 
     const auto error = BiquadCoefficients::lowPass(kSampleRate48000, 30000.0);
     REQUIRE_FALSE(error.hasValue());
@@ -146,7 +144,8 @@ TEST_CASE("The measured response matches the transfer function", "[dsp][biquad]"
         for (int k = 0; k < fft.binCount(); ++k) {
             const double frequency = kRate * static_cast<double>(k) / static_cast<double>(size);
             const double expected = std::abs(transferFunction(coefficients, frequency, kRate));
-            const double actual = static_cast<double>(std::abs(spectrum[static_cast<std::size_t>(k)]));
+            const double actual =
+                static_cast<double>(std::abs(spectrum[static_cast<std::size_t>(k)]));
 
             // Absolute and relative terms together: the float32 FFT carries a
             // small absolute noise floor that a purely relative tolerance would
@@ -339,8 +338,7 @@ TEST_CASE("reset() clears the filter state", "[dsp][biquad]") {
 TEST_CASE("Changing coefficients does not disturb the state", "[dsp][biquad]") {
     // A parameter change is a change of filter, not a restart: the output has
     // to stay continuous or every automated EQ move is a click.
-    const BiquadCoefficients first =
-        designed(BiquadCoefficients::lowPass(kSampleRate48000, 500.0));
+    const BiquadCoefficients first = designed(BiquadCoefficients::lowPass(kSampleRate48000, 500.0));
     const BiquadCoefficients second =
         designed(BiquadCoefficients::lowPass(kSampleRate48000, 520.0));
 
@@ -380,8 +378,8 @@ TEST_CASE("Filters stay bounded at extreme settings", "[dsp][biquad]") {
          FilterSpec{FilterType::HighPass, 10.0, kButterworthQ, 0.0}, 4.0},
         {"Q 100 band-pass at 30 Hz", kSampleRate96000,
          FilterSpec{FilterType::BandPass, 30.0, 100.0, 0.0}, 40.0},
-        {"+24 dB peak at Q 50", kSampleRate96000,
-         FilterSpec{FilterType::Peaking, 60.0, 50.0, 24.0}, 40.0},
+        {"+24 dB peak at Q 50", kSampleRate96000, FilterSpec{FilterType::Peaking, 60.0, 50.0, 24.0},
+         40.0},
         {"low-pass just under Nyquist", kSampleRate48000,
          FilterSpec{FilterType::LowPass, 23900.0, 10.0, 0.0}, 20.0},
     };
@@ -409,8 +407,7 @@ TEST_CASE("Filters stay bounded at extreme settings", "[dsp][biquad]") {
         CHECK(peak < test.bound);
 
         const double poleRadius = std::sqrt(std::abs(coefficients.a2));
-        const auto decaySamples =
-            static_cast<std::size_t>(10.0 / -std::log(poleRadius)) + 1024;
+        const auto decaySamples = static_cast<std::size_t>(10.0 / -std::log(poleRadius)) + 1024;
 
         double tail = 0.0;
         for (std::size_t i = 0; i < decaySamples; ++i) {
@@ -433,8 +430,7 @@ TEST_CASE("A cascade is the product of its sections", "[dsp][biquad][cascade]") 
         designed(BiquadCoefficients::peaking(kSampleRate48000, 200.0, 1.0, 6.0));
     const BiquadCoefficients second =
         designed(BiquadCoefficients::peaking(kSampleRate48000, 3000.0, 2.0, -9.0));
-    const BiquadCoefficients third =
-        designed(BiquadCoefficients::highPass(kSampleRate48000, 40.0));
+    const BiquadCoefficients third = designed(BiquadCoefficients::highPass(kSampleRate48000, 40.0));
 
     REQUIRE(cascade.append(first).ok());
     REQUIRE(cascade.append(second).ok());
@@ -473,7 +469,9 @@ TEST_CASE("A Butterworth cascade matches the Butterworth magnitude response",
     // formula comes from this module, and it is sharp enough to catch the usual
     // mistake of cascading identical 1/sqrt(2) sections: that filter reads
     // -3 dB per section at the cutoff instead of -3 dB overall.
-    const auto warped = [](double frequency) { return std::tan(std::numbers::pi * frequency / kRate); };
+    const auto warped = [](double frequency) {
+        return std::tan(std::numbers::pi * frequency / kRate);
+    };
 
     const double cutoff = 1000.0;
     for (int order : {2, 4, 6, 8}) {
@@ -493,20 +491,29 @@ TEST_CASE("A Butterworth cascade matches the Butterworth magnitude response",
             const double ratio = warped(frequency) / warped(cutoff);
             const double expected =
                 -10.0 * std::log10(1.0 + std::pow(ratio, 2.0 * static_cast<double>(order)));
+            const double measured = decibels(measuredResponse(response, frequency, kRate));
             INFO("order " << order << " at " << frequency << " Hz");
-            CHECK(decibels(measuredResponse(response, frequency, kRate)) ==
-                  Approx(expected).margin(0.05));
+
+            if (expected > -120.0) {
+                CHECK(measured == Approx(expected).margin(0.05));
+            } else {
+                // An 8th-order filter three octaves past its cutoff is 150 dB
+                // down, which is under the float32 quantisation floor of the
+                // impulse response being measured. All that can honestly be
+                // claimed there is that it is far past anything audible.
+                CHECK(measured < -120.0);
+            }
         }
     }
 
-    CHECK_FALSE(BiquadCascade::butterworth(FilterType::LowPass, 3, kSampleRate48000, 1000.0)
-                    .hasValue());
-    CHECK_FALSE(BiquadCascade::butterworth(FilterType::LowPass, 0, kSampleRate48000, 1000.0)
-                    .hasValue());
-    CHECK_FALSE(BiquadCascade::butterworth(FilterType::Peaking, 4, kSampleRate48000, 1000.0)
-                    .hasValue());
-    CHECK_FALSE(BiquadCascade::butterworth(FilterType::LowPass, 40, kSampleRate48000, 1000.0)
-                    .hasValue());
+    CHECK_FALSE(
+        BiquadCascade::butterworth(FilterType::LowPass, 3, kSampleRate48000, 1000.0).hasValue());
+    CHECK_FALSE(
+        BiquadCascade::butterworth(FilterType::LowPass, 0, kSampleRate48000, 1000.0).hasValue());
+    CHECK_FALSE(
+        BiquadCascade::butterworth(FilterType::Peaking, 4, kSampleRate48000, 1000.0).hasValue());
+    CHECK_FALSE(
+        BiquadCascade::butterworth(FilterType::LowPass, 40, kSampleRate48000, 1000.0).hasValue());
 }
 
 TEST_CASE("A cascade refuses to grow past its capacity", "[dsp][biquad][cascade]") {

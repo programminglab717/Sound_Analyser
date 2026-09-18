@@ -92,8 +92,7 @@ Result<BiquadCoefficients> BiquadCoefficients::notch(SampleRate rate, double fre
         return terms.error();
     }
     const Cookbook& t = terms.value();
-    return normalise(1.0, -2.0 * t.cosOmega, 1.0, 1.0 + t.alpha, -2.0 * t.cosOmega,
-                     1.0 - t.alpha);
+    return normalise(1.0, -2.0 * t.cosOmega, 1.0, 1.0 + t.alpha, -2.0 * t.cosOmega, 1.0 - t.alpha);
 }
 
 Result<BiquadCoefficients> BiquadCoefficients::allPass(SampleRate rate, double frequency,
@@ -143,10 +142,10 @@ Result<BiquadCoefficients> BiquadCoefficients::lowShelf(SampleRate rate, double 
     const double difference = a - 1.0;
     const double slope = 2.0 * rootA * t.alpha;
 
-    return normalise(a * (sum - difference * t.cosOmega + slope),
-                     2.0 * a * (difference - sum * t.cosOmega),
-                     a * (sum - difference * t.cosOmega - slope), sum + difference * t.cosOmega + slope,
-                     -2.0 * (difference + sum * t.cosOmega), sum + difference * t.cosOmega - slope);
+    return normalise(
+        a * (sum - difference * t.cosOmega + slope), 2.0 * a * (difference - sum * t.cosOmega),
+        a * (sum - difference * t.cosOmega - slope), sum + difference * t.cosOmega + slope,
+        -2.0 * (difference + sum * t.cosOmega), sum + difference * t.cosOmega - slope);
 }
 
 Result<BiquadCoefficients> BiquadCoefficients::highShelf(SampleRate rate, double frequency,
@@ -166,10 +165,10 @@ Result<BiquadCoefficients> BiquadCoefficients::highShelf(SampleRate rate, double
     const double difference = a - 1.0;
     const double slope = 2.0 * rootA * t.alpha;
 
-    return normalise(a * (sum + difference * t.cosOmega + slope),
-                     -2.0 * a * (difference + sum * t.cosOmega),
-                     a * (sum + difference * t.cosOmega - slope), sum - difference * t.cosOmega + slope,
-                     2.0 * (difference - sum * t.cosOmega), sum - difference * t.cosOmega - slope);
+    return normalise(
+        a * (sum + difference * t.cosOmega + slope), -2.0 * a * (difference + sum * t.cosOmega),
+        a * (sum + difference * t.cosOmega - slope), sum - difference * t.cosOmega + slope,
+        2.0 * (difference - sum * t.cosOmega), sum - difference * t.cosOmega - slope);
 }
 
 Result<BiquadCoefficients> BiquadCoefficients::design(SampleRate rate, const FilterSpec& spec) {

@@ -20,8 +20,8 @@ Result<BiquadCascade> BiquadCascade::butterworth(FilterType type, int order, Sam
 
     BiquadCascade cascade;
     for (int k = 0; k < order / 2; ++k) {
-        const double angle = std::numbers::pi * static_cast<double>(2 * k + 1) /
-                             (2.0 * static_cast<double>(order));
+        const double angle =
+            std::numbers::pi * static_cast<double>(2 * k + 1) / (2.0 * static_cast<double>(order));
         const double q = 0.5 / std::cos(angle);
 
         const Result<BiquadCoefficients> section =
@@ -79,7 +79,8 @@ void BiquadCascade::process(const float* input, float* output, SampleCount count
 std::complex<double> BiquadCascade::response(double normalisedFrequency) const noexcept {
     std::complex<double> total{1.0, 0.0};
     for (int i = 0; i < sectionCount_; ++i) {
-        total *= sections_[static_cast<std::size_t>(i)].coefficients().response(normalisedFrequency);
+        total *=
+            sections_[static_cast<std::size_t>(i)].coefficients().response(normalisedFrequency);
     }
     return total;
 }
