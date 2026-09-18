@@ -4,6 +4,7 @@
 #include <sa/engine/DocumentSource.h>
 #include <sa/engine/UndoHistory.h>
 #include <sa/ui/Colourmap.h>
+#include <sa/ui/LoudnessPanel.h>
 #include <sa/ui/SpectrogramView.h>
 #include <sa/ui/TimeRuler.h>
 #include <sa/ui/WaveformView.h>
@@ -54,6 +55,14 @@ public:
     /// Render the window to a PNG without needing a display. This is how the UI
     /// is checked in an environment with no screen, and it doubles as a CI smoke
     /// test that the whole load-analyse-draw path really runs.
+    /// Spin the event loop until no measurement is outstanding, or `timeoutMs`
+    /// passes. Returns false on timeout.
+    [[nodiscard]] bool waitForAnalysis(int timeoutMs = 120000);
+
+    /// Print the completed measurement as key=value lines on stdout, so a test
+    /// can check the numbers rather than the pixels showing them.
+    [[nodiscard]] bool printAnalysis() const;
+
     [[nodiscard]] bool saveScreenshot(const std::filesystem::path& path);
 
     /// Render just the spectrogram's plotting area, with no gutter and no
@@ -74,6 +83,10 @@ private:
     void showWaveformCursor(double seconds, double peakDecibels);
     void showSpectrogramCursor(double seconds, double hz, double decibels);
     void selectionChanged(SampleIndex start, SampleIndex end);
+
+    /// Re-measure whatever the panel should be showing: the selection when
+    /// there is one, the whole document otherwise.
+    void remeasure();
 
     /// Rebuild the peak and spectrogram caches from the *document*, not the
     /// file. After the first edit those are different things, and showing the
@@ -101,6 +114,7 @@ private:
     [[nodiscard]] bool hasDocument() const noexcept;
 
     TimeRuler* ruler_ = nullptr;
+    LoudnessPanel* meters_ = nullptr;
     WaveformView* waveform_ = nullptr;
     SpectrogramView* spectrogram_ = nullptr;
     QLabel* status_ = nullptr;

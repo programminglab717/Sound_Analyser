@@ -7,13 +7,16 @@
 
 #include <QActionGroup>
 #include <QApplication>
+#include <QElapsedTimer>
 #include <QFileDialog>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QMenuBar>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QVBoxLayout>
 #include <cmath>
+#include <cstdio>
 #include <fstream>
 
 namespace sa::ui {
@@ -60,7 +63,18 @@ MainWindow::MainWindow() {
 
     column->addWidget(ruler_);
     column->addWidget(splitter, 1);
-    setCentralWidget(central);
+
+    // The meters sit beside the views rather than in a floating window: the
+    // numbers and the picture are answers to the same question, and a reader
+    // who has to move a window to see both will stop looking at one of them.
+    meters_ = new LoudnessPanel{this};
+    auto* row = new QWidget{this};
+    auto* across = new QHBoxLayout{row};
+    across->setContentsMargins(0, 0, 0, 0);
+    across->setSpacing(0);
+    across->addWidget(central, 1);
+    across->addWidget(meters_);
+    setCentralWidget(row);
 
     // One time axis and one selection. Either view can drive them; the other
     // and the ruler follow.
@@ -217,6 +231,20 @@ void MainWindow::selectionChanged(SampleIndex start, SampleIndex end) {
     ruler_->setSelection(selected);
     refreshActions();
     updateStatus();
+    remeasure();
+}
+
+void MainWindow::remeasure() {
+    if (!documentSource_ || document_.duration() <= 0) {
+        meters_->clear();
+        return;
+    }
+    const TimeSelection selected = selection();
+    if (selected.isEmpty()) {
+        meters_->measure(documentSource_, 0, document_.duration(), tr("whole document"));
+    } else {
+        meters_->measure(documentSource_, selected.start, selected.length(), tr("selection"));
+    }
 }
 
 void MainWindow::showWaveformCursor(double seconds, double peakDecibels) {
@@ -353,6 +381,7 @@ void MainWindow::refreshViews() {
 
     refreshActions();
     updateStatus();
+    remeasure();
 }
 
 void MainWindow::refreshActions() {
@@ -649,6 +678,44 @@ bool MainWindow::exportTo(const std::filesystem::path& path, bool selectionOnly)
                          .arg(QString::fromStdString(formatTime(
                                   samplesToSeconds(written, document_.sampleRate()), 60.0)),
                               QString::fromStdString(path.filename().string())));
+    return true;
+}
+
+bool MainWindow::printAnalysis() const {
+    const analysis::ProgrammeAnalysis* result = meters_->latest();
+    if (result == nullptr) {
+        return false;
+    }
+    const auto line = [](const char* key, double value) { std::printf("%s=%.6f\n", key, value); };
+    line("integrated_lufs", result->loudness.integratedLufs);
+    line("short_term_lufs", result->loudness.shortTermLufs);
+    line("max_short_term_lufs", result->loudness.maximumShortTermLufs);
+    line("max_momentary_lufs", result->loudness.maximumMomentaryLufs);
+    line("loudness_range_lu", result->loudness.loudnessRangeLu);
+    line("true_peak_dbtp", result->truePeakDbtp);
+    line("sample_peak_dbfs", result->statistics.samplePeakDbfs);
+    line("rms_dbfs", result->statistics.rmsDbfs);
+    line("crest_factor_db", result->statistics.crestFactorDb);
+    line("dc_offset", result->statistics.dcOffset);
+    line("peak_to_loudness_lu", result->statistics.peakToLoudnessRatioDb);
+    std::printf("gated_blocks=%lld\n", static_cast<long long>(result->loudness.gatedBlockCount));
+    std::printf("frames=%lld\n", static_cast<long long>(result->statistics.frames));
+    std::fflush(stdout);
+    return true;
+}
+
+bool MainWindow::waitForAnalysis(int timeoutMs) {
+    QElapsedTimer clock;
+    clock.start();
+    while (meters_->busy()) {
+        if (clock.elapsed() > timeoutMs) {
+            return false;
+        }
+        // Wait for work rather than spinning: the worker posts its result as a
+        // queued call, so the loop only needs to wake when something arrives.
+        QApplication::processEvents(QEventLoop::WaitForMoreEvents, 50);
+    }
+    QApplication::processEvents();
     return true;
 }
 

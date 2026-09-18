@@ -142,6 +142,7 @@ def main() -> int:
                 str(shot),
                 "--screenshot-spectrogram",
                 str(plot),
+                "--print-analysis",
             ],
             capture_output=True,
             text=True,
@@ -204,10 +205,67 @@ def main() -> int:
             )
             return 1
 
+        # The meters run on a worker thread and are joined before this prints,
+        # so an empty dump means the panel never got its result -- which the
+        # screenshot checks above would not notice.
+        measured: dict[str, float] = {}
+        for line in completed.stdout.splitlines():
+            if "=" in line:
+                key, _, value = line.partition("=")
+                try:
+                    measured[key] = float(value)
+                except ValueError:
+                    pass
+
+        for key in ("integrated_lufs", "true_peak_dbtp", "sample_peak_dbfs", "rms_dbfs"):
+            if key not in measured:
+                print(f"FAIL: the meters did not report {key}")
+                return 1
+
+        if measured.get("gated_blocks", 0) < 1:
+            print("FAIL: no 400 ms block cleared the absolute gate")
+            return 1
+
+        # Relationships that must hold by definition. They catch a meter wired
+        # to the wrong field far more reliably than any absolute value, which
+        # would only pin the one signal this test happens to use.
+        checks = [
+            (
+                "crest factor is sample peak over RMS",
+                abs(
+                    measured["crest_factor_db"]
+                    - (measured["sample_peak_dbfs"] - measured["rms_dbfs"])
+                )
+                < 0.05,
+            ),
+            (
+                "true peak is at or above sample peak",
+                measured["true_peak_dbtp"] >= measured["sample_peak_dbfs"] - 0.01,
+            ),
+            (
+                "peak to loudness is true peak over integrated loudness",
+                abs(
+                    measured["peak_to_loudness_lu"]
+                    - (measured["true_peak_dbtp"] - measured["integrated_lufs"])
+                )
+                < 0.05,
+            ),
+            (
+                "a -6 dBFS sweep measures somewhere sane",
+                -30.0 < measured["integrated_lufs"] < 0.0,
+            ),
+        ]
+        for name, holds in checks:
+            if not holds:
+                print(f"FAIL: {name} -- {measured}")
+                return 1
+
         print(
             f"OK: window {width}x{height}, plot {plot_width}x{plot_height}, "
             f"{distinct} distinct colours, sweep straight from row {left} "
-            f"through {middle} to {right}"
+            f"through {middle} to {right}; "
+            f"{measured['integrated_lufs']:.1f} LUFS, "
+            f"{measured['true_peak_dbtp']:.1f} dBTP"
         )
         return 0
 
