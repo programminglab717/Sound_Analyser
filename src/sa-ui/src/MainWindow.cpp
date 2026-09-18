@@ -33,11 +33,19 @@ namespace sa::ui {
 
 namespace {
 
-/// Building a spectrogram currently needs the decoded audio resident, so a file
-/// long enough to exhaust memory is analysed as a waveform only rather than
-/// taking the machine down. Lifting this means a streaming pyramid build --
-/// tracked in docs/07-autonomous-queue.md.
-constexpr std::size_t kMaximumDecodedBytes = 1'500'000'000;
+/// Ceiling on the spectrogram cache itself.
+///
+/// The build streams now, so the decoded audio is no longer the constraint --
+/// what is left is the pyramid, which is the picture and cannot be smaller
+/// without being a worse picture. At the display settings below it costs about
+/// four bytes per frame of the document, so this allows roughly an hour and a
+/// half of stereo at 48 kHz.
+///
+/// Past that the waveform is still drawn and everything else still works; only
+/// the spectrogram is withheld, and the status bar says so with the number. The
+/// real fix is generating tiles on demand and evicting them, which is tracked
+/// in docs/07-autonomous-queue.md.
+constexpr std::size_t kMaximumPyramidBytes = 1'200'000'000;
 
 /// Display analysis settings. 4096 at 48 kHz is an 11.7 Hz bin and a 21 ms hop.
 /// A log axis stretches the bottom two octaves over half the display, and 2048
@@ -129,6 +137,14 @@ MainWindow::MainWindow() {
                   "QStatusBar::item { border: none; }"
                   "QLabel { color: #8a8fa0; }"
                   "QSplitter::handle { background: #2a2c38; }");
+}
+
+MainWindow::~MainWindow() {
+    // The worker holds a pointer to this window's cancellation token and posts
+    // back to this object. Joining here is what makes both safe; a detached
+    // worker would outlive the thing it reports to.
+    cancelSpectrogramBuild();
+    stopPlayback();
 }
 
 bool MainWindow::hasDocument() const noexcept {
@@ -489,25 +505,81 @@ void MainWindow::rebuildCaches() {
         return;
     }
 
-    const auto decodedBytes = static_cast<std::size_t>(document_.duration()) *
-                              static_cast<std::size_t>(document_.layout().count()) * sizeof(float);
-    if (decodedBytes > kMaximumDecodedBytes) {
-        spectrogramNote_ = tr("too long for spectrogram analysis in this build (%1 GB decoded)")
-                               .arg(static_cast<double>(decodedBytes) / 1e9, 0, 'f', 1);
+    // What the cache will cost, before paying for it: one byte per bin per
+    // frame at level 0, and the levels above it are a geometric series that
+    // roughly doubles that.
+    const auto config = displayConfig();
+    const auto frames = static_cast<std::size_t>(document_.duration() / config.hopSize + 1);
+    const auto bins = static_cast<std::size_t>(config.fftSize / 2 + 1);
+    const std::size_t pyramidBytes = frames * bins * 2;
+
+    if (pyramidBytes > kMaximumPyramidBytes) {
+        spectrogramNote_ = tr("too long for a spectrogram in this build (it would need %1 GB); "
+                              "the waveform and the meters are unaffected")
+                               .arg(static_cast<double>(pyramidBytes) / 1e9, 0, 'f', 1);
         return;
     }
 
-    AudioBuffer whole{document_.layout(), document_.duration()};
-    if (!documentSource_->read(0, whole.view())) {
-        spectrogramNote_ = tr("could not read the document for analysis");
+    startSpectrogramBuild();
+}
+
+void MainWindow::cancelSpectrogramBuild() {
+    spectrogramCancellation_.cancel();
+    spectrogramGeneration_->fetch_add(1);
+    if (spectrogramWorker_.joinable()) {
+        spectrogramWorker_.join();
+    }
+    spectrogramCancellation_.reset();
+    spectrogramBusy_ = false;
+}
+
+void MainWindow::startSpectrogramBuild() {
+    cancelSpectrogramBuild();
+    if (!documentSource_ || document_.duration() <= 0) {
         return;
     }
-    auto spectra = spectral::SpectrogramPyramid::build(whole.constView(), 0, displayConfig());
-    if (spectra) {
-        spectra_ = std::make_shared<const spectral::SpectrogramPyramid>(std::move(spectra).value());
-    } else {
-        spectrogramNote_ = tr("spectrogram analysis failed");
-    }
+
+    const std::uint64_t mine = spectrogramGeneration_->load();
+    spectrogramBusy_ = true;
+    spectrogramNote_ = tr("building the spectrogram…");
+
+    // The source is captured by shared_ptr and the token by pointer into this
+    // window, which outlives the worker because cancelSpectrogramBuild joins it
+    // before anything replaces either.
+    spectrogramWorker_ = std::thread{[this, source = documentSource_, config = displayConfig(),
+                                      mine, generation = spectrogramGeneration_] {
+        JobMonitor monitor;
+        monitor.cancellation = &spectrogramCancellation_;
+
+        auto built = spectral::SpectrogramPyramid::buildStreaming(*source, 0, config, monitor);
+        if (generation->load() != mine) {
+            return;
+        }
+
+        QMetaObject::invokeMethod(
+            this,
+            [this, built = std::make_shared<Result<spectral::SpectrogramPyramid>>(std::move(built)),
+             mine, generation] {
+                if (generation->load() != mine) {
+                    return;
+                }
+                if (*built) {
+                    spectra_ = std::make_shared<const spectral::SpectrogramPyramid>(
+                        std::move(*built).value());
+                    spectrogramNote_.clear();
+                } else {
+                    spectrogramNote_ =
+                        tr("spectrogram analysis failed: %1")
+                            .arg(QString::fromStdString(std::string{built->error().what()}));
+                }
+                spectrogramBusy_ = false;
+                spectrogram_->setPyramid(spectra_, document_.sampleRate(), document_.duration());
+                spectrogram_->setViewRange(waveform_->viewStart(), waveform_->viewLength());
+                spectrogram_->setSelection(selection());
+                updateStatus();
+            },
+            Qt::QueuedConnection);
+    }};
 }
 
 void MainWindow::refreshViews() {
@@ -601,9 +673,11 @@ bool MainWindow::applyEdit(const QString& label, Edit&& edit) {
         status_->setText(tr("%1 did not apply").arg(label));
         return false;
     }
-    // The player is streaming from the document source that is about to be
-    // replaced. Stopping first is not politeness, it is the lifetime rule.
+    // The player and the spectrogram worker are both reading the document
+    // source that is about to be replaced. Stopping them first is not
+    // politeness, it is the lifetime rule.
     stopPlayback();
+    cancelSpectrogramBuild();
     history_->commit(document_, label.toStdString());
     rebuildCaches();
     refreshViews();
@@ -1333,8 +1407,10 @@ bool MainWindow::printAnalysis() const {
 bool MainWindow::waitForAnalysis(int timeoutMs) {
     QElapsedTimer clock;
     clock.start();
-    while (meters_->busy()) {
+    while (meters_->busy() || spectrogramBusy_) {
         if (clock.elapsed() > timeoutMs) {
+            std::fprintf(stderr, "sound-analyser: gave up waiting for %s after %d ms\n",
+                         spectrogramBusy_ ? "the spectrogram" : "the meters", timeoutMs);
             return false;
         }
         // Wait for work rather than spinning: the worker posts its result as a

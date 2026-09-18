@@ -1,5 +1,6 @@
 #pragma once
 
+#include <sa/core/Cancellation.h>
 #include <sa/engine/Document.h>
 #include <sa/engine/DocumentSource.h>
 #include <sa/engine/UndoHistory.h>
@@ -12,9 +13,11 @@
 #include <sa/ui/WaveformView.h>
 
 #include <QMainWindow>
+#include <atomic>
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <thread>
 
 class QAction;
 class QLabel;
@@ -34,6 +37,7 @@ class MainWindow : public QMainWindow {
 
 public:
     MainWindow();
+    ~MainWindow() override;
 
     /// Load an audio file, build its caches and display it. Returns false and
     /// reports on the status bar if the file cannot be opened.
@@ -65,9 +69,14 @@ public:
     /// Render the window to a PNG without needing a display. This is how the UI
     /// is checked in an environment with no screen, and it doubles as a CI smoke
     /// test that the whole load-analyse-draw path really runs.
-    /// Spin the event loop until no measurement is outstanding, or `timeoutMs`
+    /// Spin the event loop until no analysis is outstanding, or `timeoutMs`
     /// passes. Returns false on timeout.
-    [[nodiscard]] bool waitForAnalysis(int timeoutMs = 120000);
+    ///
+    /// Ten minutes, because the thing being waited for is real work on real
+    /// material: a twenty-minute file takes about thirty seconds to analyse in
+    /// release and several times that under a sanitiser. A batch run that gives
+    /// up early writes a file that looks finished and is not.
+    [[nodiscard]] bool waitForAnalysis(int timeoutMs = 600000);
 
     /// Play the current selection to its end, pumping the event loop so the
     /// playhead advances, then report where it got to. Returns false if
@@ -109,10 +118,23 @@ private:
     /// there is one, the whole document otherwise.
     void remeasure();
 
-    /// Rebuild the peak and spectrogram caches from the *document*, not the
-    /// file. After the first edit those are different things, and showing the
-    /// file is showing the user something they did not ask for.
+    /// Rebuild the peak cache from the *document*, not the file. After the
+    /// first edit those are different things, and showing the file is showing
+    /// the user something they did not ask for.
+    ///
+    /// The peak pyramid is fast -- under a second for twenty minutes -- so it
+    /// is built here and the waveform appears at once. The spectrogram takes
+    /// several seconds on the same material and is built on a worker.
     void rebuildCaches();
+
+    /// Start a background spectrogram build, cancelling any already running.
+    void startSpectrogramBuild();
+
+    /// Stop a running spectrogram build and wait for its thread.
+    ///
+    /// Called before anything that replaces the document source the worker is
+    /// reading from. That is a lifetime rule, not politeness.
+    void cancelSpectrogramBuild();
     void refreshViews();
     void refreshActions();
     void updateStatus();
@@ -196,6 +218,16 @@ private:
     std::shared_ptr<const engine::DocumentSource> documentSource_;
     std::shared_ptr<const io::PeakPyramid> peaks_;
     std::shared_ptr<const spectral::SpectrogramPyramid> spectra_;
+
+    std::thread spectrogramWorker_;
+    /// True from the moment a build is requested until its result has been
+    /// applied or abandoned. waitForAnalysis() holds on it, which is what stops
+    /// a headless run screenshotting an empty spectrogram.
+    bool spectrogramBusy_ = false;
+    CancellationToken spectrogramCancellation_;
+    /// Bumped per request; a result from a superseded generation is dropped.
+    std::shared_ptr<std::atomic<std::uint64_t>> spectrogramGeneration_ =
+        std::make_shared<std::atomic<std::uint64_t>>(0);
 
     AudioBuffer clipboard_;
     spectral::NoiseProfile noiseProfile_;

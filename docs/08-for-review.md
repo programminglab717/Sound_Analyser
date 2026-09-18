@@ -14,6 +14,11 @@ Ordered by how much it would unblock.
 artefacts (Actions → the run → Artifacts at the bottom), unzip it anywhere, and
 run `sound-analyser.exe`. Qt ships beside it, so there is nothing to install.
 
+It is about 12.6 MB and it is built and tested by the same run that produces it:
+all ten CI jobs green, including both MSVC configurations, before the package is
+uploaded. `sa-cli.exe` is not in the package yet -- say if you want it and it is
+a one-line change.
+
 Then open something real — a recording of your own, not a test tone — and try:
 
 | | |

@@ -1,9 +1,11 @@
 #pragma once
 
 #include <sa/core/AudioBuffer.h>
+#include <sa/core/Cancellation.h>
 #include <sa/core/Result.h>
 #include <sa/core/Types.h>
 #include <sa/dsp/Window.h>
+#include <sa/io/AudioSource.h>
 
 #include <cstdint>
 #include <vector>
@@ -44,6 +46,21 @@ public:
     /// Build over one channel of `source`.
     [[nodiscard]] static Result<SpectrogramPyramid> build(ConstAudioBufferView source, int channel,
                                                           const SpectrogramConfig& config = {});
+
+    /// Build from a file without holding it.
+    ///
+    /// The one-shot form above needs the whole decoded channel resident, which
+    /// for the recordings this product exists for is a second copy of something
+    /// already too big. This reads in blocks and keeps one analysis window of
+    /// history, so the audio costs a fixed amount however long the file is.
+    ///
+    /// The result is bit-identical to build() on the same audio, which is
+    /// asserted rather than assumed: the framing has to match exactly, and a
+    /// streaming implementation that quietly shifts every frame by a hop is a
+    /// spectrogram that disagrees with the waveform beside it.
+    [[nodiscard]] static Result<SpectrogramPyramid>
+    buildStreaming(const io::AudioSource& source, int channel, const SpectrogramConfig& config = {},
+                   const JobMonitor& monitor = {});
 
     [[nodiscard]] bool isEmpty() const noexcept { return levels_.empty(); }
 
@@ -106,6 +123,10 @@ public:
     [[nodiscard]] std::size_t memoryFootprint() const noexcept;
 
 private:
+    /// Build every level above 0 by max-combining pairs from the one below.
+    /// Both builds call it, so the two cannot drift.
+    void buildUpperLevels();
+
     struct Level {
         SampleCount hop = 0;
         SampleCount frameCount = 0;

@@ -6,7 +6,7 @@ add_library(sa-spectral STATIC
 add_library(sa::spectral ALIAS sa-spectral)
 
 target_include_directories(sa-spectral PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(sa-spectral PUBLIC sa-core sa-dsp)
+target_link_libraries(sa-spectral PUBLIC sa-core sa-dsp sa-io)
 target_link_libraries(sa-spectral PRIVATE sa-warnings)
 
 if(SA_BUILD_TESTS)

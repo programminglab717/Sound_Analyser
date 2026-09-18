@@ -404,3 +404,116 @@ TEST_CASE("Sub-bin rows interpolate instead of stepping", "[spectral][pyramid][r
     CHECK(decreases == 0);
     CHECK(profile[peakRow] > profile[6]);
 }
+
+namespace {
+
+/// An AudioSource over a buffer, so the streaming build can be compared against
+/// the one-shot build on exactly the same samples.
+class BufferSource final : public io::AudioSource {
+public:
+    explicit BufferSource(const AudioBuffer& audio) : audio_(&audio) {
+        info_.sampleRate = SampleRate{48000.0};
+        info_.layout = audio.layout();
+        info_.frameCount = audio.frames();
+        info_.format = io::SampleFormat::Float32;
+    }
+
+    [[nodiscard]] const io::AudioFileInfo& info() const noexcept override { return info_; }
+
+    [[nodiscard]] Result<SampleCount> read(SampleIndex startFrame,
+                                           AudioBufferView destination) const override {
+        if (startFrame < 0 || startFrame >= info_.frameCount) {
+            return SampleCount{0};
+        }
+        const SampleCount count =
+            std::min<SampleCount>(destination.frames(), info_.frameCount - startFrame);
+        for (int channel = 0; channel < destination.channelCount(); ++channel) {
+            std::copy_n(audio_->channel(channel) + startFrame, count, destination.channel(channel));
+        }
+        return count;
+    }
+
+private:
+    const AudioBuffer* audio_;
+    io::AudioFileInfo info_;
+};
+
+} // namespace
+
+TEST_CASE("The streaming build is bit-identical to the one-shot build",
+          "[spectral][pyramid][streaming]") {
+    // This is the whole claim. A streaming implementation that shifts every
+    // frame by a hop still looks like a spectrogram; it just disagrees with the
+    // waveform beside it, and nothing but this test would say so.
+    for (const SampleCount frames : {8192, 20000, 48000, 65537}) {
+        const auto buffer = makeSine(frames, 37.0, 0.7f);
+        const BufferSource source{buffer};
+
+        SpectrogramConfig config;
+        config.fftSize = 2048;
+        config.hopSize = 512;
+
+        const auto direct = buildOrFail(buffer, config);
+        auto streamed = SpectrogramPyramid::buildStreaming(source, 0, config);
+        REQUIRE(streamed.hasValue());
+
+        REQUIRE(streamed.value().levelCount() == direct.levelCount());
+        REQUIRE(streamed.value().binCount() == direct.binCount());
+        REQUIRE(streamed.value().sourceFrames() == direct.sourceFrames());
+
+        for (int level = 0; level < direct.levelCount(); ++level) {
+            REQUIRE(streamed.value().frameCountAt(level) == direct.frameCountAt(level));
+            for (SampleCount frame = 0; frame < direct.frameCountAt(level); ++frame) {
+                const std::uint8_t* a = direct.frameData(level, frame);
+                const std::uint8_t* b = streamed.value().frameData(level, frame);
+                REQUIRE(a != nullptr);
+                REQUIRE(b != nullptr);
+                for (int bin = 0; bin < direct.binCount(); ++bin) {
+                    if (a[bin] != b[bin]) {
+                        FAIL("level " << level << " frame " << frame << " bin " << bin << ": "
+                                      << int(a[bin]) << " vs " << int(b[bin]) << " at " << frames
+                                      << " frames");
+                    }
+                }
+            }
+        }
+    }
+}
+
+TEST_CASE("The streaming build validates its inputs", "[spectral][pyramid][streaming]") {
+    const auto buffer = makeSine(8192, 20.0);
+    const BufferSource source{buffer};
+
+    CHECK_FALSE(SpectrogramPyramid::buildStreaming(source, -1).hasValue());
+    CHECK_FALSE(SpectrogramPyramid::buildStreaming(source, 5).hasValue());
+
+    SpectrogramConfig inverted;
+    inverted.minimumDecibels = 0.0f;
+    inverted.maximumDecibels = -120.0f;
+    CHECK_FALSE(SpectrogramPyramid::buildStreaming(source, 0, inverted).hasValue());
+
+    SpectrogramConfig odd;
+    odd.fftSize = 1000;
+    CHECK_FALSE(SpectrogramPyramid::buildStreaming(source, 0, odd).hasValue());
+
+    const AudioBuffer empty{ChannelLayout::mono(), 0};
+    const BufferSource nothing{empty};
+    auto built = SpectrogramPyramid::buildStreaming(nothing, 0);
+    REQUIRE(built.hasValue());
+    CHECK(built.value().isEmpty());
+}
+
+TEST_CASE("A streaming build can be cancelled", "[spectral][pyramid][streaming]") {
+    const auto buffer = makeSine(400000, 40.0);
+    const BufferSource source{buffer};
+
+    CancellationToken token;
+    token.cancel();
+
+    JobMonitor monitor;
+    monitor.cancellation = &token;
+
+    auto built = SpectrogramPyramid::buildStreaming(source, 0, SpectrogramConfig{}, monitor);
+    REQUIRE_FALSE(built.hasValue());
+    CHECK(built.error().code() == ErrorCode::Cancelled);
+}
