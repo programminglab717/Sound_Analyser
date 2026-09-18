@@ -116,7 +116,15 @@ TEST_CASE("Opening an id that is not there fails rather than guessing", "[device
 }
 
 TEST_CASE("A missing device falls back instead of refusing to start", "[device][manager]") {
-    AudioDeviceManager manager;
+    // The backend list is explicit rather than the platform's. With the real
+    // one this asserted that the fallback lands on the null device, which is
+    // only true on a machine that has no working audio: give it a sound card
+    // and the fallback correctly lands on that instead, and the test fails for
+    // being right. Naming the backends keeps the assertion at full strength and
+    // makes it mean the same thing everywhere.
+    std::vector<std::unique_ptr<AudioDeviceBackend>> backends;
+    backends.push_back(std::make_unique<NullAudioBackend>());
+    AudioDeviceManager manager{std::move(backends)};
 
     auto opened = manager.openOrFallback("wasapi:long-gone", AudioDeviceConfig{});
     REQUIRE(opened.hasValue());
@@ -124,6 +132,19 @@ TEST_CASE("A missing device falls back instead of refusing to start", "[device][
 
     auto noPreference = manager.openOrFallback("", AudioDeviceConfig{});
     CHECK(noPreference.hasValue());
+}
+
+TEST_CASE("The platform's own fallback opens something, whatever the machine has",
+          "[device][manager]") {
+    // The weaker claim the test above used to make by accident, stated
+    // deliberately: with the real backends, asking for a device that is not
+    // there must still hand back a working one. Which one depends on the
+    // hardware, so that is exactly what is not asserted.
+    AudioDeviceManager manager;
+
+    auto opened = manager.openOrFallback("wasapi:long-gone", AudioDeviceConfig{});
+    REQUIRE(opened.hasValue());
+    CHECK(opened.value()->outputChannels() > 0);
 }
 
 TEST_CASE("A device that enumerates but will not open is skipped", "[device][manager]") {

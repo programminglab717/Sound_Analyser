@@ -1,5 +1,7 @@
+#include <sa/device/AlsaAudioDevice.h>
 #include <sa/device/AudioDeviceManager.h>
 #include <sa/device/NullAudioDevice.h>
+#include <sa/device/WasapiAudioDevice.h>
 
 #include <string>
 #include <utility>
@@ -30,27 +32,27 @@ int clampBufferFrames(int requested, int deviceDefault) noexcept {
 }
 
 /// The backends this build can talk to, in preference order.
+///
+/// Both platform headers declare nothing at all when their backend is not in
+/// the build -- WASAPI off Windows, ALSA where libasound's headers were missing
+/// at configure time -- so they are included unconditionally and it is only the
+/// registration that is guarded. That keeps the conditional compilation to
+/// three lines here instead of spreading it through every caller.
 std::vector<std::unique_ptr<AudioDeviceBackend>> platformBackends() {
     std::vector<std::unique_ptr<AudioDeviceBackend>> backends;
 
-    // TODO(device): the WASAPI backend belongs here, ahead of the null one.
-    //
-    //   #if defined(_WIN32)
-    //       backends.push_back(std::make_unique<WasapiAudioBackend>());
-    //   #endif
-    //
-    // It is a miniaudio-backed (public domain, ADR 0006) WasapiAudioBackend in
-    // src/WasapiAudioDevice.cpp exposing a WasapiAudioDevice : AudioDevice.
-    // Everything it needs already exists: enumerate() fills
-    // AudioDeviceDescription from ma_context_get_devices, open() hands back a
-    // device whose data callback de-interleaves into the planar views the
-    // AudioCallback takes, and stop() keeps the guarantee documented on
-    // AudioDevice::stop -- callback finished, safe to destroy captured state.
-    //
-    // Nothing above this file changes when it lands: callers hold an
-    // AudioDevice, and the null backend stays registered last so a machine with
-    // no audio service still opens something.
+#if defined(_WIN32)
+    backends.push_back(std::make_unique<WasapiAudioBackend>());
+#endif
 
+#if defined(SA_DEVICE_HAVE_ALSA)
+    backends.push_back(std::make_unique<AlsaAudioBackend>());
+#endif
+
+    // Last, always. It is what makes "there is always a device to open" true on
+    // a build with no platform backend at all, on a machine whose audio service
+    // is not running, and in a container with no sound card -- which is where
+    // most of this layer's tests run.
     backends.push_back(std::make_unique<NullAudioBackend>());
     return backends;
 }

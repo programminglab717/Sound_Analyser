@@ -13,8 +13,11 @@ Checks performed:
      or unverified.
   3. LGPL dependencies are marked for dynamic linking. Static linking an LGPL
      library imposes relink obligations we cannot meet in a closed-source build.
-  4. Anything CMake fetches or vcpkg installs is actually declared in
-     third-party.json, so a dependency cannot arrive undocumented.
+  4. Anything CMake fetches, finds with find_package, or vcpkg installs is
+     actually declared in third-party.json, so a dependency cannot arrive
+     undocumented. A system facility that carries no licence of ours -- the
+     platform's own threading or OpenGL -- must still be listed under
+     'systemPackages' with a reason, so every exemption is written down.
 
 Usage:  python3 tools/check_licences.py [--manifest third-party.json] [--root .]
 Exit:   0 clean, 1 on any violation.
@@ -93,12 +96,22 @@ def check_entry(entry: dict, kind: str, policy: dict, found: Violations) -> None
 
 
 def declared_names(manifest: dict) -> set[str]:
+    """Every name a declared dependency can appear under in a build file.
+
+    A package is rarely called the same thing twice: the Qt project ships as
+    'qtbase' and is found as 'Qt6'; ALSA is 'alsa-lib' upstream and 'ALSA' to
+    CMake. Without 'cmakeNames' the gate would either miss those or have to
+    match loosely, and a gate that matches loosely is one that lets the next
+    one through.
+    """
     names: set[str] = set()
     for key in ("dependencies", "models"):
         for entry in manifest.get(key, []):
             name = entry.get("name")
             if name:
                 names.add(name.lower())
+            for alias in entry.get("cmakeNames", []):
+                names.add(str(alias).lower())
     return names
 
 
@@ -114,6 +127,37 @@ def scan_cmake_fetches(root: Path, declared: set[str], found: Violations) -> Non
                     f"{cmake.relative_to(root)} fetches '{name}' but it is not "
                     f"declared in the third-party manifest."
                 )
+
+
+def scan_cmake_find_package(
+    root: Path, declared: set[str], allowed_system: dict[str, str], found: Violations
+) -> None:
+    """Every find_package() must name a declared dependency or an allowed system package.
+
+    This is the hole the gate had until ALSA fell through it: fetched and vcpkg
+    dependencies were cross-checked, but a library found on the system was not,
+    so linking one imposed its licence on the product with nothing to notice.
+    Qt only passed because it was declared by hand.
+
+    A system package -- the C++ threading runtime, the platform's own OpenGL --
+    is not a third-party dependency and has no licence of ours to carry, but it
+    still has to be listed with a reason, so that every exemption is visible
+    rather than assumed.
+    """
+    pattern = re.compile(r"find_package\s*\(\s*([A-Za-z0-9_\-]+)", re.IGNORECASE)
+    for cmake in root.rglob("CMakeLists.txt"):
+        if "build" in cmake.parts or "_deps" in cmake.parts:
+            continue
+        for match in pattern.finditer(cmake.read_text(encoding="utf-8", errors="replace")):
+            name = match.group(1)
+            lowered = name.lower()
+            if lowered in declared or lowered in allowed_system:
+                continue
+            found.error(
+                f"{cmake.relative_to(root)} links '{name}' via find_package but it is "
+                f"neither declared in the third-party manifest nor listed under "
+                f"'systemPackages'."
+            )
 
 
 def scan_vcpkg(root: Path, declared: set[str], found: Violations) -> None:
@@ -157,7 +201,12 @@ def main() -> int:
         check_entry(entry, "model", policy, found)
 
     declared = declared_names(manifest)
+    allowed_system = {
+        str(name).lower(): reason
+        for name, reason in (manifest.get("systemPackages") or {}).items()
+    }
     scan_cmake_fetches(root, declared, found)
+    scan_cmake_find_package(root, declared, allowed_system, found)
     scan_vcpkg(root, declared, found)
 
     print(f"licence gate: {len(dependencies)} dependencies, {len(models)} models checked")

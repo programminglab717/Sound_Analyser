@@ -5,14 +5,17 @@
   "description": "Analysis-first audio repair and mastering workstation",
   "dependencies": [],
   "$comment": [
-    "Dependencies are added here as Phase 0/1 progresses. Every addition must",
-    "pass tools/check_licences.py -- see ADR 0006. Planned, all allowlisted:",
-    "  catch2       BSL-1.0      (currently via FetchContent)",
-    "  miniaudio    Unlicense    device I/O, replaces JUCE",
-    "  dr-libs      Unlicense    wav/flac/mp3 decode",
-    "  pffft        BSD-like     FFT -- never FFTW, which is GPL",
-    "  libsndfile   LGPL-2.1     DYNAMIC LINK ONLY",
-    "  onnxruntime  MIT          Phase 4",
-    "  qtbase       LGPL-3.0     DYNAMIC LINK ONLY, Phase 0/1 UI shell"
+    "Dependencies are added here as the phases progress. Every addition must",
+    "pass tools/check_licences.py -- see ADR 0006.",
+    "",
+    "Nothing is listed yet because nothing has needed vcpkg: Catch2 arrives via",
+    "FetchContent, Qt and ALSA are found on the system, and the audio device,",
+    "FFT and file I/O layers were written rather than taken. The authoritative",
+    "record of what the product links is third-party.json, which the gate reads;",
+    "this file is only the vcpkg half of it.",
+    "",
+    "Still plausible later, all allowlisted:",
+    "  onnxruntime  MIT          ML inference (Phase 4)",
+    "  ffmpeg       LGPL-2.1     DYNAMIC LINK ONLY, containers, never --enable-gpl"
   ]
 }

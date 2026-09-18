@@ -6,7 +6,10 @@
     "permitted, no revenue/seat/unit cap.",
     "",
     "Adding a dependency means adding it here first. The gate also cross-checks",
-    "that anything CMake fetches or vcpkg installs is declared."
+    "that anything CMake fetches or vcpkg installs is declared.",
+    "",
+    "'cmakeNames' lists the names a dependency is found under in build files, because a package is rarely called the same thing twice.",
+    "'systemPackages' exempts a find_package() that is a platform facility rather than a third-party library -- the compiler's threading runtime, the system's own OpenGL. Each needs a reason, so every exemption is written down rather than assumed."
   ],
   "policy": {
     "allowedLicences": [
@@ -43,6 +46,18 @@
   },
   "dependencies": [
     {
+      "name": "alsa-lib",
+      "cmakeNames": [
+        "ALSA"
+      ],
+      "version": "system",
+      "licence": "LGPL-2.1",
+      "linkage": "dynamic",
+      "url": "https://www.alsa-project.org/",
+      "usedFor": "Audio output on Linux, behind sa::device::AudioDevice.",
+      "notes": "LGPL-2.1, so linked dynamically against the system libasound; the user can replace it. Optional: src/sa-device/CMakeLists.txt guards it with find_package(ALSA) and the module builds without it, exactly as the UI does with Qt. Not shipped -- it is the distribution's own library. Windows uses WASAPI from the platform SDK, which needs no entry here."
+    },
+    {
       "name": "catch2",
       "licence": "BSL-1.0",
       "linkage": "static",
@@ -66,19 +81,25 @@
       "scope": "runtime",
       "url": "https://www.qt.io/",
       "version": "6.4.2 (system)",
-      "purpose": "Application shell and widgets. LGPL-3.0, so DYNAMIC LINKING ONLY -- see docs/05-licensing-and-dependencies.md section 5 for the relink and source-offer obligations that come with it. Qt Charts, Qt Data Visualization and Qt Virtual Keyboard are GPL-only and must never be linked."
+      "purpose": "Application shell and widgets. LGPL-3.0, so DYNAMIC LINKING ONLY -- see docs/05-licensing-and-dependencies.md section 5 for the relink and source-offer obligations that come with it. Qt Charts, Qt Data Visualization and Qt Virtual Keyboard are GPL-only and must never be linked.",
+      "cmakeNames": [
+        "Qt6"
+      ]
     }
   ],
   "models": [],
   "$plannedComment": [
     "Planned additions, all pre-checked against the policy. Move each into",
+    "",
+    "No longer planned, because they were written in-house instead:",
+    "  miniaudio   -- WASAPI and ALSA are behind sa::device::AudioDevice already.",
+    "  pffft       -- sa::dsp::RealFft is ours, and is the CI-gated round trip.",
+    "  libsndfile  -- sa::io reads WAV and AIFF and writes WAV without it.",
+    "",
     "'dependencies' when actually wired up:",
-    "  miniaudio   Unlicense    static   device I/O (replaces JUCE)",
     "  dr_libs     Unlicense    static   wav/flac/mp3 decode",
-    "  pffft       BSD-3-Clause static   FFT -- NEVER FFTW, which is GPL",
     "  r8brain     MIT          static   resampling",
     "  qtbase      LGPL-3.0     DYNAMIC  UI shell",
-    "  libsndfile  LGPL-2.1     DYNAMIC  audio file I/O",
     "  ffmpeg      LGPL-2.1     DYNAMIC  containers -- never --enable-gpl",
     "  onnxruntime MIT          dynamic  ML inference (Phase 4)",
     "  clap        MIT          static   plugin hosting (Phase 5)",
@@ -89,5 +110,6 @@
     "  rnnoise     BSD-3-Clause denoise",
     "REJECTED: demucs/htdemucs (weights research-only), open-unmix UMXL",
     "  (CC-BY-NC-SA), FFTW (GPL), Rubber Band (GPL/commercial)."
-  ]
+  ],
+  "systemPackages": {}
 }
