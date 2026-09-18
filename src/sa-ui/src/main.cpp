@@ -18,8 +18,11 @@ int main(int argc, char** argv) {
     parser.addHelpOption();
     parser.addPositionalArgument("file", "Audio file to open");
 
-    QCommandLineOption screenshot{"screenshot", "Render to <png> and exit.", "png"};
+    QCommandLineOption screenshot{"screenshot", "Render the window to <png> and exit.", "png"};
     parser.addOption(screenshot);
+    QCommandLineOption plot{"screenshot-spectrogram",
+                            "Render the spectrogram plot alone to <png> and exit.", "png"};
+    parser.addOption(plot);
     parser.process(app);
 
     sa::ui::MainWindow window;
@@ -28,10 +31,16 @@ int main(int argc, char** argv) {
         window.openFile(positional.first().toStdString());
     }
 
-    if (parser.isSet(screenshot)) {
+    if (parser.isSet(screenshot) || parser.isSet(plot)) {
         window.resize(1280, 760);
         window.show();
-        const bool saved = window.saveScreenshot(parser.value(screenshot).toStdString());
+        bool saved = true;
+        if (parser.isSet(screenshot)) {
+            saved = window.saveScreenshot(parser.value(screenshot).toStdString());
+        }
+        if (saved && parser.isSet(plot)) {
+            saved = window.saveSpectrogramImage(parser.value(plot).toStdString());
+        }
         return saved ? 0 : 1;
     }
 

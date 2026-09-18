@@ -147,6 +147,84 @@ int SpectrogramPyramid::levelForSamplesPerColumn(SampleCount samplesPerColumn) c
     return chosen;
 }
 
+void SpectrogramPyramid::render(SampleIndex startSample, SampleIndex endSample,
+                                const float* rowBinEdges, int rows, int columns,
+                                std::uint8_t* out) const noexcept {
+    if (out == nullptr || rowBinEdges == nullptr || rows <= 0 || columns <= 0) {
+        return;
+    }
+    std::fill_n(out, static_cast<std::size_t>(rows) * static_cast<std::size_t>(columns),
+                std::uint8_t{0});
+
+    if (levels_.empty() || endSample <= startSample) {
+        return;
+    }
+
+    const SampleCount span = endSample - startSample;
+    const SampleCount samplesPerColumn = std::max<SampleCount>(1, span / columns);
+    const int level = levelForSamplesPerColumn(samplesPerColumn);
+    const Level& data = levels_[static_cast<std::size_t>(level)];
+    const auto bins = static_cast<std::size_t>(binCount_);
+
+    for (int column = 0; column < columns; ++column) {
+        const SampleIndex columnStart = startSample + (span * column) / columns;
+        const SampleIndex columnEnd = startSample + (span * (column + 1)) / columns;
+
+        const SampleCount firstFrame = std::max<SampleIndex>(0, columnStart / data.hop);
+        const SampleCount lastFrame =
+            std::min<SampleIndex>(data.frameCount - 1, (columnEnd - 1) / data.hop);
+        if (firstFrame > lastFrame) {
+            continue;
+        }
+
+        for (int row = 0; row < rows; ++row) {
+            const float lowEdge = rowBinEdges[row];
+            const float highEdge = rowBinEdges[row + 1];
+
+            std::uint8_t peak = 0;
+
+            if (highEdge - lowEdge < 1.0f) {
+                // The row is finer than the analysis. Taking the nearest bin
+                // would draw the bottom of a log axis -- where a dozen bins are
+                // stretched over half the display -- as a stack of flat blocks,
+                // so interpolate between the two bins the row sits between.
+                // Values are log-magnitude, so this interpolates in decibels,
+                // which is the axis the eye is reading.
+                const float centre = 0.5f * (lowEdge + highEdge);
+                const int lower =
+                    std::clamp(static_cast<int>(std::floor(centre)), 0, binCount_ - 1);
+                const int upper = std::min(lower + 1, binCount_ - 1);
+                const float weight = std::clamp(centre - static_cast<float>(lower), 0.0f, 1.0f);
+
+                for (SampleCount frame = firstFrame; frame <= lastFrame; ++frame) {
+                    const auto frameOffset = static_cast<std::size_t>(frame) * bins;
+                    const float a = data.magnitudes[frameOffset + static_cast<std::size_t>(lower)];
+                    const float b = data.magnitudes[frameOffset + static_cast<std::size_t>(upper)];
+                    const float blended = a + (b - a) * weight;
+                    peak = std::max(peak, static_cast<std::uint8_t>(blended + 0.5f));
+                }
+            } else {
+                // Several bins to one row: combine by maximum, so a narrow peak
+                // survives the squeeze at the top of a log axis.
+                int binStart = std::clamp(static_cast<int>(std::floor(lowEdge)), 0, binCount_ - 1);
+                const int binEnd =
+                    std::clamp(static_cast<int>(std::ceil(highEdge)), binStart + 1, binCount_);
+
+                for (SampleCount frame = firstFrame; frame <= lastFrame; ++frame) {
+                    const auto frameOffset = static_cast<std::size_t>(frame) * bins;
+                    for (int bin = binStart; bin < binEnd; ++bin) {
+                        peak = std::max(
+                            peak, data.magnitudes[frameOffset + static_cast<std::size_t>(bin)]);
+                    }
+                }
+            }
+
+            out[static_cast<std::size_t>(row) * static_cast<std::size_t>(columns) +
+                static_cast<std::size_t>(column)] = peak;
+        }
+    }
+}
+
 const std::uint8_t* SpectrogramPyramid::frameData(int level, SampleCount frame) const noexcept {
     if (level < 0 || level >= levelCount()) {
         return nullptr;

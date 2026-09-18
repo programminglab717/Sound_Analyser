@@ -3,10 +3,10 @@
 #include <sa/engine/Document.h>
 #include <sa/ui/Colourmap.h>
 #include <sa/ui/SpectrogramView.h>
+#include <sa/ui/TimeRuler.h>
 #include <sa/ui/WaveformView.h>
 
 #include <QMainWindow>
-
 #include <filesystem>
 #include <memory>
 
@@ -14,10 +14,10 @@ class QLabel;
 
 namespace sa::ui {
 
-/// The application window: waveform above, spectrogram below, sharing one time
-/// axis.
+/// The application window: a shared time ruler over a waveform over a
+/// spectrogram, all on one time axis.
 ///
-/// The two views are locked together deliberately. The product's whole claim is
+/// The views are locked together deliberately. The product's whole claim is
 /// that analysis and editing are the same surface, and that falls apart the
 /// moment the user has to reconcile two different scroll positions in their
 /// head.
@@ -36,6 +36,12 @@ public:
     /// test that the whole load-analyse-draw path really runs.
     [[nodiscard]] bool saveScreenshot(const std::filesystem::path& path);
 
+    /// Render just the spectrogram's plotting area, with no gutter and no
+    /// window chrome. A test that checks pixels needs to know what it is
+    /// looking at; grabbing the whole window makes it guess where the plot
+    /// starts, and that guess is what breaks the next time the layout moves.
+    [[nodiscard]] bool saveSpectrogramImage(const std::filesystem::path& path);
+
 private slots:
     void chooseFile();
     void zoomToFit();
@@ -43,10 +49,15 @@ private slots:
 private:
     void buildMenus();
     void setColourmap(Colourmap map);
+    void setFrequencyScale(FrequencyScale scale);
+    void showWaveformCursor(double seconds, double peakDecibels);
+    void showSpectrogramCursor(double seconds, double hz, double decibels);
 
+    TimeRuler* ruler_ = nullptr;
     WaveformView* waveform_ = nullptr;
     SpectrogramView* spectrogram_ = nullptr;
     QLabel* status_ = nullptr;
+    QLabel* readout_ = nullptr;
 
     engine::Document document_;
     std::shared_ptr<const io::PeakPyramid> peaks_;

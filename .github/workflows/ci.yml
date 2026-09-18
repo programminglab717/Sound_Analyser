@@ -50,9 +50,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install Ninja
+      # Qt on Linux only. Windows deliberately builds without it, which keeps
+      # the "sa-ui is optional" path honest: if the skip-when-absent branch in
+      # src/sa-ui/CMakeLists.txt ever breaks, this matrix catches it.
+      - name: Install Ninja and Qt
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y ninja-build
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build qt6-base-dev libgl1-mesa-dev libglu1-mesa-dev
 
       # Print the toolchain before configuring: when this job broke, the cause
       # was a pinned Visual Studio version the runner image no longer had, and
@@ -72,6 +77,9 @@ jobs:
       - name: Test
         run: ctest --preset ${{ matrix.preset }}
 
+  # Deliberately built without Qt: the sanitisers are here to police this
+  # project's code, and a distribution Qt built without them reports its own
+  # internals as leaks.
   sanitize:
     name: ASan + UBSan
     needs: licences
@@ -90,6 +98,35 @@ jobs:
           ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
 
-  # TODO(Phase 1): once Qt and FFmpeg are linked, add a job that inspects the
-  # built binaries and fails if any LGPL library was linked statically. The
-  # manifest gate above checks the declaration; this would check the reality.
+  # Proves the whole path -- decode, peak pyramid, STFT, pyramid, log axis,
+  # paint -- still produces the right picture. An exit code alone would pass on
+  # a build that draws nothing, so this one reads the pixels back.
+  interface:
+    name: Interface smoke test
+    needs: licences
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Ninja, Qt and a virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build qt6-base-dev libgl1-mesa-dev libglu1-mesa-dev xvfb
+      - name: Configure
+        run: cmake --preset release
+      - name: Build
+        run: cmake --build --preset release --target sound-analyser
+      - name: Render and inspect
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python3 tools/ui_smoke_test.py ./build/release/bin/sound-analyser --keep artefacts/window.png
+      - name: Upload the rendering
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: interface-screenshot
+          path: artefacts/
+          if-no-files-found: ignore
+
+  # TODO(Phase 1): now that Qt is linked, add a job that inspects the built
+  # binaries and fails if any LGPL library was linked statically. The manifest
+  # gate above checks the declaration; this would check the reality.

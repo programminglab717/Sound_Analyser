@@ -1,9 +1,9 @@
 #pragma once
 
 #include <sa/io/PeakPyramid.h>
+#include <sa/ui/ViewGeometry.h>
 
 #include <QWidget>
-
 #include <memory>
 
 namespace sa::ui {
@@ -28,7 +28,9 @@ public:
 
     /// Visible range, in samples.
     void setViewRange(SampleIndex start, SampleCount length);
+
     [[nodiscard]] SampleIndex viewStart() const noexcept { return viewStart_; }
+
     [[nodiscard]] SampleCount viewLength() const noexcept { return viewLength_; }
 
     void zoom(double factor, double anchorFraction);
@@ -38,15 +40,22 @@ public:
 signals:
     void viewRangeChanged(SampleIndex start, SampleCount length);
 
+    /// Time and peak level under the pointer. `seconds` is negative when the
+    /// pointer is outside the plot.
+    void cursorMoved(double seconds, double peakDecibels);
+
 protected:
     void paintEvent(QPaintEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void leaveEvent(QEvent* event) override;
 
 private:
     void clampView();
+    void paintGutter(QPainter& painter);
+    [[nodiscard]] int plotWidth() const noexcept;
 
     std::shared_ptr<const io::PeakPyramid> pyramid_;
     SampleRate rate_{48000.0};

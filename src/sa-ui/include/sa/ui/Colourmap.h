@@ -2,7 +2,6 @@
 
 #include <QColor>
 #include <QRgb>
-
 #include <array>
 #include <cstdint>
 

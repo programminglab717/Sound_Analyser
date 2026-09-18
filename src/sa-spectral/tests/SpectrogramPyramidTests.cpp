@@ -1,6 +1,7 @@
 #include <sa/core/RealtimeGuard.h>
 #include <sa/spectral/SpectrogramPyramid.h>
 
+#include <algorithm>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
@@ -240,4 +241,166 @@ TEST_CASE("render allocates nothing", "[spectral][pyramid][rt]") {
     const rt::AllocationScope scope;
     pyramid.render(0, buffer.frames(), 0, 1080, 1920, tile.data());
     CHECK(scope.count() == 0);
+}
+
+TEST_CASE("Bin-edge render matches the linear render given linear edges",
+          "[spectral][pyramid][render]") {
+    const auto buffer = makeSine(16384, 40.0, 0.8f);
+    const auto pyramid = buildOrFail(buffer);
+
+    constexpr int kRows = 64;
+    constexpr int kColumns = 48;
+    const int bins = pyramid.binCount();
+
+    std::vector<std::uint8_t> viaBins(kRows * kColumns, 0);
+    std::vector<std::uint8_t> viaEdges(kRows * kColumns, 0);
+
+    pyramid.render(0, 16384, 0, kRows, kColumns, viaBins.data());
+
+    std::vector<float> edges(kRows + 1);
+    for (int row = 0; row <= kRows; ++row) {
+        edges[static_cast<std::size_t>(row)] =
+            static_cast<float>(bins) * static_cast<float>(row) / static_cast<float>(kRows);
+    }
+    pyramid.render(0, 16384, edges.data(), kRows, kColumns, viaEdges.data());
+
+    // The two paths round their bin ranges differently -- integer division
+    // against floor/ceil -- so they are allowed to differ by the odd bin at a
+    // boundary, but they must agree on where the energy is.
+    int differing = 0;
+    for (std::size_t i = 0; i < viaBins.size(); ++i) {
+        if (viaBins[i] != viaEdges[i]) {
+            ++differing;
+        }
+    }
+    CHECK(differing < kRows * kColumns / 10);
+}
+
+TEST_CASE("A log frequency axis keeps a low tone visible", "[spectral][pyramid][render]") {
+    // Bin 4 of 1025 sits in the bottom 0.4% of a linear axis: on a 600-row
+    // display it lands in row 2 and is invisible. That is exactly the problem a
+    // log axis exists to solve, so check the same tone lands well up the view.
+    const auto buffer = makeSine(32768, 4.0, 0.9f);
+    const auto pyramid = buildOrFail(buffer);
+
+    constexpr int kRows = 256;
+    constexpr int kColumns = 8;
+    const auto bins = static_cast<float>(pyramid.binCount());
+
+    // Log edges from bin 1 to the top; row 0 is the bottom of the view.
+    std::vector<float> edges(kRows + 1);
+    const float logLow = std::log(1.0f);
+    const float logHigh = std::log(bins);
+    for (int row = 0; row <= kRows; ++row) {
+        const float t = static_cast<float>(row) / static_cast<float>(kRows);
+        edges[static_cast<std::size_t>(row)] = std::exp(logLow + (logHigh - logLow) * t);
+    }
+
+    std::vector<std::uint8_t> tile(kRows * kColumns, 0);
+    pyramid.render(0, 32768, edges.data(), kRows, kColumns, tile.data());
+
+    int loudestRow = 0;
+    std::uint8_t loudest = 0;
+    for (int row = 0; row < kRows; ++row) {
+        const std::uint8_t value = tile[static_cast<std::size_t>(row) * kColumns + 4];
+        if (value > loudest) {
+            loudest = value;
+            loudestRow = row;
+        }
+    }
+
+    CHECK(loudest > 200);
+    // log(4)/log(1025) is about 0.2, so the peak belongs a fifth of the way up.
+    CHECK(loudestRow > kRows / 8);
+    CHECK(loudestRow < kRows / 2);
+}
+
+TEST_CASE("Bin-edge render survives degenerate edges", "[spectral][pyramid][render]") {
+    const auto buffer = makeSine(8192, 20.0);
+    const auto pyramid = buildOrFail(buffer);
+
+    std::vector<std::uint8_t> tile(16 * 8, 7);
+
+    // Null table, zero rows, and edges running off both ends of the spectrum.
+    pyramid.render(0, 8192, nullptr, 16, 8, tile.data());
+    CHECK(tile[0] == 7);
+
+    std::vector<float> edges(17);
+    for (int row = 0; row <= 16; ++row) {
+        edges[static_cast<std::size_t>(row)] =
+            -50.0f + static_cast<float>(row) * static_cast<float>(pyramid.binCount() + 100) / 16.0f;
+    }
+    CHECK_NOTHROW(pyramid.render(0, 8192, edges.data(), 16, 8, tile.data()));
+
+    // Every edge identical: each row is still forced to one bin, never zero.
+    std::fill(edges.begin(), edges.end(), 3.0f);
+    CHECK_NOTHROW(pyramid.render(0, 8192, edges.data(), 16, 8, tile.data()));
+}
+
+TEST_CASE("Bin-edge render does not allocate", "[spectral][pyramid][render][rt]") {
+    if (!rt::checksEnabled()) {
+        SUCCEED("SA_RT_SAFETY_CHECKS is off in this build");
+        return;
+    }
+
+    const auto buffer = makeSine(16384, 30.0);
+    const auto pyramid = buildOrFail(buffer);
+
+    constexpr int kRows = 32;
+    constexpr int kColumns = 32;
+    std::vector<float> edges(kRows + 1);
+    for (int row = 0; row <= kRows; ++row) {
+        edges[static_cast<std::size_t>(row)] =
+            static_cast<float>(pyramid.binCount()) * static_cast<float>(row) / kRows;
+    }
+    std::vector<std::uint8_t> tile(kRows * kColumns);
+
+    const rt::ScopedAudioThread guard;
+    const rt::AllocationScope scope;
+    pyramid.render(0, 16384, edges.data(), kRows, kColumns, tile.data());
+    CHECK(scope.count() == 0);
+}
+
+TEST_CASE("Sub-bin rows interpolate instead of stepping", "[spectral][pyramid][render]") {
+    // A tone at bin 8 with rows ten times finer than bins. Nearest-bin sampling
+    // would give ten identical rows then a jump; interpolation has to produce a
+    // monotone climb into the peak.
+    const auto buffer = makeSine(16384, 8.0, 0.9f);
+    const auto pyramid = buildOrFail(buffer);
+
+    constexpr int kRows = 60;
+    constexpr int kColumns = 4;
+
+    // Rows spanning bins 5 to 11: 6 bins over 60 rows, so 0.1 bins per row.
+    std::vector<float> edges(kRows + 1);
+    for (int row = 0; row <= kRows; ++row) {
+        edges[static_cast<std::size_t>(row)] =
+            5.0f + 6.0f * static_cast<float>(row) / static_cast<float>(kRows);
+    }
+
+    std::vector<std::uint8_t> tile(kRows * kColumns, 0);
+    pyramid.render(0, 16384, edges.data(), kRows, kColumns, tile.data());
+
+    std::vector<int> profile(kRows);
+    for (int row = 0; row < kRows; ++row) {
+        profile[static_cast<std::size_t>(row)] = tile[static_cast<std::size_t>(row) * kColumns + 2];
+    }
+
+    // Nearest-bin sampling gives at most 7 distinct values across these rows.
+    // Interpolation gives many more; that difference is the whole point.
+    std::vector<int> distinct = profile;
+    std::sort(distinct.begin(), distinct.end());
+    distinct.erase(std::unique(distinct.begin(), distinct.end()), distinct.end());
+    CHECK(distinct.size() > 15);
+
+    // And the climb into bin 8 -- row 30 -- must be monotone, not stepped.
+    const int peakRow = 30;
+    int decreases = 0;
+    for (int row = 6; row < peakRow; ++row) {
+        if (profile[static_cast<std::size_t>(row)] < profile[static_cast<std::size_t>(row) - 1]) {
+            ++decreases;
+        }
+    }
+    CHECK(decreases == 0);
+    CHECK(profile[peakRow] > profile[6]);
 }

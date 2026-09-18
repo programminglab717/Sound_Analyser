@@ -1,16 +1,32 @@
 #include <sa/ui/SpectrogramView.h>
 
+#include <QMouseEvent>
 #include <QPainter>
 #include <QWheelEvent>
-
 #include <algorithm>
 #include <cmath>
 
 namespace sa::ui {
 
+namespace {
+
+constexpr QColor kGutterBackground{0x16, 0x17, 0x1d};
+constexpr QColor kGutterLine{0x4a, 0x4e, 0x5e};
+constexpr QColor kGutterLabel{0xa8, 0xad, 0xbd};
+constexpr QColor kGridLine{0xff, 0xff, 0xff};
+constexpr QColor kEmpty{0x0d, 0x0d, 0x12};
+constexpr QColor kText{0x8a, 0x8f, 0xa0};
+
+} // namespace
+
 SpectrogramView::SpectrogramView(QWidget* parent) : QWidget(parent) {
     setMinimumHeight(140);
+    setMouseTracking(true);
     setAutoFillBackground(false);
+}
+
+int SpectrogramView::plotWidth() const noexcept {
+    return std::max(0, width() - kGutterWidth);
 }
 
 void SpectrogramView::setPyramid(std::shared_ptr<const spectral::SpectrogramPyramid> pyramid,
@@ -44,6 +60,15 @@ void SpectrogramView::setColourmap(Colourmap map) {
     update();
 }
 
+void SpectrogramView::setFrequencyScale(FrequencyScale scale) {
+    if (scale == scale_) {
+        return;
+    }
+    scale_ = scale;
+    imageDirty_ = true;
+    update();
+}
+
 void SpectrogramView::setFloorDecibels(float decibels) {
     floorDb_ = std::clamp(decibels, -160.0f, -6.0f);
     imageDirty_ = true;
@@ -51,20 +76,21 @@ void SpectrogramView::setFloorDecibels(float decibels) {
 }
 
 void SpectrogramView::wheelEvent(QWheelEvent* event) {
-    if (!pyramid_ || viewLength_ <= 0 || width() <= 0) {
+    const int plot = plotWidth();
+    if (!pyramid_ || viewLength_ <= 0 || plot <= 0) {
         return;
     }
     const double steps = event->angleDelta().y() / 120.0;
     if (steps == 0.0) {
         return;
     }
-    const double anchor = event->position().x() / width();
+    const double anchor = std::clamp((event->position().x() - kGutterWidth) / plot, 0.0, 1.0);
     const auto anchorSample =
         viewStart_ + static_cast<SampleIndex>(static_cast<double>(viewLength_) * anchor);
 
     const SampleCount total = pyramid_->sourceFrames();
     auto length = static_cast<SampleCount>(static_cast<double>(viewLength_) * std::pow(0.8, steps));
-    length = std::clamp<SampleCount>(length, std::max<SampleCount>(1, width()), total);
+    length = std::clamp<SampleCount>(length, std::max<SampleCount>(1, plot), total);
     auto start = anchorSample - static_cast<SampleIndex>(static_cast<double>(length) * anchor);
     start = std::clamp<SampleIndex>(start, 0, std::max<SampleIndex>(0, total - length));
 
@@ -73,8 +99,49 @@ void SpectrogramView::wheelEvent(QWheelEvent* event) {
     event->accept();
 }
 
+void SpectrogramView::mouseMoveEvent(QMouseEvent* event) {
+    const int plot = plotWidth();
+    const int x = static_cast<int>(event->position().x()) - kGutterWidth;
+    const int y = static_cast<int>(event->position().y());
+
+    if (!pyramid_ || viewLength_ <= 0 || plot <= 0 || x < 0 || x >= plot || y < 0 ||
+        y >= height()) {
+        emit cursorMoved(0.0, -1.0, 0.0);
+        return;
+    }
+
+    const double seconds =
+        rate_.hz() > 0.0
+            ? static_cast<double>(viewStart_ + static_cast<SampleIndex>(
+                                                   static_cast<double>(viewLength_) * x / plot)) /
+                  rate_.hz()
+            : 0.0;
+
+    const double fraction = 1.0 - static_cast<double>(y) / height();
+    const double nyquist = rate_.hz() * 0.5;
+    const double hz = frequencyAtFraction(scale_, fraction, nyquist);
+
+    // Read the level straight off the rendered tile rather than re-querying the
+    // pyramid: the tile is what the user is looking at, so the number and the
+    // colour under the pointer can never disagree.
+    double decibels = pyramid_->config().minimumDecibels;
+    if (!image_.isNull() && y < static_cast<int>(tile_.size() / std::max(1, plot))) {
+        const int sourceRow = height() - 1 - y;
+        const auto index = static_cast<std::size_t>(sourceRow) * static_cast<std::size_t>(plot) +
+                           static_cast<std::size_t>(x);
+        if (index < tile_.size()) {
+            decibels = pyramid_->toDecibels(tile_[index]);
+        }
+    }
+    emit cursorMoved(seconds, hz, decibels);
+}
+
+void SpectrogramView::leaveEvent(QEvent*) {
+    emit cursorMoved(0.0, -1.0, 0.0);
+}
+
 void SpectrogramView::rebuildImage() {
-    const int w = width();
+    const int w = plotWidth();
     const int h = height();
     if (!pyramid_ || pyramid_->isEmpty() || w <= 0 || h <= 0 || viewLength_ <= 0) {
         image_ = QImage{};
@@ -82,8 +149,21 @@ void SpectrogramView::rebuildImage() {
         return;
     }
 
+    // One edge per row boundary, bottom row first. The pyramid combines
+    // whatever bins fall inside each row by maximum, so a narrow peak survives
+    // the squeeze at the top of a log axis.
+    const auto bins = static_cast<double>(pyramid_->binCount());
+    const double nyquist = rate_.hz() * 0.5;
+    rowBinEdges_.resize(static_cast<std::size_t>(h) + 1);
+    for (int row = 0; row <= h; ++row) {
+        const double fraction = static_cast<double>(row) / h;
+        const double hz = frequencyAtFraction(scale_, fraction, nyquist);
+        const double bin = nyquist > 0.0 ? (hz / nyquist) * (bins - 1.0) : 0.0;
+        rowBinEdges_[static_cast<std::size_t>(row)] = static_cast<float>(bin);
+    }
+
     tile_.resize(static_cast<std::size_t>(w) * static_cast<std::size_t>(h));
-    pyramid_->render(viewStart_, viewStart_ + viewLength_, 0, h, w, tile_.data());
+    pyramid_->render(viewStart_, viewStart_ + viewLength_, rowBinEdges_.data(), h, w, tile_.data());
 
     image_ = QImage{w, h, QImage::Format_RGB32};
     const auto& table = colourmapTable(colourmap_);
@@ -106,8 +186,7 @@ void SpectrogramView::rebuildImage() {
             const std::uint8_t stored =
                 tile_[static_cast<std::size_t>(sourceRow) * static_cast<std::size_t>(w) +
                       static_cast<std::size_t>(x)];
-            const float decibels =
-                pyramidFloor + pyramidSpan * static_cast<float>(stored) / 255.0f;
+            const float decibels = pyramidFloor + pyramidSpan * static_cast<float>(stored) / 255.0f;
             const float normalised =
                 displaySpan > 0.0f ? (decibels - floorDb_) / displaySpan : 0.0f;
             const auto index =
@@ -118,20 +197,63 @@ void SpectrogramView::rebuildImage() {
     imageDirty_ = false;
 }
 
+void SpectrogramView::paintGutter(QPainter& painter) {
+    painter.fillRect(QRect{0, 0, kGutterWidth, height()}, kGutterBackground);
+
+    const double nyquist = rate_.hz() * 0.5;
+    if (nyquist <= 0.0) {
+        return;
+    }
+
+    QFont small = painter.font();
+    small.setPointSizeF(std::max(7.0, small.pointSizeF() - 1.5));
+    painter.setFont(small);
+
+    const int plot = plotWidth();
+    for (const AxisTick& tick : frequencyTicks(scale_, nyquist, height())) {
+        const int y = height() - 1 - static_cast<int>(tick.fraction * (height() - 1));
+
+        painter.setPen(kGutterLine);
+        painter.drawLine(kGutterWidth - (tick.major ? 6 : 3), y, kGutterWidth, y);
+
+        if (tick.major) {
+            // Nudge the first and last labels inwards rather than letting them
+            // hang off the widget and get clipped in half.
+            const int labelY = std::clamp(y - 7, 0, height() - 14);
+            painter.setPen(kGutterLabel);
+            painter.drawText(QRect{0, labelY, kGutterWidth - 8, 14},
+                             Qt::AlignRight | Qt::AlignVCenter, QString::fromStdString(tick.label));
+
+            // A faint line across the plot: without it the eye cannot carry a
+            // frequency from the gutter to a partial halfway across a wide view.
+            if (plot > 0) {
+                QColor grid = kGridLine;
+                grid.setAlpha(18);
+                painter.setPen(grid);
+                painter.drawLine(kGutterWidth, y, width(), y);
+            }
+        }
+    }
+
+    painter.setPen(kGutterLine);
+    painter.drawLine(kGutterWidth, 0, kGutterWidth, height());
+}
+
 void SpectrogramView::paintEvent(QPaintEvent*) {
     QPainter painter(this);
 
-    if (imageDirty_ || image_.width() != width() || image_.height() != height()) {
+    if (imageDirty_ || image_.width() != plotWidth() || image_.height() != height()) {
         rebuildImage();
     }
 
     if (image_.isNull()) {
-        painter.fillRect(rect(), QColor{0x0d, 0x0d, 0x12});
-        painter.setPen(QColor{0x8a, 0x8f, 0xa0});
+        painter.fillRect(rect(), kEmpty);
+        painter.setPen(kText);
         painter.drawText(rect(), Qt::AlignCenter, tr("No audio loaded"));
         return;
     }
-    painter.drawImage(0, 0, image_);
+    painter.drawImage(kGutterWidth, 0, image_);
+    paintGutter(painter);
 }
 
 } // namespace sa::ui

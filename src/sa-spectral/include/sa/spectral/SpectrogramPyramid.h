@@ -74,6 +74,22 @@ public:
     void render(SampleIndex startSample, SampleIndex endSample, int firstBin, int rows, int columns,
                 std::uint8_t* out) const noexcept;
 
+    /// Render a tile onto an arbitrary frequency scale.
+    ///
+    /// `rowBinEdges` holds `rows + 1` bin positions, bottom row first and
+    /// monotonically increasing; row r covers [rowBinEdges[r], rowBinEdges[r+1]).
+    /// Edges are fractional. A row spanning several bins takes their maximum --
+    /// the same combining rule as everywhere else in this class, so a narrow
+    /// peak never disappears. A row narrower than one bin instead interpolates
+    /// between its neighbours, because the alternative is drawing the stretched
+    /// low end of a log axis as a stack of flat blocks.
+    ///
+    /// The caller owns the scale. A linear axis, a log axis and a mel axis are
+    /// all just different edge tables, so the pyramid does not need to know
+    /// which one is on screen.
+    void render(SampleIndex startSample, SampleIndex endSample, const float* rowBinEdges, int rows,
+                int columns, std::uint8_t* out) const noexcept;
+
     /// Pointer to `binCount()` contiguous magnitudes for one frame at `level`,
     /// or nullptr out of range.
     ///
