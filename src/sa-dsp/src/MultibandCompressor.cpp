@@ -127,7 +127,8 @@ void allPass(const Crossover& crossover, AudioBufferView audio) {
 /// crossfades at each end are outside it deliberately: there the gain is partly
 /// the crossfade and partly the compressor, so with any makeup gain at all the
 /// reading would say the band had been reduced by the makeup at the exact
-/// sample where nothing had been done to it.
+/// sample where nothing had been done to it. A region that is all crossfade has
+/// no fully processed sample to read, and reports nothing rather than guessing.
 [[nodiscard]] double peakReductionDb(ConstAudioBufferView before, ConstAudioBufferView after,
                                      SampleCount from, SampleCount to, double makeupGainDb) {
     double peak = 0.0;
@@ -254,16 +255,19 @@ Result<MultibandResult> compressMultiband(AudioBufferView audio, SampleRate rate
             }
         }
 
+        // The split has to happen for every band, soloed or not, because it is
+        // what leaves the bands above this one their audio. Nothing past it
+        // does.
+        const MultibandBandSettings& bandSettings = settings.bands[index];
+        if (anySoloed && !bandSettings.solo) {
+            continue;
+        }
+
         // The compensation: the phase of every crossover above this band, which
         // this band did not otherwise pass through. Without it the bands sum to
         // a scoop at each crossover below the top one.
         for (std::size_t above = index + 1; above < crossoverCount; ++above) {
             allPass(crossovers[above], band.view());
-        }
-
-        const MultibandBandSettings& bandSettings = settings.bands[index];
-        if (anySoloed && !bandSettings.solo) {
-            continue;
         }
 
         if (!bandSettings.bypass) {

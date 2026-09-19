@@ -209,7 +209,9 @@ TEST_CASE("Bypassed bands sum back to the input through one all-pass per crossov
         REQUIRE(result);
         REQUIRE(result.value().gainReductionDb.size() == one.crossovers.size() + 1);
 
-        REQUIRE(worstDifference(audio, reference) < 2e-5);
+        const double residual = worstDifference(audio, reference);
+        CAPTURE(residual);
+        REQUIRE(residual < 2e-5);
     }
 }
 
@@ -325,7 +327,7 @@ TEST_CASE("Raising one band's threshold moves that band and leaves the others wh
     constexpr int kLowBin = 10;    // 29.296875 Hz
     constexpr int kHighBin = 2560; // 7500 Hz exactly
     constexpr double kBinHz = 48000.0 / static_cast<double>(kSize);
-    constexpr double kAmplitude = 0.4;
+    const double kAmplitude = 0.4;
 
     const auto run = [&](double lowThresholdDb) {
         AudioBuffer audio =
@@ -656,7 +658,7 @@ TEST_CASE("Bad compressor settings are refused even on a band that is bypassed")
     REQUIRE_FALSE(compressMultiband(audio.view(), kRate, settings));
 }
 
-TEST_CASE("A run-up or blend that does not fit the buffer is refused") {
+TEST_CASE("A run-up past the end is refused, and an over-long blend is clamped") {
     AudioBuffer audio = noise(4800, 1, 0.5, 1u);
 
     MultibandSettings settings;
@@ -672,6 +674,16 @@ TEST_CASE("A run-up or blend that does not fit the buffer is refused") {
     settings.runUp = 0;
     settings.blend = -1;
     REQUIRE_FALSE(compressMultiband(audio.view(), kRate, settings));
+
+    // A blend longer than the region it has to fit in is the one of the three
+    // that is clamped rather than refused, because that is what compressOffline
+    // does with the same number and two answers to one question would be worse
+    // than either.
+    settings.blend = 100000;
+    REQUIRE(compressMultiband(audio.view(), kRate, settings));
+    for (SampleCount i = 0; i < audio.frames(); ++i) {
+        REQUIRE(std::isfinite(audio.channel(0)[i]));
+    }
 }
 
 TEST_CASE("An unusable sample rate is refused") {
@@ -739,7 +751,7 @@ TEST_CASE("A run-up leaves the compressor already working at the first sample ke
     REQUIRE(coldDb > warmedDb + 3.0);
 }
 
-TEST_CASE("The edges are blended, so a compressed selection does not step") {
+TEST_CASE("The edges of a multiband selection are blended, so the sum does not step") {
     // Applied per band with one curve, which by linearity is the same signal as
     // blending the sum, so the seam is measured on the sum.
     //
@@ -754,7 +766,7 @@ TEST_CASE("The edges are blended, so a compressed selection does not step") {
     constexpr SampleCount kRunUp = 24000 + 17;
     constexpr SampleCount kBody = 24000;
     constexpr SampleCount kBlend = 2400;
-    constexpr double kToneHz = 707.10678;
+    const double kToneHz = 707.10678;
     const std::vector<double> kCrossovers = {50.0, 10000.0};
 
     CompressorSettings compressor;

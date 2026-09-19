@@ -205,9 +205,13 @@ struct MultibandResult {
 /// Fails, without touching the buffer, on a rate that is not an audio rate, a
 /// crossover list that is empty, not strictly increasing, or not strictly
 /// inside (0, Nyquist), a band count that is not one more than the crossover
-/// count, an order that is not a multiple of four in range, a run-up or blend
-/// that does not fit the buffer, or any band's compressor settings being ones
-/// Compressor::create would reject. Every band is validated, bypassed or not.
+/// count, an order that is not a multiple of four in range, a negative run-up
+/// or blend, a run-up past the end of the buffer, or any band's compressor
+/// settings being ones Compressor::create would reject. Every band is
+/// validated, bypassed or not.
+///
+/// A blend longer than the region it has to fit in is clamped rather than
+/// refused, which is what compressOffline does with the same number.
 [[nodiscard]] Result<MultibandResult> compressMultiband(AudioBufferView audio, SampleRate rate,
                                                         const MultibandSettings& settings = {});
 
