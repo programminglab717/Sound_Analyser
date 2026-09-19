@@ -111,6 +111,25 @@ public:
 
     void reset() noexcept;
 
+    /// Clear the measured peaks but keep the interpolator's history.
+    ///
+    /// This is what makes a segmented reading possible -- a per-window true
+    /// peak for a contour, say -- without the seam reset() would leave: reset()
+    /// zeroes the delay line, so the opening samples of the next segment would
+    /// be interpolated against silence and read low, which is the one direction
+    /// a true-peak meter must never err in. Taking the maximum of the segment
+    /// readings therefore gives exactly what an uninterrupted meter would have
+    /// reported over the same audio.
+    ///
+    /// The filter's group delay is (kTapsPerPhase - 1) / 2 input samples, so an
+    /// inter-sample peak within that distance of a segment boundary lands in
+    /// the following segment. Twelve samples is a quarter of a millisecond at
+    /// 48 kHz; it matters for attributing a peak to a window, never for the
+    /// maximum over all of them.
+    ///
+    /// framesProcessed() keeps counting, because the meter has still seen them.
+    void resetPeaks() noexcept;
+
     /// Highest inter-sample magnitude seen on any channel, linear.
     [[nodiscard]] double truePeak() const noexcept;
 

@@ -110,6 +110,30 @@ public:
 
     [[nodiscard]] double shortTermLufs() const noexcept { return shortTermLufs_; }
 
+    /// 100 ms sub-blocks completed so far. The unit the whole measurement
+    /// advances in: every reading above changes only when this does, so a
+    /// caller sampling the meter over time knows from this alone whether it is
+    /// looking at a new value or the previous one again.
+    [[nodiscard]] std::int64_t completedSubBlocks() const noexcept { return completedSubBlocks_; }
+
+    /// Whether momentaryLufs() is a measurement at all.
+    ///
+    /// The reading on its own cannot say. kDecibelFloor means "the last 400 ms
+    /// were silent" once 400 ms exist, and "there is no 400 ms yet" before
+    /// that -- two different facts that a caller plotting or averaging the
+    /// reading must not merge. Nothing in BS.1770 defines a momentary value
+    /// over a partial block, so there is no honest number to report until this
+    /// is true.
+    [[nodiscard]] bool momentaryAvailable() const noexcept {
+        return completedSubBlocks_ >= kSubBlocksPerBlock;
+    }
+
+    /// Whether shortTermLufs() is a measurement at all. Same distinction as
+    /// momentaryAvailable(), over 3 s.
+    [[nodiscard]] bool shortTermAvailable() const noexcept {
+        return completedSubBlocks_ >= kSubBlocksPerShortTerm;
+    }
+
     [[nodiscard]] double maximumMomentaryLufs() const noexcept { return maximumMomentaryLufs_; }
 
     [[nodiscard]] double maximumShortTermLufs() const noexcept { return maximumShortTermLufs_; }

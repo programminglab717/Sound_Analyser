@@ -158,6 +158,10 @@ void TruePeakMeter::reset() noexcept {
     framesProcessed_ = 0;
 }
 
+void TruePeakMeter::resetPeaks() noexcept {
+    std::fill(peaks_.begin(), peaks_.end(), 0.0);
+}
+
 double TruePeakMeter::truePeak() const noexcept {
     double peak = 0.0;
     for (double value : peaks_) {
