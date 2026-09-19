@@ -622,6 +622,91 @@ def main() -> int:
               run("deconvolve", str(workspace / "nope.wav"),
                   str(workspace / "out.wav")).returncode != 0)
 
+        print("tempo:")
+
+        def beat_track(bpm: float, seconds: float, offset: float = 0.0) -> list[float]:
+            """Decaying tone bursts on the beat, with a quieter one between.
+
+            Bursts rather than clicks because a click is a single sample and an
+            onset detector has an easy time of it; a burst with an attack and a
+            decay is closer to a drum and harder.
+            """
+            total = int(SAMPLE_RATE * seconds)
+            out = [0.0] * total
+            beat = 60.0 / bpm
+
+            def burst(at: float, hz: float, amplitude: float) -> None:
+                start = int(at * SAMPLE_RATE)
+                for i in range(int(0.12 * SAMPLE_RATE)):
+                    if start + i >= total:
+                        break
+                    t = i / SAMPLE_RATE
+                    out[start + i] += (amplitude * math.exp(-t / 0.03)
+                                       * math.sin(2.0 * math.pi * hz * t))
+
+            index = 0
+            while offset + index * beat < seconds:
+                burst(offset + index * beat, 160.0, 0.5)
+                if offset + (index + 0.5) * beat < seconds:
+                    burst(offset + (index + 0.5) * beat, 320.0, 0.15)
+                index += 1
+            return out
+
+        for bpm in (90.0, 128.0):
+            track = workspace / f"beat-{int(bpm)}.wav"
+            write_wav(track, beat_track(bpm, 10.0, offset=0.7))
+            result = run("tempo", str(track), "--json")
+            check(f"tempo exits cleanly at {int(bpm)} BPM", result.returncode == 0, result.stderr)
+            if result.returncode != 0:
+                continue
+            report = json.loads(result.stdout)
+            check(f"{int(bpm)} BPM is found", report["valid"] is True, str(report["valid"]))
+            check(f"{int(bpm)} BPM is right to within one",
+                  report["bpm"] is not None and abs(report["bpm"] - bpm) < 1.0,
+                  str(report["bpm"]))
+            check(f"{int(bpm)} BPM is a confident answer",
+                  report["confidence"] > 0.5, str(report["confidence"]))
+
+            # The grid runs one beat before the first onset -- a beat where
+            # nothing was played, which is what makes it a grid rather than a
+            # list of onsets. So beat k lines up with the onset at
+            # 0.7 + (k-1)*60/bpm, and every one has to land within one hop
+            # (256 samples, 5.3 ms) of where it was played.
+            beat = 60.0 / bpm
+            beats = report["beats"]
+            check(f"{int(bpm)} BPM grid starts one beat before the first onset",
+                  abs(beats[0] - (0.7 - beat)) < beat * 0.2, str(beats[0]))
+            worst = 0.0
+            for index, at in enumerate(beats):
+                truth = 0.7 + (index - 1) * beat
+                if 0.7 <= truth < 10.0:
+                    worst = max(worst, abs(at - truth))
+            check(f"{int(bpm)} BPM beats land within one hop of the onsets",
+                  worst < 256.0 / SAMPLE_RATE, f"{worst * SAMPLE_RATE:.0f} samples")
+
+        # A held chord has no tempo. Reporting one would be worse than useless,
+        # and this is not an error -- it is the right answer.
+        chord = workspace / "chord.wav"
+        write_wav(chord, [
+            0.25 * sum(math.sin(2.0 * math.pi * hz * i / SAMPLE_RATE)
+                       for hz in (261.63, 329.63, 392.0)) / 3.0
+            for i in range(SAMPLE_RATE * 6)
+        ])
+        result = run("tempo", str(chord), "--json")
+        check("tempo exits cleanly on a held chord", result.returncode == 0, result.stderr)
+        if result.returncode == 0:
+            check("a held chord has no tempo",
+                  json.loads(result.stdout)["valid"] is False, result.stdout)
+            check("and the plain output says so",
+                  "no tempo found" in run("tempo", str(chord)).stdout)
+
+        check("tempo with no file fails", run("tempo").returncode != 0)
+        check("tempo on a missing file fails",
+              run("tempo", str(workspace / "nope.wav")).returncode != 0)
+        check("tempo with an inverted range fails",
+              run("tempo", str(workspace / "beat-90.wav"),
+                  "--min", "200", "--max", "60").returncode != 0)
+
         print("pitch-of:")
 
         def sawtooth(hz: float, seconds: float) -> list[float]:

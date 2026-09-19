@@ -108,7 +108,28 @@ branch unnoticed.
     nothing rather than a number on noise. Not checked against any published
     implementation or any recorded voice.
 
-    Tempo and beat grid: in progress.
+    Tempo and beat grid: done, as `sa-cli tempo`. Spectral flux for onsets,
+    autocorrelation weighted towards the middle of the requested range to
+    break the octave ambiguity, then a least-squares refit of the grid onto
+    the onsets -- integer-lag autocorrelation alone is accurate to a fraction
+    of a BPM, which over twelve seconds still drifts further than a hop.
+
+    Of 60, 120 and 240 BPM the weighting prefers 120. Stated as a preference
+    rather than a measurement, because that is what it is.
+
+    Material with nothing rhythmic in it is reported as having no tempo. The
+    test for that is onset concentration -- the share of the envelope in its
+    loudest tenth of frames -- which separates rhythmic material at 0.77 and
+    above from held tones and noise at 0.38 and below. An absolute flux floor
+    does not work and was removed rather than left in: a 1024-sample window is
+    too short to separate a low tone from its own negative frequency, so the
+    magnitude spectrum genuinely pulses at the tone's rate, and that pulse is
+    perfectly periodic.
+
+    Thresholds are calibrated on synthetic material only. There is no real
+    music here, and a dense, heavily compressed mix has a less peaky envelope
+    than anything that can be synthesised, so the false-negative risk on real
+    material is unmeasured. §08 asks the owner to try it.
 12. **Forensics.** Done. Lossy-codec cutoff detection and true bit-depth
     detection are in `sa-cli provenance`, and the A/B null test is `sa-cli
     null`: align, gain-match, subtract, and report the residual with a

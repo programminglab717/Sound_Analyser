@@ -20,6 +20,7 @@
 #include <sa/analysis/SignalStatistics.h>
 #include <sa/analysis/StereoField.h>
 #include <sa/analysis/SweepMeasurement.h>
+#include <sa/analysis/TempoTrack.h>
 #include <sa/analysis/TruePeakMeter.h>
 #include <sa/dsp/ChannelOps.h>
 #include <sa/dsp/Declick.h>
@@ -456,6 +457,19 @@ void usage() {
       specifies -- nothing here claims to meet its tolerance masks, and a
       certified measurement needs a bank this does not have.
 
+  tempo <file> [--min <bpm>] [--max <bpm>] [--channel <n>] [--json]
+      Find the tempo and where the beats fall. Reads the first two minutes.
+      --json gives every beat time, which is what a grid is for.
+
+      Reports one tempo and one phase for the whole passage: no tempo curve,
+      no rubato, no metre or downbeat. Material with nothing rhythmic in it is
+      reported as having no tempo rather than given a number, and that is not
+      an error.
+
+      Of 60, 120 and 240 BPM the weighting prefers 120 -- the ambiguity is
+      real and something has to break it. Narrow --min and --max if you know
+      roughly where the answer should be.
+
   pitch-of <file> [--min <hz>] [--max <hz>] [--threshold <t>] [--channel <n>]
         [--csv | --json]
       Track the fundamental over time, by YIN. Prints the median of the voiced
@@ -889,6 +903,74 @@ int room(const Options& options) {
     if (asJson) {
         std::printf("  ]\n}\n");
     }
+    return 0;
+}
+
+int tempo(const Options& options) {
+    if (options.positional.size() != 2) {
+        return fail("tempo needs one file");
+    }
+    std::string error;
+    const auto source = open(options.positional[1], error);
+    if (!source) {
+        return fail(error);
+    }
+    const sa::io::AudioFileInfo& info = source->info();
+
+    // Two minutes is more than enough to settle a tempo and bounds what a long
+    // file costs. From the start, for the same reason `key` reads from the
+    // start: choosing a "representative" stretch would be a guess presented as
+    // an analysis.
+    const auto wanted = static_cast<sa::SampleCount>(
+        std::min<double>(static_cast<double>(info.frameCount), info.sampleRate.hz() * 120.0));
+    sa::AudioBuffer audio{info.layout, wanted};
+    if (const auto read = source->read(0, audio.view()); !read) {
+        return fail(std::string{read.error().what()});
+    }
+
+    sa::analysis::TempoSettings settings;
+    settings.minBpm = options.number("min", settings.minBpm);
+    settings.maxBpm = options.number("max", settings.maxBpm);
+    const auto channel = static_cast<int>(options.number("channel", 0.0));
+
+    const auto grid = sa::analysis::trackTempo(audio.view(), info.sampleRate, settings, channel);
+    if (!grid) {
+        return fail(std::string{grid.error().what()});
+    }
+    const auto& found = grid.value();
+    const auto name = std::filesystem::path{options.positional[1]}.filename().string();
+
+    if (options.has("json")) {
+        std::printf("{\n  \"file\": \"%s\",\n  \"valid\": %s,\n", name.c_str(),
+                    found.valid ? "true" : "false");
+        if (!found.valid) {
+            std::printf("  \"bpm\": null,\n  \"confidence\": %.4f,\n  \"beats\": []\n}\n",
+                        found.confidence);
+            return 0;
+        }
+        std::printf("  \"bpm\": %.3f,\n  \"confidence\": %.4f,\n", found.bpm, found.confidence);
+        std::printf("  \"firstBeatSeconds\": %.4f,\n  \"beats\": [", found.firstBeatSeconds);
+        for (std::size_t i = 0; i < found.beatSeconds.size(); ++i) {
+            std::printf("%s%.4f", i == 0 ? "" : ", ", found.beatSeconds[i]);
+        }
+        std::printf("]\n}\n");
+        return 0;
+    }
+
+    std::printf("%s\n", name.c_str());
+    if (!found.valid) {
+        // Not a failure. A held chord, a field recording or a spoken word file
+        // has no tempo, and saying so is the right answer rather than an error
+        // or a number nobody should use.
+        std::printf("    no tempo found -- nothing in this is rhythmic enough to have one\n");
+        return 0;
+    }
+    std::printf("    tempo      %.2f BPM\n", found.bpm);
+    std::printf("    confidence %.2f\n", found.confidence);
+    std::printf("    first beat %.3f s\n", found.firstBeatSeconds);
+    std::printf("    beats      %zu over %.1f s\n", found.beatSeconds.size(),
+                static_cast<double>(wanted) / info.sampleRate.hz());
+    std::printf("    --json gives every beat time.\n");
     return 0;
 }
 
@@ -2009,6 +2091,9 @@ int main(int argc, char** argv) {
     }
     if (command == "bands") {
         return bands(options);
+    }
+    if (command == "tempo") {
+        return tempo(options);
     }
     if (command == "pitch-of") {
         return pitch_of(options);
