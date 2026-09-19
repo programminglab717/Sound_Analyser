@@ -824,6 +824,62 @@ def main() -> int:
         check("null on a missing file fails",
               run("null", str(reference), str(workspace / "nope.wav")).returncode != 0)
 
+        print("contour:")
+        # Ten seconds at one level then ten exactly 10 dB down. An integrated
+        # figure cannot tell those apart from twenty seconds in between; the
+        # contour is the thing that can.
+        step = workspace / "step.wav"
+        step_samples = []
+        for i in range(SAMPLE_RATE * 20):
+            amplitude = 0.2 if i < SAMPLE_RATE * 10 else 0.2 * (10.0 ** (-10.0 / 20.0))
+            step_samples.append(amplitude * math.sin(2.0 * math.pi * 1000.0 * i / SAMPLE_RATE))
+        write_stereo(step, step_samples, step_samples)
+
+        result = run("contour", str(step), "--json")
+        check("contour exits cleanly", result.returncode == 0, result.stderr)
+        if result.returncode == 0:
+            report = json.loads(result.stdout)
+            # The two short-term extremes are the two levels, so their
+            # difference has to be the step that was built.
+            spread = report["loudestShortTermLufs"] - report["quietestShortTermLufs"]
+            check("the short-term spread is the step that was built",
+                  abs(spread - 10.0) < 0.2, f"{spread:.3f}")
+            check("and the loudness range agrees",
+                  abs(report["loudnessRangeLu"] - 10.0) < 0.5,
+                  str(report["loudnessRangeLu"]))
+
+        result = run("contour", str(step), "--csv")
+        check("contour --csv exits cleanly", result.returncode == 0, result.stderr)
+        if result.returncode == 0:
+            rows = [r.split(",") for r in result.stdout.splitlines() if r.strip()]
+            check("the contour names its columns",
+                  rows[0] == ["seconds", "momentaryLufs", "shortTermLufs", "truePeakDbtp",
+                              "psrDb", "crestDb"], str(rows[0]))
+            at = {r[0]: r for r in rows[1:]}
+            # Before 400 ms there is no momentary window and before 3 s no
+            # short-term one, so those cells are empty rather than zero. A
+            # zero would read as a measurement of digital silence.
+            check("no momentary reading before its window has filled",
+                  at["0.2000"][1] == "", str(at.get("0.2000")))
+            check("no short-term reading before its window has filled",
+                  at["2.0000"][2] == "", str(at.get("2.0000")))
+            check("and both are present once they have",
+                  at["5.0000"][1] != "" and at["5.0000"][2] != "", str(at.get("5.0000")))
+            # A sine's crest factor is 20*log10(sqrt 2) = 3.0103 dB.
+            check("crest factor of a sine is 3.01 dB",
+                  abs(float(at["5.0000"][5]) - 3.0103) < 0.05, at["5.0000"][5])
+            # Momentary reacts in 400 ms and short-term in 3 s, so half a
+            # second after the step the first has moved and the second has not.
+            momentary_after = float(at["10.5000"][1])
+            short_after = float(at["10.5000"][2])
+            check("momentary reacts to a step faster than short-term",
+                  momentary_after < short_after - 5.0,
+                  f"{momentary_after:.2f} vs {short_after:.2f}")
+
+        check("contour with no file fails", run("contour").returncode != 0)
+        check("contour with a nonsense interval is refused",
+              run("contour", str(step), "--interval", "0").returncode != 0)
+
         print("dereverb:")
         # A room of known reverberation, measured before and after. The claim
         # is specific: it attenuates the tail without shortening the room, so

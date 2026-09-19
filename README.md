@@ -104,8 +104,9 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | Pitch and F0 contour | ✅ Done — YIN, monophonic; recovers a known period to 0.5%, and reports nothing rather than guessing on noise |
 | Tempo and beat grid | ✅ Done — onset flux and autocorrelation; recovers a known tempo to within 1 BPM with every beat inside one hop, and reports no tempo rather than a number on material that has none |
 | A/B null test | ✅ Done — aligns, gain-matches, subtracts; finds a 137-sample delay exactly and nulls an exact copy to the float floor |
+| Loudness over time, PLR, PSR, crest | ✅ Done — momentary and short-term contour driven from the same meter, asserted bit-equal to it; a window that has not filled reports nothing rather than a number |
 | Batch report export | ✅ Done — JSON per file, or CSV across a folder |
-| `auscult-cli`: headless batch driver | ✅ Done — twenty-four commands, tested end to end |
+| `auscult-cli`: headless batch driver | ✅ Done — twenty-five commands, tested end to end |
 | Time-stretch and pitch-shift | ✅ Done — phase vocoder with identity phase locking |
 | Markers and regions in the interface | ✅ Done — add, name, navigate, saved in sessions |
 | Reverse, invert polarity, swap channels, sum to mono | ✅ Done — exact to the sample, and obeys the selection |

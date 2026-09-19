@@ -11,6 +11,7 @@
 
 #include <sa/analysis/ComplianceTarget.h>
 #include <sa/analysis/KeyDetect.h>
+#include <sa/analysis/LoudnessContour.h>
 #include <sa/analysis/LoudnessMeter.h>
 #include <sa/analysis/NullTest.h>
 #include <sa/analysis/OctaveBands.h>
@@ -533,6 +534,24 @@ void usage() {
       prints the reference level beside the residual, because a band where the
       reference is silent shows a large positive ratio that means the opposite
       of what it looks like.
+
+  contour <file> [--interval <s>] [--csv | --json]
+      Loudness over time, not just overall. An integrated figure says a master
+      sits at -14 LUFS; the contour says whether it sits there throughout or
+      whether one loud chorus is carrying the average.
+
+      Momentary (400 ms) and short-term (3 s) loudness at each point, with
+      true peak, PSR and crest factor beside them. --csv gives every point.
+
+      A cell is empty rather than zero where a window has not filled: a
+      momentary reading needs 400 ms behind it and a short-term one needs
+      three seconds, and a figure taken over half a window is a different
+      measurement rather than a smaller one.
+
+      PSR and PLR are industry practice rather than standards, and
+      implementations differ over the windows. These use three seconds for
+      both PSR operands. Reproducible here; not comparable with a tool that
+      chose otherwise.
 
   key <file> [--channel <n>] [--json]
       Work out what key the music is in. Folds the spectrum onto the twelve
@@ -1244,6 +1263,92 @@ int nulltest(const Options& options) {
             }
         }
     }
+    return 0;
+}
+
+int contour(const Options& options) {
+    if (options.positional.size() != 2) {
+        return fail("contour needs one file");
+    }
+    std::string error;
+    const auto source = open(options.positional[1], error);
+    if (!source) {
+        return fail(error);
+    }
+    const sa::io::AudioFileInfo& info = source->info();
+
+    sa::AudioBuffer audio{info.layout, info.frameCount};
+    if (const auto read = source->read(0, audio.view()); !read) {
+        return fail(std::string{read.error().what()});
+    }
+
+    const double interval = options.number("interval", 0.1);
+    const auto measured =
+        sa::analysis::measureLoudnessContour(audio.view(), info.sampleRate, info.layout, interval);
+    if (!measured) {
+        return fail(std::string{measured.error().what()});
+    }
+    const auto& contour = measured.value();
+    const auto name = std::filesystem::path{options.positional[1]}.filename().string();
+
+    // An empty cell, not a number, where a window has not filled. A momentary
+    // reading needs 400 ms behind it and a short-term one needs three seconds,
+    // and a figure computed over half a window is not a smaller measurement --
+    // it is a different one, and nothing downstream could tell.
+    const auto cell = [](const std::optional<double>& value) {
+        static char buffer[24];
+        if (!value) {
+            return std::string{};
+        }
+        std::snprintf(buffer, sizeof buffer, "%.2f", *value);
+        return std::string{buffer};
+    };
+
+    if (options.has("csv")) {
+        std::printf("seconds,momentaryLufs,shortTermLufs,truePeakDbtp,psrDb,crestDb\n");
+        for (const auto& point : contour.points) {
+            std::printf("%.4f,%s,%s,%s,%s,%s\n", point.timeSeconds,
+                        cell(point.momentaryLufs).c_str(), cell(point.shortTermLufs).c_str(),
+                        cell(point.truePeakDbtp).c_str(), cell(point.psrDb).c_str(),
+                        cell(point.crestDb).c_str());
+        }
+        return 0;
+    }
+
+    if (options.has("json")) {
+        std::printf("{\n  \"file\": \"%s\",\n  \"integratedLufs\": %.3f,\n", name.c_str(),
+                    contour.integratedLufs);
+        std::printf("  \"loudnessRangeLu\": %.2f,\n  \"truePeakDbtp\": %.3f,\n",
+                    contour.loudnessRangeLu, contour.truePeakDbtp);
+        const auto number = [](const std::optional<double>& value) {
+            static char buffer[24];
+            if (!value) {
+                return std::string{"null"};
+            }
+            std::snprintf(buffer, sizeof buffer, "%.3f", *value);
+            return std::string{buffer};
+        };
+        std::printf("  \"plrDb\": %s,\n  \"quietestShortTermLufs\": %s,\n",
+                    number(contour.plrDb).c_str(), number(contour.quietestShortTermLufs).c_str());
+        std::printf("  \"loudestShortTermLufs\": %s,\n  \"points\": %zu\n}\n",
+                    number(contour.loudestShortTermLufs).c_str(), contour.points.size());
+        return 0;
+    }
+
+    std::printf("%s\n", name.c_str());
+    std::printf("    integrated   %.2f LUFS over %lld gated blocks\n", contour.integratedLufs,
+                static_cast<long long>(contour.gatedBlockCount));
+    std::printf("    range        %.2f LU\n", contour.loudnessRangeLu);
+    std::printf("    true peak    %.2f dBTP\n", contour.truePeakDbtp);
+    if (contour.plrDb) {
+        std::printf("    PLR          %.2f dB above the integrated loudness\n", *contour.plrDb);
+    }
+    if (contour.quietestShortTermLufs && contour.loudestShortTermLufs) {
+        std::printf("    short term   %.2f to %.2f LUFS\n", *contour.quietestShortTermLufs,
+                    *contour.loudestShortTermLufs);
+    }
+    std::printf("    %zu points at %.3f s. --csv gives the whole contour.\n", contour.points.size(),
+                contour.intervalSeconds);
     return 0;
 }
 
@@ -2236,6 +2341,9 @@ int main(int argc, char** argv) {
     }
     if (command == "null") {
         return nulltest(options);
+    }
+    if (command == "contour") {
+        return contour(options);
     }
     if (command == "key") {
         return key(options);
