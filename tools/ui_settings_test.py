@@ -378,6 +378,22 @@ def main() -> int:
         )
         check("and the window says so", ahead.get("settings_writeback") == "0")
 
+        # -- a settings file that cannot be written at all -------------------
+        # The parent is a regular file, so the folder cannot be made and the
+        # settings cannot be saved. That is a real case -- a portable copy
+        # unpacked into Program Files -- and the one thing it must not do is
+        # stop the application from running.
+        impossible = first / "settings.ini"
+        unwritable = run(arguments.binary, impossible, str(first))
+        check("an unwritable settings file does not stop the application", bool(unwritable))
+        check(
+            "and it starts on the defaults",
+            unwritable.get("pref_colourmap") == "magma"
+            and unwritable.get("window_restored") == "0",
+            f"colourmap={unwritable.get('pref_colourmap')}, "
+            f"restored={unwritable.get('window_restored')}",
+        )
+
         # -- portable: a settings file already beside the executable --------
         portable = workspace / "portable"
         portable.mkdir()

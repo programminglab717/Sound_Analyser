@@ -90,13 +90,26 @@ PreferencesDialog::PreferencesDialog(QWidget* parent, const Preferences& prefere
     overlap_ = new QComboBox{this};
     const int overlapNow = preferences.hopSize > 0 ? preferences.fftSize / preferences.hopSize : 4;
     for (const int factor : {2, 4, 8, 16}) {
-        overlap_->addItem(tr("%1x  (hop %2)").arg(factor).arg(preferences.fftSize / factor),
-                          factor);
+        overlap_->addItem(QString::number(factor), factor);
         if (factor == overlapNow) {
             overlap_->setCurrentIndex(overlap_->count() - 1);
         }
     }
     form->addRow(tr("Spectrogram &overlap"), overlap_);
+
+    // The hop each overlap works out to, spelled out beside it, and rewritten
+    // when the window size changes -- otherwise choosing a different window
+    // leaves this row quoting the hops of the old one, which is a row saying
+    // something untrue rather than a row saying nothing.
+    const auto relabelOverlap = [this] {
+        const int window = fftSize_->currentData().toInt();
+        for (int i = 0; i < overlap_->count(); ++i) {
+            const int factor = std::max(1, overlap_->itemData(i).toInt());
+            overlap_->setItemText(i, tr("%1x  (hop %2)").arg(factor).arg(window / factor));
+        }
+    };
+    relabelOverlap();
+    connect(fftSize_, &QComboBox::currentIndexChanged, this, relabelOverlap);
 
     floorDb_ = new QComboBox{this};
     for (const double floorDb : kFloorChoicesDb) {
