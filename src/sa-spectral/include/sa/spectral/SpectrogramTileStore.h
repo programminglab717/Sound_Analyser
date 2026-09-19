@@ -196,12 +196,12 @@ class SpectrogramTileStore {
 public:
     /// Where a cache belongs on this platform.
     ///
-    /// Windows: `%LOCALAPPDATA%\Sound Analyser\spectrogram-tiles`. Local rather
+    /// Windows: `%LOCALAPPDATA%\Auscultate\spectrogram-tiles`. Local rather
     /// than roaming: `%APPDATA%` follows the user between machines on a domain,
     /// and copying a gigabyte of regenerable derived data over the network at
     /// every logon would be a support ticket with our name on it.
     ///
-    /// Elsewhere: `$XDG_CACHE_HOME/sound-analyser/spectrogram-tiles`, or
+    /// Elsewhere: `$XDG_CACHE_HOME/auscultate/spectrogram-tiles`, or
     /// `$HOME/.cache/...` when that is unset, which is what the XDG base
     /// directory specification reserves for regenerable data -- and what tells a
     /// backup tool to skip it.

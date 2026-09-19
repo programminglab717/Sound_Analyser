@@ -1076,12 +1076,12 @@ TEST_CASE("The default cache directory is the one this platform reserves for cac
     const char* cache = std::getenv("XDG_CACHE_HOME");
     const char* home = std::getenv("HOME");
     if (cache != nullptr && *cache != '\0') {
-        REQUIRE(directory == std::filesystem::path{cache} / "sound-analyser" / "spectrogram-tiles");
+        REQUIRE(directory == std::filesystem::path{cache} / "auscultate" / "spectrogram-tiles");
     } else if (home != nullptr && *home != '\0') {
         REQUIRE(directory ==
-                std::filesystem::path{home} / ".cache" / "sound-analyser" / "spectrogram-tiles");
+                std::filesystem::path{home} / ".cache" / "auscultate" / "spectrogram-tiles");
     } else {
-        REQUIRE(directory.parent_path().filename() == "sound-analyser");
+        REQUIRE(directory.parent_path().filename() == "auscultate");
     }
 #endif
 }

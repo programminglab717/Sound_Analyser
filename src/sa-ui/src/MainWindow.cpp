@@ -3309,7 +3309,7 @@ bool MainWindow::waitForAnalysis(int timeoutMs) {
             const char* waitingFor = spectrogramBusy_  ? "the spectrogram"
                                      : meters_->busy() ? "the meters"
                                                        : "the musical analysis";
-            std::fprintf(stderr, "sound-analyser: gave up waiting for %s after %d ms\n", waitingFor,
+            std::fprintf(stderr, "auscultate: gave up waiting for %s after %d ms\n", waitingFor,
                          timeoutMs);
             return false;
         }

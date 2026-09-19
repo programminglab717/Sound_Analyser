@@ -52,6 +52,33 @@ struct KeySettings {
 };
 
 struct KeyEstimate {
+    /// Below this contrast there is no key in the material to find, and the
+    /// best-fitting profile is fitting noise. Naming one anyway -- even beside
+    /// a warning -- leaves a key on screen for someone to read off in a hurry.
+    static constexpr double kKeylessContrast = 0.15;
+
+    /// Below this strength the answer should not be named either. Strength is
+    /// fit scaled by contrast, so keyless material cannot exceed its own
+    /// contrast whatever it scores on fit; refusing a little above the floor
+    /// keeps the refusal off a single decimal place.
+    static constexpr double kRefuseBelowStrength = 0.20;
+
+    /// Above this, the key is worth stating plainly. Between this and
+    /// kRefuseBelowStrength it should be named but qualified.
+    static constexpr double kFirmStrength = 0.50;
+
+    /// Beyond this much detuning the chroma was smeared before any profile saw
+    /// it, so the answer is worth less however well it fits.
+    static constexpr double kFarFromConcertPitchCents = 25.0;
+
+    /// Whether there is a key here worth naming at all. Every caller that
+    /// prints a key name is expected to ask this first: these thresholds used
+    /// to be written out again in each of them, and the window and the command
+    /// line had already drifted into disagreeing about the same recording.
+    [[nodiscard]] constexpr bool worthNaming() const noexcept {
+        return contrast >= kKeylessContrast && strength >= kRefuseBelowStrength;
+    }
+
     /// Pitch class of the tonic: 0 is C, 1 is C sharp, and so on.
     int tonic = 0;
     Mode mode = Mode::Major;

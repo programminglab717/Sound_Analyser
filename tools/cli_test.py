@@ -1014,6 +1014,27 @@ def main() -> int:
                   report["strength"] < 0.15, str(report["strength"]))
             check("and the plain output says why",
                   "no key here to find" in run("key", str(atonal)).stdout)
+            # The window refuses to name a key it cannot support and the
+            # command line used to name one anyway, so the same file could read
+            # "no key" in one and a key name in the other. These check the
+            # refusal itself and not merely the note beside it.
+            check("atonal material is reported as having no key at all",
+                  report["key"] is None, repr(report["key"]))
+            check("and says so as a flag a script can read",
+                  report["worthNaming"] is False, repr(report.get("worthNaming")))
+            check("the plain output names no key either",
+                  "no key" in run("key", str(atonal)).stdout)
+
+        # The refusal has to discriminate: material with a key must still be
+        # named, or the check above would pass on a command that refused
+        # everything.
+        tonal = run("key", str(workspace / "d-major.wav"), "--json")
+        if tonal.returncode == 0:
+            named = json.loads(tonal.stdout)
+            check("material with a key is still named",
+                  named["key"] is not None, repr(named["key"]))
+            check("and is flagged as worth naming",
+                  named["worthNaming"] is True, repr(named.get("worthNaming")))
 
         check("key with no file fails", run("key").returncode != 0)
         check("key on a missing file fails",

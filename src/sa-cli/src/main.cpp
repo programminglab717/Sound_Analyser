@@ -115,7 +115,7 @@ struct Options {
 }
 
 int fail(const std::string& message) {
-    std::fprintf(stderr, "sa-cli: %s\n", message.c_str());
+    std::fprintf(stderr, "auscultate-cli: %s\n", message.c_str());
     return 1;
 }
 
@@ -716,13 +716,13 @@ int analyse(const Options& options) {
         const auto source = open(path, error);
         if (!source) {
             ++failures;
-            std::fprintf(stderr, "sa-cli: %s\n", error.c_str());
+            std::fprintf(stderr, "auscultate-cli: %s\n", error.c_str());
             continue;
         }
         Measurement measurement;
         if (!measure(*source, measurement, error)) {
             ++failures;
-            std::fprintf(stderr, "sa-cli: %s\n", error.c_str());
+            std::fprintf(stderr, "auscultate-cli: %s\n", error.c_str());
             continue;
         }
         if (asCsv) {
@@ -756,9 +756,13 @@ int bands(const Options& options) {
                                            : sa::analysis::BandWidth::ThirdOctave;
 
     // Bounded, like provenance: a band average is a property of the programme
-    // and two minutes characterises it.
-    constexpr sa::SampleCount kMostFrames = 48000 * 120;
-    const sa::SampleCount take = std::min(info.frameCount, kMostFrames);
+    // and two minutes characterises it. Counted from this file's own rate --
+    // a fixed frame count is two minutes only at 48 kHz, and silently half
+    // that at 96 and a quarter at 192, which is not what the comment promises.
+    constexpr double kMostSeconds = 120.0;
+    const sa::SampleCount mostFrames =
+        static_cast<sa::SampleCount>(kMostSeconds * info.sampleRate.hz());
+    const sa::SampleCount take = std::min(info.frameCount, mostFrames);
     sa::AudioBuffer audio{info.layout, take};
     if (const auto read = source->read(0, audio.view()); !read) {
         return fail(std::string{read.error().what()});
@@ -1384,7 +1388,16 @@ int key(const Options& options) {
 
     if (options.has("json")) {
         std::printf("{\n  \"file\": \"%s\",\n", name.c_str());
-        std::printf("  \"key\": \"%s\",\n", sa::analysis::keyName(found).c_str());
+        // Null rather than a name when there is no key to find, and a flag
+        // beside it so a script does not have to re-derive the thresholds. A
+        // name here with a low strength three lines below it is a name that
+        // gets read and a strength that does not.
+        if (found.worthNaming()) {
+            std::printf("  \"key\": \"%s\",\n", sa::analysis::keyName(found).c_str());
+        } else {
+            std::printf("  \"key\": null,\n");
+        }
+        std::printf("  \"worthNaming\": %s,\n", found.worthNaming() ? "true" : "false");
         std::printf("  \"tonic\": \"%.*s\",\n",
                     static_cast<int>(sa::analysis::pitchClassName(found.tonic).size()),
                     sa::analysis::pitchClassName(found.tonic).data());
@@ -1407,6 +1420,21 @@ int key(const Options& options) {
     }
 
     std::printf("%s\n", name.c_str());
+    // The window refuses to name a key it cannot support, and this used to
+    // name one anyway: the same file could read "no key" in one and
+    // "F sharp minor, strength 0.17" in the other. The refusal belongs to the
+    // measurement, not to whichever interface is displaying it.
+    if (!found.worthNaming()) {
+        std::printf("    key        no key\n");
+        std::printf("    strength   %.2f\n", found.strength);
+        std::printf("    contrast   %.2f\n", found.contrast);
+        std::printf("    note       %s\n",
+                    found.contrast < sa::analysis::KeyEstimate::kKeylessContrast
+                        ? "the twelve notes are used near-evenly; there is no key here to find"
+                        : "no key profile fits this well enough to name one");
+        return 0;
+    }
+
     std::printf("    key        %s\n", sa::analysis::keyName(found).c_str());
     std::printf("    strength   %.2f\n", found.strength);
     std::printf("    runner-up  %.*s %s, %.2f behind on fit\n",
@@ -1414,11 +1442,10 @@ int key(const Options& options) {
                 sa::analysis::pitchClassName(found.runnerUpTonic).data(),
                 found.runnerUpMode == sa::analysis::Mode::Major ? "major" : "minor", found.margin);
     std::printf("    tuning     %+.0f cents from A = 440\n", found.tuningOffsetCents);
-    if (found.contrast < 0.15) {
-        std::printf("    note       the twelve notes are used near-evenly; there may be no key "
-                    "here to find\n");
+    if (found.strength < sa::analysis::KeyEstimate::kFirmStrength) {
+        std::printf("    note       a weak fit; worth checking against the music\n");
     }
-    if (std::abs(found.tuningOffsetCents) > 25.0) {
+    if (std::abs(found.tuningOffsetCents) > sa::analysis::KeyEstimate::kFarFromConcertPitchCents) {
         std::printf("    note       far from concert pitch; the answer above is worth less\n");
     }
     return 0;
@@ -1546,7 +1573,7 @@ int provenance(const Options& options) {
         const auto source = open(path, error);
         if (!source) {
             ++failures;
-            std::fprintf(stderr, "sa-cli: %s\n", error.c_str());
+            std::fprintf(stderr, "auscultate-cli: %s\n", error.c_str());
             continue;
         }
         const sa::io::AudioFileInfo& info = source->info();
@@ -1554,12 +1581,15 @@ int provenance(const Options& options) {
         // A fair sample rather than the whole file: what is being looked for is
         // a property of the encode, which is the same everywhere in it. Two
         // minutes is plenty and bounds the memory for a feature-length file.
-        constexpr sa::SampleCount kMostFrames = 48000 * 120;
-        const sa::SampleCount take = std::min(info.frameCount, kMostFrames);
+        // At this file's rate, not at 48 kHz -- see the same bound in `bands`.
+        constexpr double kMostSeconds = 120.0;
+        const sa::SampleCount mostFrames =
+            static_cast<sa::SampleCount>(kMostSeconds * info.sampleRate.hz());
+        const sa::SampleCount take = std::min(info.frameCount, mostFrames);
         sa::AudioBuffer audio{info.layout, take};
         if (const auto read = source->read(0, audio.view()); !read) {
             ++failures;
-            std::fprintf(stderr, "sa-cli: %s\n", std::string{read.error().what()}.c_str());
+            std::fprintf(stderr, "auscultate-cli: %s\n", std::string{read.error().what()}.c_str());
             continue;
         }
 
@@ -1576,7 +1606,7 @@ int provenance(const Options& options) {
         const auto found = sa::analysis::examineProvenance(audio.view(), info.sampleRate, settings);
         if (!found) {
             ++failures;
-            std::fprintf(stderr, "sa-cli: %s\n", std::string{found.error().what()}.c_str());
+            std::fprintf(stderr, "auscultate-cli: %s\n", std::string{found.error().what()}.c_str());
             continue;
         }
         const sa::analysis::Provenance& result = found.value();
@@ -1767,7 +1797,7 @@ int normalise(const Options& options) {
     }
     if (target == nullptr) {
         return fail("unknown target '" + *targetName +
-                    "' -- run sa-cli with no arguments for "
+                    "' -- run auscultate-cli with no arguments for "
                     "the list");
     }
 
@@ -2299,7 +2329,7 @@ int render(const Options& options) {
         return fail(std::string{loaded.error().what()});
     }
     for (const auto& missing : loaded.value().missingSources) {
-        std::fprintf(stderr, "sa-cli: missing source %s (%s) -- its clips will be silent\n",
+        std::fprintf(stderr, "auscultate-cli: missing source %s (%s) -- its clips will be silent\n",
                      missing.path.string().c_str(), missing.reason.c_str());
     }
 

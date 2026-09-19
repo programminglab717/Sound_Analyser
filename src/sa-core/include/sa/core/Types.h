@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-/// Sound Analyser core types.
+/// Auscultate core types.
 ///
 /// Everything here is header-only, allocation-free and safe to use from the
 /// audio thread. See docs/03-architecture.md §3.

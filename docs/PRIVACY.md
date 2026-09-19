@@ -26,21 +26,24 @@ of any audio you open.
 
 ## 3. What stays on your computer
 
-Auscultate writes several things to your own disk. None of it leaves your
-machine, and none of it is visible to us.
+Auscultate writes only what you ask it to write. It keeps no cache, no history,
+no log and no settings file: close it and the only traces of your session are
+the files you saved yourself.
 
 | What | Where | Why |
 | --- | --- | --- |
 | Session files (`.sa`) | Wherever you save them | So a project can be reopened |
 | Exported audio | Wherever you save it | It is the output you asked for |
-| Spectrogram cache | `%LOCALAPPDATA%\Auscultate\spectrogram-tiles` on Windows | So reopening a long file does not re-analyse it |
-| Window size and preferences | The standard per-user settings location for your operating system | So the application opens as you left it |
 
-The spectrogram cache holds analysed *pictures* of audio you have opened, not
-the audio itself, and it is keyed by a hash of the file and the analysis
-settings. It is bounded in size and evicts what has not been used recently.
-You may delete the whole folder at any time; the application will rebuild what
-it needs.
+That is the complete list, and it is short for a reason worth stating. Every
+analysis this product performs -- the spectrogram, the loudness measurement, the
+key, the tempo -- is done in memory and discarded when you close the file. A
+long recording is therefore analysed again each time you open it, which costs
+you a little time and means nothing about what you have been listening to is
+left behind on the disk.
+
+If a future version adds a cache or remembers your preferences, this section
+will say so before that version ships, and will name the exact location.
 
 ## 4. What we share
 

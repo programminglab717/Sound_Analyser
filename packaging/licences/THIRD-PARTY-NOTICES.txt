@@ -1,0 +1,97 @@
+THIRD-PARTY NOTICES
+Auscultate -- Developed by Delta Creation Co.
+
+
+Auscultate is built on other people's work. This file lists it, says what each
+piece is licensed under, and sets out what those licences entitle you to. The
+full text of every licence named here is in this same folder.
+
+
+-------------------------------------------------------------------------------
+Qt 6.8.1 (qtbase)
+GNU Lesser General Public License, version 3
+Full text: LGPL-3.0.txt, and GPL-3.0.txt which it extends
+-------------------------------------------------------------------------------
+
+Auscultate uses the Qt framework to draw its interface. Qt is not ours, it is
+not part of this product, and it remains under its own licence.
+
+Qt is shipped as separate dynamic-link libraries -- Qt6Core.dll, Qt6Gui.dll,
+Qt6Widgets.dll and the files under platforms\ -- and not compiled into
+auscultate.exe. That is a requirement of the LGPL and not a packaging
+preference. It has a practical consequence you are entitled to rely on:
+
+    You may replace the Qt libraries in this folder with your own build of
+    Qt, of the same major version, and run Auscultate against it.
+
+You are also entitled to reverse engineer Auscultate for the purpose of
+debugging modifications you make to Qt. The licence agreement for this product
+says so explicitly, because a blanket prohibition on reverse engineering would
+contradict this paragraph, and this paragraph wins.
+
+The source code for Qt is published by The Qt Company at:
+
+    https://download.qt.io/archive/qt/6.8/6.8.1/submodules/
+
+If that address has moved or you would rather have it from us, write to the
+address in the licence agreement and we will send you the source for the exact
+version shipped here, on a physical medium if you prefer, for no more than the
+cost of the medium and postage.
+
+
+-------------------------------------------------------------------------------
+ALSA (alsa-lib)
+GNU Lesser General Public License, version 2.1
+Full text: LGPL-2.1.txt
+-------------------------------------------------------------------------------
+
+Used for audio output on Linux, dynamically linked, on the same terms as Qt
+above: you may replace it, and you may reverse engineer this product to debug
+your modifications to it.
+
+Not present in the Windows package, which uses WASAPI instead. It is listed
+because the same source builds both.
+
+
+-------------------------------------------------------------------------------
+nlohmann/json
+MIT License
+Full text: nlohmann_json-MIT.txt
+-------------------------------------------------------------------------------
+
+A header-only JSON library, used for reading and writing session files. The MIT
+licence requires its copyright notice to travel with the software, which is what
+the accompanying file is for.
+
+
+-------------------------------------------------------------------------------
+dr_flac, dr_mp3 (dr_libs)
+Public domain (Unlicense), or MIT-0 at your option
+Full text: dr_libs.txt
+-------------------------------------------------------------------------------
+
+Single-file decoders for FLAC and MP3 audio, compiled into the application.
+These impose no conditions at all; they are listed for completeness and because
+a list that omits what costs nothing is not a list you can check.
+
+
+-------------------------------------------------------------------------------
+Catch2
+Boost Software License 1.0
+-------------------------------------------------------------------------------
+
+The test framework. It is used to build and check this product and is NOT
+distributed with it -- no part of Catch2 is present in these binaries. It is
+named here so that this list matches the project's declared dependencies
+exactly, rather than matching them except where it would be inconvenient.
+
+
+-------------------------------------------------------------------------------
+AUSCULTATE ITSELF
+-------------------------------------------------------------------------------
+
+Auscultate is not open source and is licensed to you under the terms in
+EULA.txt, which is the document that governs your use of this product.
+Nothing in this file grants you rights over Auscultate's own code. Equally,
+nothing in the licence agreement takes away the rights the licences above grant
+you over the components they cover.

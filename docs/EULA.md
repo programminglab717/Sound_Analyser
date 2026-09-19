@@ -57,9 +57,13 @@ licences. Those licences govern those components, not this Agreement.
 Qt and ALSA are **dynamically linked and shipped as replaceable libraries**,
 as the LGPL requires. You may replace them with your own compatible versions:
 on Windows the Qt DLLs sit beside the executable and may be substituted
-directly. Full licence texts are distributed with the Software. On request we
-will provide the information needed to relink the Software against a modified
-version of an LGPL component.
+directly. The full text of every licence above is distributed with the
+Software, in the `licences` folder beside the executable, together with a
+notices file identifying each component and where its source may be obtained.
+On request we will provide the information needed to relink the Software
+against a modified version of an LGPL component, and the complete source of
+that component for the exact version shipped, for no more than the cost of
+providing it.
 
 ## 5. Ownership
 

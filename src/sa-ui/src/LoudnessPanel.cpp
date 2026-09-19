@@ -190,7 +190,10 @@ void LoudnessPanel::buildLayout() {
     addRow(tr("Range"), range_);
     addRow(tr("Short term"), shortTerm_);
     addRow(tr("Max short term"), maximumShortTerm_);
-    addRow(tr("Momentary"), momentary_);
+    // "Max momentary", because that is what it holds. Labelled "Momentary" it
+    // reads as the current 400 ms window, which a finished measurement of a
+    // selection does not have and never had.
+    addRow(tr("Max momentary"), momentary_);
 
     addSeparator(tr("PEAK"));
     addRow(tr("True peak"), truePeak_);

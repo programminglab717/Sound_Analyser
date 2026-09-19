@@ -478,16 +478,16 @@ std::filesystem::path SpectrogramTileStore::defaultDirectory() {
     }
 #else
     if (const char* cache = std::getenv("XDG_CACHE_HOME"); cache != nullptr && *cache != '\0') {
-        return std::filesystem::path{cache} / "sound-analyser" / "spectrogram-tiles";
+        return std::filesystem::path{cache} / "auscultate" / "spectrogram-tiles";
     }
     if (const char* home = std::getenv("HOME"); home != nullptr && *home != '\0') {
-        return std::filesystem::path{home} / ".cache" / "sound-analyser" / "spectrogram-tiles";
+        return std::filesystem::path{home} / ".cache" / "auscultate" / "spectrogram-tiles";
     }
 #endif
     std::error_code code;
     const std::filesystem::path temporary = std::filesystem::temp_directory_path(code);
     if (!code && !temporary.empty()) {
-        return temporary / "sound-analyser" / "spectrogram-tiles";
+        return temporary / "auscultate" / "spectrogram-tiles";
     }
     return {};
 }

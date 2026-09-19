@@ -265,6 +265,16 @@ jobs:
           Copy-Item "packaging/windows/Run Auscultate.bat" $stage
           Copy-Item "packaging/windows/README-FIRST.txt" $stage
 
+          # Qt is LGPL-3.0 and ALSA LGPL-2.1, and both oblige us to convey their
+          # licence text with the binaries rather than merely to link
+          # dynamically. The licence agreement states that these are shipped, so
+          # a package without them is both a broken promise and a licence
+          # breach. nlohmann/json's MIT notice has to travel with it too.
+          New-Item -ItemType Directory -Force -Path "$stage/licences" | Out-Null
+          Copy-Item "packaging/licences/*.txt" "$stage/licences"
+          Copy-Item "docs/EULA.md" "$stage/EULA.txt"
+          Copy-Item "docs/PRIVACY.md" "$stage/PRIVACY.txt"
+
       # Qt is LGPL-3.0 and may only ship dynamically linked. windeployqt putting
       # the DLLs beside the executable is what makes that true in the artefact,
       # so their absence is a licence failure and not merely a broken build.
@@ -282,6 +292,16 @@ jobs:
           # machine with Smart App Control on.
           foreach ($aid in @("Run Auscultate.bat", "README-FIRST.txt")) {
             if (-not (Test-Path "$stage/$aid")) { throw "$aid is missing from the package" }
+          }
+          # Shipping Qt's DLLs without Qt's licence satisfies half of the LGPL
+          # and breaches the other half, so this is a build failure and not a
+          # warning.
+          foreach ($text in @("licences/LGPL-3.0.txt", "licences/GPL-3.0.txt",
+                              "licences/THIRD-PARTY-NOTICES.txt",
+                              "licences/nlohmann_json-MIT.txt", "EULA.txt")) {
+            if (-not (Test-Path "$stage/$text")) {
+              throw "$text is missing: the LGPL requires its text to ship with the binaries"
+            }
           }
           Get-ChildItem $stage -Filter "Qt6*.dll" | ForEach-Object { Write-Host $_.Name }
 
