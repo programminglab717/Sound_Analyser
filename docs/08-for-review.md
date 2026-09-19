@@ -17,9 +17,10 @@ run `sound-analyser.exe`. Qt ships beside it, so there is nothing to install.
 It is about 12.6 MB and it is built and tested by the same run that produces it:
 every CI job green -- both MSVC configurations, AddressSanitizer and
 ThreadSanitizer among them -- before the package is uploaded. `sa-cli.exe` is
-in the folder beside it: the headless driver, with fourteen commands: analyse,
-provenance, convert, normalise, denoise, declick, declip, dehum, compress,
-gate, channels, render, stretch and pitch.
+in the folder beside it: the headless driver, with fifteen commands: analyse,
+bands, provenance, convert, normalise, denoise, declick, declip, dehum,
+compress, gate, channels, render, stretch and pitch. `analyse --csv` gives one
+row per file, which is what to point at a folder of deliverables.
 
 Then open something real — a recording of your own, not a test tone — and try:
 
@@ -128,6 +129,14 @@ Not blocked, but a person's judgement would be better than mine.
   stretched to 130%, because a phase vocoder smears transients by construction
   and no number I can produce here says whether that is acceptable or
   embarrassing. Try it on something percussive and tell me.
+- **Where the band display should live.** `sa-cli bands` prints thirty-one
+  third-octaves, or ten octaves with --octave, and nothing in the window
+  shows them. The spectrum panel already has the space and the axis, so bars
+  over the curve is the obvious answer and is probably wrong -- two pictures
+  of the same data fighting for one panel. A tab, a second panel, or a
+  toggle are the other three, and which of them it is depends on how you
+  would use it.
+
 - **Whether `sa-cli provenance` is right about your files.** It reads what
   the audio says about its own history rather than what the header claims:
   how many bits a file really uses out of the depth it declares, which is

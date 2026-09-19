@@ -11,6 +11,7 @@
 
 #include <sa/analysis/ComplianceTarget.h>
 #include <sa/analysis/LoudnessMeter.h>
+#include <sa/analysis/OctaveBands.h>
 #include <sa/analysis/Provenance.h>
 #include <sa/analysis/SignalStatistics.h>
 #include <sa/analysis/StereoField.h>
@@ -326,11 +327,69 @@ void printMeasurement(const std::filesystem::path& path, const sa::io::AudioFile
     }
 }
 
+/// One row per file, for checking a folder of deliverables at once.
+///
+/// A spreadsheet is what someone actually does with twenty files, and neither
+/// of the other two output modes is one: the text form is for reading and the
+/// JSON form is one object per file rather than an array, which is fine for a
+/// pipe and useless for a sort.
+///
+/// Empty cells rather than -200 or 0 where a measurement does not exist, for
+/// the same reason the JSON writes null: a column that mixes real numbers with
+/// sentinel ones is a column nobody can average.
+void printCsvHeader() {
+    std::printf("file,sampleRate,channels,seconds,format,integratedLufs,loudnessRangeLu,"
+                "maxShortTermLufs,maxMomentaryLufs,truePeakDbtp,truePeakExact,samplePeakDbfs,"
+                "rmsDbfs,crestFactorDb,dcOffset,stereoCorrelation,stereoWidthDb,stereoBalanceDb,"
+                "monoLossDb\n");
+}
+
+void printCsvRow(const std::filesystem::path& path, const sa::io::AudioFileInfo& info,
+                 const Measurement& measurement) {
+    // Quoted and with any quote doubled, so a filename with a comma in it does
+    // not silently become two columns.
+    std::string name = path.filename().string();
+    std::string escaped;
+    escaped.reserve(name.size() + 2);
+    for (const char c : name) {
+        if (c == '"') {
+            escaped += '"';
+        }
+        escaped += c;
+    }
+    std::printf("\"%s\",%d,%d,%.6f,%s,", escaped.c_str(), static_cast<int>(info.sampleRate.hz()),
+                info.channelCount(), info.durationSeconds(),
+                std::string{sa::io::toString(info.format)}.c_str());
+
+    if (measurement.loudness.gatedBlockCount > 0) {
+        std::printf("%.3f,%.3f,", measurement.loudness.integratedLufs,
+                    measurement.loudness.loudnessRangeLu);
+    } else {
+        std::printf(",,");
+    }
+    std::printf("%.3f,%.3f,%.3f,%s,%.3f,%.3f,%.3f,%.6f,", measurement.loudness.maximumShortTermLufs,
+                measurement.loudness.maximumMomentaryLufs, measurement.truePeakDbtp,
+                measurement.truePeakIsExact ? "exact" : "estimated",
+                measurement.statistics.samplePeakDbfs, measurement.statistics.rmsDbfs,
+                measurement.statistics.crestFactorDb, measurement.statistics.dcOffset);
+
+    if (measurement.stereo.valid) {
+        std::printf("%.4f,%.3f,%.3f,%.3f\n", measurement.stereo.correlation,
+                    measurement.stereo.widthDb, measurement.stereo.balanceDb,
+                    measurement.stereo.monoLossDb);
+    } else {
+        std::printf(",,,\n");
+    }
+}
+
 void usage() {
     std::printf(R"(sa-cli -- headless driver for Sound Analyser
 
-  analyse <file>... [--json]
-      Measure loudness, peaks and statistics.
+  analyse <file>... [--json | --csv]
+      Measure loudness, peaks and statistics. --csv writes one row per file
+      with a header, for checking a folder of deliverables in a spreadsheet;
+      a measurement that does not exist is an empty cell rather than a
+      sentinel number.
 
   convert <in> <out> [--rate <hz>] [--format 16|24|float] [--dither none|tpdf|shaped]
       Convert sample rate and format. Resampling is the Kaiser-windowed-sinc
@@ -374,6 +433,15 @@ void usage() {
   pitch <in> <out> --semitones <n> [--format 16|24|float]
       Change its pitch without changing how long it lasts. Fractions are
       allowed, and 0.01 of a semitone is a cent.
+
+  bands <file> [--octave] [--json | --csv]
+      Energy in third-octave bands, or in octaves with --octave. The oldest
+      way of describing a spectrum and still the one people talk in.
+
+      Integrated from the transform rather than from a filter bank, which is
+      exact for steady material and cheap, and is not what IEC 61260
+      specifies -- nothing here claims to meet its tolerance masks, and a
+      certified measurement needs a bank this does not have.
 
   provenance <file>... [--json]
       What the audio says about where it came from, as opposed to what its
@@ -467,7 +535,17 @@ int analyse(const Options& options) {
         return fail("analyse needs at least one file");
     }
     const bool asJson = options.has("json");
+    const bool asCsv = options.has("csv");
+    if (asJson && asCsv) {
+        return fail("--json and --csv are two different reports; pick one");
+    }
     int failures = 0;
+
+    if (asCsv) {
+        // Before the first file, so a run that fails on every file still emits
+        // a well-formed empty table rather than nothing.
+        printCsvHeader();
+    }
 
     for (std::size_t i = 1; i < options.positional.size(); ++i) {
         const std::filesystem::path path = options.positional[i];
@@ -484,9 +562,94 @@ int analyse(const Options& options) {
             std::fprintf(stderr, "sa-cli: %s\n", error.c_str());
             continue;
         }
-        printMeasurement(path, source->info(), measurement, asJson);
+        if (asCsv) {
+            printCsvRow(path, source->info(), measurement);
+        } else {
+            printMeasurement(path, source->info(), measurement, asJson);
+        }
     }
     return failures == 0 ? 0 : 1;
+}
+
+int bands(const Options& options) {
+    if (options.positional.size() != 2) {
+        return fail("bands needs one file");
+    }
+    const bool asJson = options.has("json");
+    const bool asCsv = options.has("csv");
+    if (asJson && asCsv) {
+        return fail("--json and --csv are two different reports; pick one");
+    }
+
+    std::string error;
+    const auto source = open(options.positional[1], error);
+    if (!source) {
+        return fail(error);
+    }
+    const sa::io::AudioFileInfo& info = source->info();
+
+    sa::analysis::OctaveBandSettings settings;
+    settings.width = options.has("octave") ? sa::analysis::BandWidth::Octave
+                                           : sa::analysis::BandWidth::ThirdOctave;
+
+    // Bounded, like provenance: a band average is a property of the programme
+    // and two minutes characterises it.
+    constexpr sa::SampleCount kMostFrames = 48000 * 120;
+    const sa::SampleCount take = std::min(info.frameCount, kMostFrames);
+    sa::AudioBuffer audio{info.layout, take};
+    if (const auto read = source->read(0, audio.view()); !read) {
+        return fail(std::string{read.error().what()});
+    }
+
+    const auto measured = sa::analysis::measureBands(audio.view(), info.sampleRate, settings);
+    if (!measured) {
+        return fail(std::string{measured.error().what()});
+    }
+
+    if (asCsv) {
+        std::printf("centreHz,lowHz,highHz,levelDbfs\n");
+        for (const sa::analysis::Band& band : measured.value()) {
+            std::printf("%.1f,%.2f,%.2f,%.2f\n", band.centreHz, band.lowHz, band.highHz,
+                        band.levelDb);
+        }
+        return 0;
+    }
+    if (asJson) {
+        std::printf("{\n  \"file\": \"%s\",\n  \"bands\": [\n",
+                    std::filesystem::path{options.positional[1]}.filename().string().c_str());
+        for (std::size_t i = 0; i < measured.value().size(); ++i) {
+            const sa::analysis::Band& band = measured.value()[i];
+            std::printf("    {\"centreHz\": %.1f, \"lowHz\": %.2f, \"highHz\": %.2f, "
+                        "\"levelDbfs\": %.2f}%s\n",
+                        band.centreHz, band.lowHz, band.highHz, band.levelDb,
+                        i + 1 < measured.value().size() ? "," : "");
+        }
+        std::printf("  ]\n}\n");
+        return 0;
+    }
+
+    std::printf("%s\n", std::filesystem::path{options.positional[1]}.filename().string().c_str());
+    // Loudest band first, so the bars have something to be relative to and a
+    // quiet recording is not drawn as thirty-one empty rows.
+    double loudest = sa::analysis::kDecibelFloor;
+    for (const sa::analysis::Band& band : measured.value()) {
+        loudest = std::max(loudest, band.levelDb);
+    }
+    for (const sa::analysis::Band& band : measured.value()) {
+        // Forty columns over sixty decibels, which is the range a band display
+        // conventionally shows and enough to read a shape off.
+        const double below = loudest - band.levelDb;
+        const int columns =
+            band.levelDb <= sa::analysis::kDecibelFloor
+                ? 0
+                : std::clamp(static_cast<int>(std::lround(40.0 * (1.0 - below / 60.0))), 0, 40);
+        std::printf("  %7.1f Hz %7.1f dB ", band.centreHz, band.levelDb);
+        for (int i = 0; i < columns; ++i) {
+            std::printf("#");
+        }
+        std::printf("\n");
+    }
+    return 0;
 }
 
 int provenance(const Options& options) {
@@ -1188,6 +1351,9 @@ int main(int argc, char** argv) {
     const std::string& command = options.positional.front();
     if (command == "analyse" || command == "analyze") {
         return analyse(options);
+    }
+    if (command == "bands") {
+        return bands(options);
     }
     if (command == "provenance") {
         return provenance(options);

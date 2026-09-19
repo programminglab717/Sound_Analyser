@@ -375,6 +375,71 @@ def main() -> int:
         # Dither through convert, where the CLI can drop bits.
         # Provenance: what the audio says about where it came from, as
         # opposed to what its header claims.
+        # The CSV report, which is what someone actually does with a folder.
+        print("csv report:")
+        result = run("analyse", str(source), str(noise_source), "--csv")
+        check("csv exits cleanly", result.returncode == 0, result.stderr)
+        if result.returncode == 0:
+            rows = [line for line in result.stdout.splitlines() if line.strip()]
+            check("csv has a header and one row per file", len(rows) == 3, f"{len(rows)} lines")
+            if len(rows) == 3:
+                columns = rows[0].split(",")
+                check("csv names its columns", "integratedLufs" in columns and
+                      "monoLossDb" in columns, rows[0])
+                # A mono file has no stereo field, so those cells are empty
+                # rather than zero -- a column mixing real numbers with
+                # sentinels is a column nobody can average.
+                cells = rows[1].split(",")
+                check("csv has the same width on every row",
+                      all(len(row.split(",")) == len(columns) for row in rows),
+                      f"{[len(r.split(',')) for r in rows]}")
+                stereo_at = columns.index("stereoCorrelation")
+                check("csv leaves a missing measurement empty",
+                      cells[stereo_at] == "", f"'{cells[stereo_at]}'")
+                check("csv quotes the filename", cells[0].startswith('"'), cells[0])
+
+        check("csv and json together are refused",
+              run("analyse", str(source), "--csv", "--json").returncode != 0)
+
+        # Third-octave and octave bands.
+        print("bands:")
+        result = run("bands", str(noise_source), "--csv")
+        check("bands exits cleanly", result.returncode == 0, result.stderr)
+        if result.returncode == 0:
+            rows = [line for line in result.stdout.splitlines() if line.strip()]
+            check("thirty-one third-octave bands at 48 kHz", len(rows) == 32, f"{len(rows)} lines")
+            if len(rows) == 32:
+                values = [row.split(",") for row in rows[1:]]
+                centres = [float(v[0]) for v in values]
+                check("the band centres are the standard series",
+                      centres[0] == 20.0 and centres[-1] == 20000.0,
+                      f"{centres[0]} .. {centres[-1]}")
+                # Each band is a third of an octave above the last.
+                ratios = [b / a for a, b in zip(centres, centres[1:])]
+                check("and a third of an octave apart",
+                      all(abs(r - 2 ** (1 / 3)) < 0.03 for r in ratios),
+                      f"{min(ratios):.4f} .. {max(ratios):.4f}")
+                # White noise is flat per hertz, so on a band display it rises
+                # by 10*log10(2^(1/3)) = 1.0 dB a band. That is the difference
+                # between a band picture and an FFT picture, and the check that
+                # says the normalisation is right.
+                levels = [float(v[3]) for v in values]
+                low = levels[centres.index(500.0)]
+                high = levels[centres.index(5000.0)]
+                per_band = (high - low) / 10.0
+                check("white noise rises about 1 dB a band",
+                      abs(per_band - 10.0 * math.log10(2 ** (1 / 3))) < 0.25,
+                      f"{per_band:.2f} dB a band")
+
+        result = run("bands", str(noise_source), "--octave", "--csv")
+        if result.returncode == 0:
+            rows = [line for line in result.stdout.splitlines() if line.strip()]
+            check("ten octave bands", len(rows) == 11, f"{len(rows)} lines")
+
+        check("bands with two report formats is refused",
+              run("bands", str(noise_source), "--json", "--csv").returncode != 0)
+        check("bands with no file fails", run("bands").returncode != 0)
+
         print("provenance:")
         rng = random.Random(11)
         length = 1 << 16
