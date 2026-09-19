@@ -1,6 +1,7 @@
 add_library(sa-spectral STATIC
     src/FrameAnalysis.cpp
     src/Denoise.cpp
+    src/Dereverb.cpp
     src/SpectralEdit.cpp
     src/SpectrogramPyramid.cpp
     src/SpectrogramTileStore.cpp
@@ -15,12 +16,18 @@ target_link_libraries(sa-spectral PRIVATE sa-warnings)
 if(SA_BUILD_TESTS)
     add_executable(sa-spectral-tests
         tests/DenoiseTests.cpp
+        tests/DereverbTests.cpp
         tests/SpectralEditTests.cpp
         tests/SpectrogramPyramidTests.cpp
         tests/SpectrogramTileStoreTests.cpp
         tests/SpectrogramTilesTests.cpp
     )
-    target_link_libraries(sa-spectral-tests PRIVATE sa-spectral sa-warnings Catch2::Catch2WithMain)
+    # sa-analysis is a test-only dependency, and deliberately not one of the
+    # library's. The de-reverb tests measure what they did with the room
+    # acoustics and sweep deconvolution that already live there rather than with
+    # a proxy invented here; the library itself has no business measuring rooms.
+    target_link_libraries(sa-spectral-tests
+        PRIVATE sa-spectral sa-analysis sa-warnings Catch2::Catch2WithMain)
     # The tile store's hashing lives in src/ rather than include/, because
     # nothing outside this library should be hashing anything with it. The tests
     # check it against published vectors, which is the only reason they reach in.
