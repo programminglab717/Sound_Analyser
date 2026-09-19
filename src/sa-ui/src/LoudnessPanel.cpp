@@ -36,7 +36,8 @@ constexpr SampleCount kBlockFrames = 65536;
 /// and a metering panel that needs the programme resident to measure it is a
 /// metering panel that falls over on the files this product exists for.
 [[nodiscard]] bool measureStreaming(const io::AudioSource& source, SampleIndex start,
-                                    SampleCount length, analysis::ProgrammeAnalysis& out) {
+                                    SampleCount length, const CancellationToken& cancellation,
+                                    analysis::ProgrammeAnalysis& out) {
     const io::AudioFileInfo& info = source.info();
     auto loudness = analysis::LoudnessMeter::create(info.sampleRate, info.layout);
     auto peaks = analysis::TruePeakMeter::create(info.channelCount());
@@ -48,6 +49,9 @@ constexpr SampleCount kBlockFrames = 65536;
     AudioBuffer block{info.layout, kBlockFrames};
     SampleCount done = 0;
     while (done < length) {
+        if (cancellation.isCancelled()) {
+            return false;
+        }
         const SampleCount want = std::min<SampleCount>(kBlockFrames, length - done);
         AudioBufferView view = block.view().subRange(0, want);
         const auto read = source.read(start + done, view);
@@ -100,16 +104,29 @@ constexpr SampleCount kBlockFrames = 65536;
 } // namespace
 
 LoudnessPanel::LoudnessPanel(QWidget* parent)
-    : QWidget(parent), generation_(std::make_shared<std::atomic<std::uint64_t>>(0)) {
+    : QWidget(parent), session_(std::make_shared<Session>()) {
+    session_->panel = this;
     buildLayout();
     clear();
 }
 
+void LoudnessPanel::stopWorker() {
+    cancellation_.cancel();
+    if (worker_.joinable()) {
+        worker_.join();
+    }
+    cancellation_.reset();
+}
+
 LoudnessPanel::~LoudnessPanel() {
-    // Bumping the generation is what makes a running worker's result be
-    // discarded. The worker holds the counter by shared_ptr, so it stays alive
-    // to be read even after this panel is gone.
-    generation_->fetch_add(1);
+    // Bumping the generation makes a running worker's result be discarded; the
+    // worker holds the session by shared_ptr, so it stays alive to be read
+    // after this panel is gone. Clearing the pointer under the mutex is what
+    // makes that safe rather than merely likely -- see Session.
+    session_->generation.fetch_add(1);
+    stopWorker();
+    const std::lock_guard<std::mutex> lock{session_->mutex};
+    session_->panel = nullptr;
 }
 
 void LoudnessPanel::buildLayout() {
@@ -217,6 +234,18 @@ void LoudnessPanel::clear() {
     verdict_->clear();
 }
 
+void LoudnessPanel::deliver(const analysis::ProgrammeAnalysis& result, const QString& what,
+                            bool ok) {
+    busy_ = false;
+    if (ok) {
+        show(result, what);
+    } else {
+        clear();
+        heading_->setText(tr("could not measure %1").arg(what));
+    }
+    emit measurementFinished();
+}
+
 void LoudnessPanel::setPending(const QString& what) {
     busy_ = true;
     heading_->setText(tr("measuring %1…").arg(what));
@@ -224,7 +253,11 @@ void LoudnessPanel::setPending(const QString& what) {
 
 void LoudnessPanel::measure(std::shared_ptr<const io::AudioSource> source, SampleIndex start,
                             SampleCount length, const QString& what) {
-    const std::uint64_t mine = generation_->fetch_add(1) + 1;
+    const std::uint64_t mine = session_->generation.fetch_add(1) + 1;
+    // Stop the previous one before starting another. Without this a batch run
+    // of five operations had five measurements of the same document running at
+    // once, four of them already superseded.
+    stopWorker();
 
     if (!source || length <= 0) {
         clear();
@@ -233,34 +266,32 @@ void LoudnessPanel::measure(std::shared_ptr<const io::AudioSource> source, Sampl
     }
     setPending(what);
 
-    // Detached rather than joined: the panel outlives no worker it cares about,
-    // because the generation check makes a late result harmless, and joining in
-    // the destructor would stall the window's close on a long measurement.
-    std::thread{[source = std::move(source), start, length, what, mine, generation = generation_,
-                 this] {
+    worker_ = std::thread{[source = std::move(source), start, length, what, mine,
+                           session = session_, cancellation = &cancellation_] {
         analysis::ProgrammeAnalysis result;
-        const bool ok = measureStreaming(*source, start, length, result);
+        const bool ok = measureStreaming(*source, start, length, *cancellation, result);
 
-        if (generation->load() != mine) {
+        if (session->generation.load() != mine) {
             return;
         }
+        const std::lock_guard<std::mutex> lock{session->mutex};
+        if (session->panel == nullptr || session->generation.load() != mine) {
+            return;
+        }
+        LoudnessPanel* panel = session->panel;
         QMetaObject::invokeMethod(
-            this,
-            [this, result, what, ok, mine, generation] {
-                if (generation->load() != mine) {
+            panel,
+            [panel, result, what, ok, mine, session] {
+                // Back on the main thread. The generation is checked again
+                // because a newer request may have been made while this one
+                // was queued.
+                if (session->generation.load() != mine) {
                     return;
                 }
-                busy_ = false;
-                if (ok) {
-                    show(result, what);
-                } else {
-                    clear();
-                    heading_->setText(tr("could not measure %1").arg(what));
-                }
-                emit measurementFinished();
+                panel->deliver(result, what, ok);
             },
             Qt::QueuedConnection);
-    }}.detach();
+    }};
 }
 
 std::optional<double> LoudnessPanel::conformGainDb() const {
