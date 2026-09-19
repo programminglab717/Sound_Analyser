@@ -457,3 +457,56 @@ TEST_CASE("Random access into a written FLAC lands on the right samples", "[io][
         }
     }
 }
+
+TEST_CASE("A randomised sweep of shapes stays lossless", "[io][flac][writer]") {
+    // The spot checks above cover the cases somebody thought of. This walks a
+    // grid of the things that change which branch of the encoder runs -- how
+    // many channels, how deep, how the length falls against the block size, how
+    // loud, and how many trailing zeroes the samples share -- so that a case
+    // nobody thought of has somewhere to turn up.
+    //
+    // The seed is fixed, so a failure is a thing that can be reproduced rather
+    // than a story about last Tuesday.
+    std::mt19937 generator{20260919u};
+
+    for (int trial = 0; trial < 40; ++trial) {
+        const int channels = 1 + static_cast<int>(generator() % 8u);
+        const int bits = (generator() % 2u) == 0 ? 16 : 24;
+        const auto frames = static_cast<SampleCount>(1 + generator() % 700u);
+        const SampleCount blockFrames = 16 + static_cast<SampleCount>(generator() % 200u);
+        // Level in steps of 6 dB, down to the bottom of the range: quiet
+        // material picks small Rice parameters, loud material picks large ones.
+        const int attenuation = static_cast<int>(generator() % 20u);
+        // Trailing zeroes, which is what wasted-bit coding exists for: a 16-bit
+        // recording stored at 24 bits has eight of them in every sample.
+        const int granularity = static_cast<int>(generator() % 9u);
+
+        const auto scale = static_cast<double>(std::int64_t{1} << (bits - 1));
+        const std::int64_t step = std::int64_t{1} << granularity;
+        std::uniform_real_distribution<double> values{-1.0, 1.0};
+
+        AudioBuffer source{layoutFor(channels), frames};
+        for (int channel = 0; channel < channels; ++channel) {
+            float* samples = source.channel(channel);
+            for (SampleCount i = 0; i < frames; ++i) {
+                const double wanted = std::ldexp(values(generator), -attenuation) * scale;
+                const std::int64_t code = std::clamp(
+                    static_cast<std::int64_t>(std::llround(wanted / static_cast<double>(step))) *
+                        step,
+                    -static_cast<std::int64_t>(scale), static_cast<std::int64_t>(scale) - 1);
+                samples[i] = static_cast<float>(static_cast<double>(code) / scale);
+            }
+        }
+
+        FlacOptions options;
+        options.format = bits == 16 ? SampleFormat::PcmInt16 : SampleFormat::PcmInt24;
+        options.blockFrames = blockFrames;
+
+        const auto bytes =
+            encode(source.constView(), kSampleRate44100, layoutFor(channels), options);
+        INFO("trial " << trial << ": " << channels << " channels, " << bits << " bits, " << frames
+                      << " frames, block " << blockFrames << ", -" << 6 * attenuation
+                      << " dB, step " << step);
+        requireIdentical(decode(bytes, frames, channels, kSampleRate44100), source);
+    }
+}

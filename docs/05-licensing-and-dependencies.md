@@ -141,12 +141,16 @@ to FLAC *decoding*: decoding is a hostile-input problem and a hand-rolled
 entropy decoder is a worse attack surface than a decade-fuzzed one. Encoding has
 no such surface — the input is a buffer this program produced.
 
-**What it costs.** No LPC stage: subframes come from the constant, verbatim and
-four fixed polynomial predictors, with wasted-bit detection, stereo
-decorrelation and a partitioned-Rice search. Output is conformant FLAC and is
-several percent larger than `flac -8` would produce. If that ever matters more
-than the dependency does, libFLAC remains available on these terms and this
-section is the determination it would be adopted under.
+**What it costs.** Compression, by a measurable and small amount. The encoder
+does constant, verbatim, the four fixed polynomial predictors and a
+Levinson-Durbin LPC fit per block, with wasted-bit detection, stereo
+decorrelation and a partitioned-Rice search; what it skips is the exhaustive
+searching a reference encoder does at its highest settings. Measured against
+libFLAC at libsndfile's default level, across tones, harmonic material, pink
+noise, white noise and material 60 dB down, at both 16 and 24 bits, the files
+come out between 0.97x and 1.12x its size. If that ever matters more than the
+dependency does, libFLAC remains available on these terms and this section is
+the determination it would be adopted under.
 
 ---
 

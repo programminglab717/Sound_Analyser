@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <numbers>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -16,9 +17,14 @@
 /// The bitstream this produces is ordinary native FLAC: a `fLaC` signature, a
 /// STREAMINFO block, an optional VORBIS_COMMENT, then frames of subframes.
 /// Every frame is a fixed-size block of samples; each channel becomes one
-/// subframe holding a predictor and Rice-coded residuals; the predictors used
-/// here are the constant, verbatim and four fixed polynomial ones, which are
-/// exact integer operations and therefore lossless by construction.
+/// subframe holding a predictor and Rice-coded residuals.
+///
+/// The predictors are the constant, the verbatim samples, the four fixed
+/// polynomial differences, and a linear predictor fitted to the block. All of
+/// them are exact integer operations at the point of use -- the fitted one is
+/// quantised to integers before a single residual is computed, so the encoder
+/// and the decoder do the same arithmetic on the same numbers and the file is
+/// lossless whether or not the fit was any good. A bad fit costs bytes.
 ///
 /// The header comment on FlacWriter says why this is ours. What follows is the
 /// format detail, which is laid out in the order the bytes come out.
@@ -411,38 +417,36 @@ ResidualPlan planResidual(const std::int32_t* residual, SampleCount count, int o
     return best;
 }
 
-/// Residual of the fixed polynomial predictor of `order` at block index `i`.
-///
-/// These are the binomial differences: order 1 is the first difference, order 2
-/// the second, and so on. They are exact integer operations, which is the whole
-/// reason a FLAC is lossless -- the decoder adds back what was subtracted, with
-/// no rounding anywhere to disagree about.
-std::int64_t fixedResidual(const std::int32_t* samples, SampleCount i, int order) noexcept {
-    const auto at = [samples](SampleCount index) {
-        return static_cast<std::int64_t>(samples[index]);
-    };
-    switch (order) {
-    case 0:
-        return at(i);
-    case 1:
-        return at(i) - at(i - 1);
-    case 2:
-        return at(i) - 2 * at(i - 1) + at(i - 2);
-    case 3:
-        return at(i) - 3 * at(i - 1) + 3 * at(i - 2) - at(i - 3);
-    default:
-        return at(i) - 4 * at(i - 1) + 6 * at(i - 2) - 4 * at(i - 3) + at(i - 4);
-    }
-}
+constexpr int kMaxLpcOrder = 12;
+
+/// A quantised linear predictor, exactly as the subframe will carry it.
+struct LpcPlan {
+    int order = 0;
+    int precision = 0;
+    int shift = 0;
+    std::array<std::int32_t, kMaxLpcOrder> coefficients{};
+};
 
 struct SubframePlan {
-    enum class Kind : std::uint8_t { Constant, Verbatim, Fixed };
+    enum class Kind : std::uint8_t { Constant, Verbatim, Fixed, Lpc };
 
     Kind kind = Kind::Verbatim;
     int order = 0;
     int wastedBits = 0;
+    LpcPlan lpc;
     ResidualPlan residual;
     std::uint64_t bits = 0;
+};
+
+/// Working buffers, owned by the encoder and reused for every subframe.
+///
+/// None of these is sized from the length of the file, and none is allocated
+/// per block: a two-hour export costs the same as a two-second one.
+struct Scratch {
+    std::vector<std::int32_t> samples;  ///< the block with its wasted bits shifted out
+    std::vector<std::int32_t> residual; ///< indexed by block position, valid from `order`
+    std::vector<std::uint64_t> sums;    ///< per-partition sums, folded between levels
+    std::vector<double> windowed;       ///< for the autocorrelation only
 };
 
 /// Trailing zero bits every sample in the block shares.
@@ -467,6 +471,231 @@ int commonWastedBits(const std::int32_t* samples, SampleCount count, int bitsPer
     return std::min(wasted, bitsPerSample - 1);
 }
 
+/// Fill `residual` with the fixed polynomial predictor's output over `samples`.
+///
+/// These are the binomial differences: order 1 is the first difference, order 2
+/// the second, and so on. They are exact integer operations, which is the whole
+/// reason a FLAC is lossless -- the decoder adds back what was subtracted, with
+/// no rounding anywhere to disagree about. A residual is bounded by sixteen
+/// times a sample, which at the depths this writer accepts always fits.
+void fixedResiduals(const std::int32_t* samples, SampleCount count, int order,
+                    std::int32_t* residual) noexcept {
+    const auto at = [samples](SampleCount index) {
+        return static_cast<std::int64_t>(samples[index]);
+    };
+    for (SampleCount i = order; i < count; ++i) {
+        std::int64_t value = 0;
+        switch (order) {
+        case 0:
+            value = at(i);
+            break;
+        case 1:
+            value = at(i) - at(i - 1);
+            break;
+        case 2:
+            value = at(i) - 2 * at(i - 1) + at(i - 2);
+            break;
+        case 3:
+            value = at(i) - 3 * at(i - 1) + 3 * at(i - 2) - at(i - 3);
+            break;
+        default:
+            value = at(i) - 4 * at(i - 1) + 6 * at(i - 2) - 4 * at(i - 3) + at(i - 4);
+            break;
+        }
+        residual[i] = static_cast<std::int32_t>(value);
+    }
+}
+
+/// Residuals of a quantised linear predictor, or false if any will not fit.
+///
+/// The prediction is accumulated in 64 bits and shifted down by the predictor's
+/// own shift, which is exactly what the decoder does -- the format fixes the
+/// arithmetic precisely so that the two cannot disagree, and it is that, not
+/// the quality of the fit, that makes this lossless. A poor fit costs bytes.
+///
+/// The overflow check is not decoration. Nothing bounds a quantised predictor's
+/// output by the signal it was fitted to, and a residual past 32 bits is one
+/// the bitstream cannot carry; the caller falls back to a fixed predictor,
+/// which is bounded by construction.
+bool lpcResiduals(const std::int32_t* samples, SampleCount count, const LpcPlan& lpc,
+                  std::int32_t* residual) noexcept {
+    for (SampleCount i = lpc.order; i < count; ++i) {
+        std::int64_t sum = 0;
+        for (int j = 0; j < lpc.order; ++j) {
+            sum += static_cast<std::int64_t>(lpc.coefficients[static_cast<std::size_t>(j)]) *
+                   static_cast<std::int64_t>(samples[i - 1 - j]);
+        }
+        const std::int64_t value = static_cast<std::int64_t>(samples[i]) - (sum >> lpc.shift);
+        if (value > 1073741823LL || value < -1073741824LL) {
+            return false;
+        }
+        residual[i] = static_cast<std::int32_t>(value);
+    }
+    return true;
+}
+
+/// Coefficient precision for a block of `count` samples.
+///
+/// The coefficients are a fixed cost paid once against however many residuals
+/// they serve, so a short block cannot afford as many bits of them -- and it
+/// has too few samples to have estimated them that finely anyway. Fifteen is
+/// the format's ceiling.
+int coefficientPrecision(SampleCount count, int bitsPerSample) noexcept {
+    int precision = bitsPerSample > 16 ? 15 : 13;
+    if (count < 128) {
+        precision = std::min(precision, 9);
+    } else if (count < 1024) {
+        precision = std::min(precision, 12);
+    }
+    return precision;
+}
+
+/// Quantise real predictor coefficients into the integers the format carries.
+///
+/// The shift is chosen so the largest coefficient just fills the available
+/// precision without reaching past it, which is what keeps the small ones from
+/// being rounded to nothing. One bit too generous and the largest coefficient
+/// saturates instead -- which does not fail, it simply produces a predictor
+/// that predicts nothing, and costs a third of the file rather than any of the
+/// audio. The bound is therefore checked rather than derived and trusted.
+///
+/// The rounding error is carried into the next coefficient rather than dropped:
+/// the coefficients are used as a set, so an error spread across them costs far
+/// less than the same error concentrated in one.
+///
+/// Returns false when there is nothing usable to quantise -- an all-zero
+/// predictor, or one so large that the shift would go negative, which the
+/// format cannot express.
+bool quantiseCoefficients(const double* coefficients, int order, int precision, LpcPlan& out) {
+    double largest = 0.0;
+    for (int i = 0; i < order; ++i) {
+        largest = std::max(largest, std::fabs(coefficients[i]));
+    }
+    if (!(largest > 0.0) || !std::isfinite(largest)) {
+        return false;
+    }
+
+    const auto ceiling = static_cast<double>((std::int32_t{1} << (precision - 1)) - 1);
+    const double floor = -ceiling - 1.0;
+
+    // frexp gives largest = fraction * 2^exponent with the fraction in
+    // [0.5, 1), so scaling by 2^(precision - 1 - exponent) lands it inside the
+    // signed range that `precision` bits hold. Where the fraction is exactly a
+    // half there is a bit left over, and the loop below takes it.
+    int exponent = 0;
+    static_cast<void>(std::frexp(largest, &exponent));
+    int shift = precision - 1 - exponent;
+    while (shift < 15 && largest * std::ldexp(1.0, shift + 1) <= ceiling) {
+        ++shift;
+    }
+    while (shift >= 0 && largest * std::ldexp(1.0, shift) > ceiling) {
+        --shift;
+    }
+    if (shift < 0) {
+        return false; // the shift field is five bits and cannot go negative
+    }
+    shift = std::min(shift, 15);
+
+    double carried = 0.0;
+    for (int i = 0; i < order; ++i) {
+        carried += coefficients[i] * std::ldexp(1.0, shift);
+        const double rounded = std::clamp(std::round(carried), floor, ceiling);
+        out.coefficients[static_cast<std::size_t>(i)] = static_cast<std::int32_t>(rounded);
+        carried -= rounded;
+    }
+
+    out.order = order;
+    out.precision = precision;
+    out.shift = shift;
+    return true;
+}
+
+/// Fit predictors of every order up to `maxOrder` by Levinson-Durbin.
+///
+/// One pass gives the whole family: each order's coefficients and the residual
+/// power it would leave, which is what makes choosing an order cheap. The
+/// autocorrelation is taken over a windowed copy of the block, because an
+/// unwindowed estimate treats the two ends of the block as neighbours and fits
+/// a predictor to a discontinuity that is not in the signal.
+///
+/// Returns the highest order that was computed before the recursion ran out of
+/// signal to explain, which is zero for a block with no energy in it.
+int fitPredictors(const std::int32_t* samples, SampleCount count, int maxOrder,
+                  std::vector<double>& windowed,
+                  std::array<std::array<double, kMaxLpcOrder>, kMaxLpcOrder>& coefficients,
+                  std::array<double, kMaxLpcOrder + 1>& error) {
+    windowed.assign(static_cast<std::size_t>(count), 0.0);
+    const auto span = static_cast<double>(count - 1);
+    for (SampleCount i = 0; i < count; ++i) {
+        // Hann. Any smooth taper does the job; this one is cheap to write down
+        // and is what the estimate wants rather than what the audio wants --
+        // the residual below is computed from the samples themselves.
+        const double phase = span > 0.0 ? static_cast<double>(i) / span : 0.0;
+        const double taper = 0.5 - 0.5 * std::cos(2.0 * std::numbers::pi * phase);
+        windowed[static_cast<std::size_t>(i)] = taper * static_cast<double>(samples[i]);
+    }
+
+    std::array<double, kMaxLpcOrder + 1> correlation{};
+    for (int lag = 0; lag <= maxOrder; ++lag) {
+        double sum = 0.0;
+        for (SampleCount i = lag; i < count; ++i) {
+            sum +=
+                windowed[static_cast<std::size_t>(i)] * windowed[static_cast<std::size_t>(i - lag)];
+        }
+        correlation[static_cast<std::size_t>(lag)] = sum;
+    }
+    if (!(correlation[0] > 0.0)) {
+        return 0;
+    }
+
+    std::array<double, kMaxLpcOrder> current{};
+    double residualPower = correlation[0];
+    error[0] = residualPower;
+
+    for (int order = 1; order <= maxOrder; ++order) {
+        double accumulator = correlation[static_cast<std::size_t>(order)];
+        for (int j = 0; j < order - 1; ++j) {
+            accumulator -= current[static_cast<std::size_t>(j)] *
+                           correlation[static_cast<std::size_t>(order - 1 - j)];
+        }
+        const double reflection = accumulator / residualPower;
+        if (!std::isfinite(reflection)) {
+            return order - 1;
+        }
+
+        std::array<double, kMaxLpcOrder> next{};
+        for (int j = 0; j < order - 1; ++j) {
+            next[static_cast<std::size_t>(j)] =
+                current[static_cast<std::size_t>(j)] -
+                reflection * current[static_cast<std::size_t>(order - 2 - j)];
+        }
+        next[static_cast<std::size_t>(order - 1)] = reflection;
+        current = next;
+
+        coefficients[static_cast<std::size_t>(order - 1)] = current;
+        residualPower *= 1.0 - reflection * reflection;
+        error[static_cast<std::size_t>(order)] = residualPower;
+        if (!(residualPower > 0.0)) {
+            return order;
+        }
+    }
+    return maxOrder;
+}
+
+/// Bits per residual sample a predictor leaving this much error would need.
+///
+/// Rice coding of a Laplacian residual costs about log2 of its scale, so half
+/// the log of the mean square is the estimate -- which is enough to choose an
+/// order with. The chosen order is then coded exactly, so a poor guess here
+/// costs bytes rather than correctness.
+double expectedBitsPerSample(double residualPower, SampleCount count) noexcept {
+    if (!(residualPower > 0.0) || count <= 0) {
+        return 0.0;
+    }
+    const double bits = 0.5 * std::log2(0.5 * residualPower / static_cast<double>(count));
+    return bits > 0.0 ? bits : 0.0;
+}
+
 /// Pick the cheapest coding for one channel of one block.
 ///
 /// Every candidate is costed in bits and the smallest wins. Verbatim is always
@@ -474,7 +703,7 @@ int commonWastedBits(const std::int32_t* samples, SampleCount count, int bitsPer
 /// which matters more than finding the best one, because a suboptimal choice
 /// costs bytes and a wrong one costs the audio.
 SubframePlan planSubframe(const std::int32_t* samples, SampleCount count, int bitsPerSample,
-                          std::vector<std::int32_t>& residual, std::vector<std::uint64_t>& sums) {
+                          Scratch& scratch) {
     SubframePlan plan;
 
     const bool constant = count > 0 && std::all_of(samples, samples + count,
@@ -492,27 +721,27 @@ SubframePlan planSubframe(const std::int32_t* samples, SampleCount count, int bi
     const std::uint64_t headerBits =
         8 + (plan.wastedBits > 0 ? static_cast<std::uint64_t>(plan.wastedBits) : 0u);
 
+    // Everything below works on the block with its wasted bits already shifted
+    // out, so no predictor has to know they exist. Shifting first is exact:
+    // every sample has those bits clear, so differencing then shifting and
+    // shifting then differencing give the same integers.
+    scratch.samples.assign(static_cast<std::size_t>(count), 0);
+    for (SampleCount i = 0; i < count; ++i) {
+        scratch.samples[static_cast<std::size_t>(i)] = samples[i] >> plan.wastedBits;
+    }
+    const std::int32_t* shifted = scratch.samples.data();
+
     plan.kind = SubframePlan::Kind::Verbatim;
     plan.bits =
         headerBits + static_cast<std::uint64_t>(count) * static_cast<std::uint64_t>(effective);
 
-    residual.assign(static_cast<std::size_t>(count), 0);
-    const int maxOrder = static_cast<int>(std::min<SampleCount>(4, count - 1));
-    for (int order = 0; order <= maxOrder; ++order) {
-        bool fits = true;
-        for (SampleCount i = order; i < count; ++i) {
-            const std::int64_t value = fixedResidual(samples, i, order) >> plan.wastedBits;
-            if (value > 2147483647LL || value < -2147483648LL) {
-                fits = false; // unreachable at the depths this writer accepts
-                break;
-            }
-            residual[static_cast<std::size_t>(i)] = static_cast<std::int32_t>(value);
-        }
-        if (!fits) {
-            continue;
-        }
+    scratch.residual.assign(static_cast<std::size_t>(count), 0);
 
-        const ResidualPlan coded = planResidual(residual.data(), count, order, sums);
+    const int maxFixedOrder = static_cast<int>(std::min<SampleCount>(4, count - 1));
+    for (int order = 0; order <= maxFixedOrder; ++order) {
+        fixedResiduals(shifted, count, order, scratch.residual.data());
+        const ResidualPlan coded =
+            planResidual(scratch.residual.data(), count, order, scratch.sums);
         const std::uint64_t bits =
             headerBits + static_cast<std::uint64_t>(order) * static_cast<std::uint64_t>(effective) +
             coded.bits;
@@ -522,6 +751,64 @@ SubframePlan planSubframe(const std::int32_t* samples, SampleCount count, int bi
             plan.residual = coded;
             plan.bits = bits;
         }
+    }
+
+    // A fitted predictor, where there is enough of a block to fit one over. The
+    // fixed predictors above are four particular polynomials; this is the one
+    // that suits this block, and on tonal material at 24 bits the difference is
+    // most of the file.
+    const int maxLpcOrder = static_cast<int>(std::min<SampleCount>(kMaxLpcOrder, (count - 1) / 2));
+    if (maxLpcOrder < 1) {
+        return plan;
+    }
+
+    std::array<std::array<double, kMaxLpcOrder>, kMaxLpcOrder> fitted{};
+    std::array<double, kMaxLpcOrder + 1> error{};
+    const int fittedOrders =
+        fitPredictors(shifted, count, maxLpcOrder, scratch.windowed, fitted, error);
+    if (fittedOrders < 1) {
+        return plan;
+    }
+
+    // Choose an order from the fit's own error rather than by coding each one:
+    // twelve exact codings of a block to save a few bytes on one of them is not
+    // a trade worth making in an offline writer, let alone a streaming one.
+    const int precision = coefficientPrecision(count, effective);
+    int bestOrder = 1;
+    double bestEstimate = 0.0;
+    for (int order = 1; order <= fittedOrders; ++order) {
+        const SampleCount coded = count - order;
+        const double estimate =
+            expectedBitsPerSample(error[static_cast<std::size_t>(order)], coded) *
+                static_cast<double>(coded) +
+            static_cast<double>(order) * static_cast<double>(precision + effective);
+        if (order == 1 || estimate < bestEstimate) {
+            bestOrder = order;
+            bestEstimate = estimate;
+        }
+    }
+
+    LpcPlan lpc;
+    if (!quantiseCoefficients(fitted[static_cast<std::size_t>(bestOrder - 1)].data(), bestOrder,
+                              precision, lpc)) {
+        return plan;
+    }
+    if (!lpcResiduals(shifted, count, lpc, scratch.residual.data())) {
+        return plan;
+    }
+
+    const ResidualPlan coded =
+        planResidual(scratch.residual.data(), count, lpc.order, scratch.sums);
+    const std::uint64_t bits =
+        headerBits + static_cast<std::uint64_t>(lpc.order) * static_cast<std::uint64_t>(effective) +
+        4 + 5 + static_cast<std::uint64_t>(lpc.order) * static_cast<std::uint64_t>(lpc.precision) +
+        coded.bits;
+    if (bits < plan.bits) {
+        plan.kind = SubframePlan::Kind::Lpc;
+        plan.order = lpc.order;
+        plan.lpc = lpc;
+        plan.residual = coded;
+        plan.bits = bits;
     }
 
     return plan;
@@ -557,7 +844,7 @@ void writeResidual(BitWriter& writer, const std::int32_t* residual, SampleCount 
 }
 
 void writeSubframe(BitWriter& writer, const SubframePlan& plan, const std::int32_t* samples,
-                   SampleCount count, int bitsPerSample, std::vector<std::int32_t>& residual) {
+                   SampleCount count, int bitsPerSample, Scratch& scratch) {
     writer.writeBits(0u, 1); // mandatory zero
     switch (plan.kind) {
     case SubframePlan::Kind::Constant:
@@ -568,6 +855,9 @@ void writeSubframe(BitWriter& writer, const SubframePlan& plan, const std::int32
         break;
     case SubframePlan::Kind::Fixed:
         writer.writeBits(0b001000u | static_cast<std::uint32_t>(plan.order), 6);
+        break;
+    case SubframePlan::Kind::Lpc:
+        writer.writeBits(0b100000u | static_cast<std::uint32_t>(plan.order - 1), 6);
         break;
     }
 
@@ -580,30 +870,47 @@ void writeSubframe(BitWriter& writer, const SubframePlan& plan, const std::int32
     }
 
     const int effective = bitsPerSample - plan.wastedBits;
-    const int shift = plan.wastedBits;
 
-    switch (plan.kind) {
-    case SubframePlan::Kind::Constant:
+    if (plan.kind == SubframePlan::Kind::Constant) {
         writer.writeSigned(samples[0], bitsPerSample);
         return;
-    case SubframePlan::Kind::Verbatim:
+    }
+
+    scratch.samples.assign(static_cast<std::size_t>(count), 0);
+    for (SampleCount i = 0; i < count; ++i) {
+        scratch.samples[static_cast<std::size_t>(i)] = samples[i] >> plan.wastedBits;
+    }
+    const std::int32_t* shifted = scratch.samples.data();
+
+    if (plan.kind == SubframePlan::Kind::Verbatim) {
         for (SampleCount i = 0; i < count; ++i) {
-            writer.writeSigned(samples[i] >> shift, effective);
+            writer.writeSigned(shifted[i], effective);
         }
         return;
-    case SubframePlan::Kind::Fixed:
-        break;
     }
 
     for (SampleCount i = 0; i < plan.order; ++i) {
-        writer.writeSigned(samples[i] >> shift, effective);
+        writer.writeSigned(shifted[i], effective);
     }
-    residual.assign(static_cast<std::size_t>(count), 0);
-    for (SampleCount i = plan.order; i < count; ++i) {
-        residual[static_cast<std::size_t>(i)] =
-            static_cast<std::int32_t>(fixedResidual(samples, i, plan.order) >> shift);
+
+    scratch.residual.assign(static_cast<std::size_t>(count), 0);
+    if (plan.kind == SubframePlan::Kind::Fixed) {
+        fixedResiduals(shifted, count, plan.order, scratch.residual.data());
+    } else {
+        writer.writeBits(static_cast<std::uint32_t>(plan.lpc.precision - 1), 4);
+        writer.writeBits(static_cast<std::uint32_t>(plan.lpc.shift), 5);
+        for (int j = 0; j < plan.lpc.order; ++j) {
+            writer.writeSigned(plan.lpc.coefficients[static_cast<std::size_t>(j)],
+                               plan.lpc.precision);
+        }
+        // The plan only reached here because these fitted, so the result is not
+        // in doubt; it is checked rather than assumed because the alternative
+        // to a check is a silent truncation.
+        const bool fitted = lpcResiduals(shifted, count, plan.lpc, scratch.residual.data());
+        static_cast<void>(fitted);
     }
-    writeResidual(writer, residual.data(), count, plan.order, plan.residual);
+
+    writeResidual(writer, scratch.residual.data(), count, plan.order, plan.residual);
 }
 
 // ---------------------------------------------------------------------------
@@ -818,8 +1125,7 @@ struct FlacWriter::Encoder {
     std::vector<std::int32_t> side;
     SampleCount pendingFrames = 0;
 
-    std::vector<std::int32_t> residualScratch;
-    std::vector<std::uint64_t> sumScratch;
+    Scratch scratch;
     std::vector<std::byte> frameScratch;
     std::array<std::byte, 8> interleaveScratch{};
 
@@ -921,14 +1227,10 @@ Status FlacWriter::Encoder::emitBlock() {
             side[static_cast<std::size_t>(i)] = left[i] - right[i];
         }
 
-        const SubframePlan leftPlan =
-            planSubframe(left, count, bitsPerSample, residualScratch, sumScratch);
-        const SubframePlan rightPlan =
-            planSubframe(right, count, bitsPerSample, residualScratch, sumScratch);
-        const SubframePlan midPlan =
-            planSubframe(mid.data(), count, bitsPerSample, residualScratch, sumScratch);
-        const SubframePlan sidePlan =
-            planSubframe(side.data(), count, bitsPerSample + 1, residualScratch, sumScratch);
+        const SubframePlan leftPlan = planSubframe(left, count, bitsPerSample, scratch);
+        const SubframePlan rightPlan = planSubframe(right, count, bitsPerSample, scratch);
+        const SubframePlan midPlan = planSubframe(mid.data(), count, bitsPerSample, scratch);
+        const SubframePlan sidePlan = planSubframe(side.data(), count, bitsPerSample + 1, scratch);
 
         plans = {leftPlan, rightPlan, midPlan, sidePlan};
         const std::uint64_t independent = leftPlan.bits + rightPlan.bits;
@@ -968,7 +1270,7 @@ Status FlacWriter::Encoder::emitBlock() {
     } else {
         for (int channel = 0; channel < channels; ++channel) {
             plans.push_back(planSubframe(pending[static_cast<std::size_t>(channel)].data(), count,
-                                         bitsPerSample, residualScratch, sumScratch));
+                                         bitsPerSample, scratch));
         }
     }
 
@@ -1000,13 +1302,13 @@ Status FlacWriter::Encoder::emitBlock() {
 
     BitWriter body{frameScratch};
     if (channels == 2) {
-        writeSubframe(body, *first, firstSamples, count, firstDepth, residualScratch);
-        writeSubframe(body, *second, secondSamples, count, secondDepth, residualScratch);
+        writeSubframe(body, *first, firstSamples, count, firstDepth, scratch);
+        writeSubframe(body, *second, secondSamples, count, secondDepth, scratch);
     } else {
         for (int channel = 0; channel < channels; ++channel) {
             writeSubframe(body, plans[static_cast<std::size_t>(channel)],
                           pending[static_cast<std::size_t>(channel)].data(), count, bitsPerSample,
-                          residualScratch);
+                          scratch);
         }
     }
     body.alignToByte();

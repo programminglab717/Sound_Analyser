@@ -51,15 +51,20 @@ struct FlacOptions {
 /// tree by an order of magnitude -- next to two single headers that decode
 /// three formats between them.
 ///
-/// What this encoder does **not** do, stated plainly because it shows up as
-/// file size rather than as a failure: there is no LPC stage. Subframes are
-/// chosen from constant, verbatim and the four fixed polynomial predictors,
-/// with wasted-bit detection, stereo decorrelation and a partitioned-Rice
-/// search over the residual. That reaches most of what a general-purpose
-/// encoder reaches -- the fixed predictors are where the bulk of the
-/// redundancy in PCM audio goes -- and gives up the last several percent that
-/// a per-block LPC fit would find. The output is a conformant FLAC stream
-/// either way; it is simply a slightly larger one.
+/// What it does, so that the file size is not a surprise: each channel of each
+/// block is costed as a constant, as verbatim samples, as each of the four
+/// fixed polynomial predictors, and as a linear predictor fitted to that block
+/// by Levinson-Durbin -- with wasted-bit detection, stereo decorrelation and a
+/// partitioned-Rice search over whichever residual wins. Measured against the
+/// reference encoder at its default setting, the files come out within about a
+/// tenth on ordinary material and smaller on some of it.
+///
+/// What it does not do: search exhaustively. The predictor order is chosen from
+/// the fit's own error rather than by coding all twelve, the Rice parameters
+/// come from partition sums rather than an exact count, and there is one
+/// window rather than several. Each of those is worth a few percent to an
+/// encoder whose job is to be run once over an archive, and this one's job is
+/// to keep up with an export.
 ///
 /// Like WavWriter this needs a seekable sink: STREAMINFO carries the stream
 /// length, the frame-size extremes and the MD5 of the audio, none of which is

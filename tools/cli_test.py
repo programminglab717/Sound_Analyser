@@ -1531,6 +1531,29 @@ def main() -> int:
               result.returncode == 0 and plain_output.exists()
               and plain_output.read_bytes()[:4] == b"RIFF", result.stderr)
 
+        # Resampling into a FLAC goes through the streamed sink rather than the
+        # block writer, which is different code. The samples are not the
+        # source's any more, so equality is not available -- what is checked is
+        # that the tone comes out where it went in, and that the signature
+        # covers what the file really decodes to.
+        resampled = workspace / "resampled.flac"
+        result = run("convert", str(source), str(resampled), "--rate", "44100")
+        check("resampling into a FLAC exits cleanly", result.returncode == 0, result.stderr)
+        if resampled.exists():
+            info = flac_stream_info(resampled)
+            check("the resampled FLAC states the new rate", info["rate"] == 44100,
+                  str(info["rate"]))
+            decoded = workspace / "resampled-back.wav"
+            if run("convert", str(resampled), str(decoded)).returncode == 0:
+                values, got_rate = read_wav(decoded)
+                middle = values[44100 : 44100 * 5]
+                check("the tone survives the trip through FLAC",
+                      got_rate == 44100
+                      and abs(tone_amplitude(middle, 1000.0, 44100) - 0.5) < 0.01,
+                      f"{tone_amplitude(middle, 1000.0, 44100):.4f}")
+                check("the resampled FLAC's MD5 covers what it decodes to",
+                      info["md5"] == hashlib.md5(raw_frames(decoded)[0]).hexdigest())
+
         # Upper case, because a file dialog on Windows hands back .FLAC as
         # readily as .flac.
         shouted = workspace / "SHOUTED.FLAC"
