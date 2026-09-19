@@ -4,7 +4,6 @@
 #include <array>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
-#include <chrono>
 #include <cstdint>
 #include <thread>
 
@@ -110,26 +109,41 @@ TEST_CASE("A writer and a reader can run at once", "[engine][preview][slot][thre
     // touches a slot the writer cannot be touching, so there is no race to
     // find. The value checks below are the second line of defence -- a torn
     // read would show up as a payload whose fields disagree.
+    //
+    // The writer's work is a fixed count rather than a wall-clock slice, and
+    // nothing here asserts a rate. This machine shares four cores between four
+    // agents, and a thread can lose most of a timeslice to something else
+    // entirely; an assertion on how many hand-offs fit into 400 ms measures the
+    // load on the box rather than anything about the code. What is asserted
+    // instead is deterministic: the reader keeps going until the writer has
+    // finished and the slot is drained, so the last value published is always
+    // the last value collected, whatever the scheduler did in between.
+    constexpr std::uint64_t kPublishes = 20000;
+
     ParameterSlot<Stamped> slot;
-    std::atomic<bool> running{true};
-    std::atomic<std::uint64_t> published{0};
+    std::atomic<bool> writing{true};
 
     std::thread writer{[&] {
-        std::uint64_t value = 0;
-        while (running.load(std::memory_order_relaxed)) {
-            slot.publish(Stamped::of(++value));
+        for (std::uint64_t value = 1; value <= kPublishes; ++value) {
+            slot.publish(Stamped::of(value));
+            if (value % 256 == 0) {
+                // Yielded now and then so the reader gets turns on a machine
+                // with one core to spare. Yielding on every publish instead
+                // hands the scheduler a decision hundreds of thousands of
+                // times and starves the writer under load.
+                std::this_thread::yield();
+            }
         }
-        published.store(value, std::memory_order_relaxed);
+        writing.store(false, std::memory_order_release);
     }};
 
     std::uint64_t collections = 0;
     std::uint64_t torn = 0;
     std::uint64_t backwards = 0;
     std::uint64_t last = 0;
+    Stamped collected;
 
-    const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(400);
-    while (std::chrono::steady_clock::now() < until) {
-        Stamped collected;
+    while (writing.load(std::memory_order_acquire) || slot.hasFreshValue()) {
         if (!slot.fetch(collected)) {
             continue;
         }
@@ -143,13 +157,16 @@ TEST_CASE("A writer and a reader can run at once", "[engine][preview][slot][thre
         last = collected.value();
     }
 
-    running.store(false, std::memory_order_relaxed);
     writer.join();
 
+    INFO("collected " << collections << " of " << kPublishes << " publishes");
     CHECK(torn == 0);
     // Latest-value semantics: a collected value is never older than the one
     // before it, however many publishes went past uncollected.
     CHECK(backwards == 0);
     CHECK(collections > 0);
-    CHECK(published.load(std::memory_order_relaxed) > 0);
+    // And the newest publish always arrives. Nothing is left stranded in the
+    // slot, which is the property a preview depends on -- the last thing the
+    // user did is the thing they hear.
+    CHECK(last == kPublishes);
 }

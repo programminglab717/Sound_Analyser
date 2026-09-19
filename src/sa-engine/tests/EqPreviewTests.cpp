@@ -509,10 +509,20 @@ TEST_CASE("A block the stage was not prepared for passes through and is counted"
 }
 
 TEST_CASE("Settings and blocks cross threads at once", "[engine][preview][eq][threads]") {
-    // Built for ThreadSanitizer. One thread changes the curve as fast as it
-    // can while another pulls blocks through it; anything shared between them
-    // that is not the slot would be reported here.
+    // Built for ThreadSanitizer. One thread changes the curve while another
+    // pulls blocks through it; anything shared between them that is not the
+    // slot would be reported here.
+    //
+    // The writer's work is a fixed count and nothing asserts a rate. A
+    // wall-clock slice would measure how much of four shared cores this
+    // process happened to get, not the code. What is asserted instead holds
+    // whatever the scheduler did: after the storm the stage is running the
+    // last curve published and nothing else, checked against the offline
+    // render of that curve.
     constexpr SampleCount kBlock = 128;
+    constexpr int kChanges = 2000;
+
+    const std::vector<dsp::EqBand> settled = peaking(1500.0, -7.0, 1.1);
 
     EqPreview preview;
     REQUIRE(preview.prepare(kRate, 2, kBlock).ok());
@@ -520,55 +530,87 @@ TEST_CASE("Settings and blocks cross threads at once", "[engine][preview][eq][th
     preview.setBypassed(false);
 
     const AudioBuffer source = makeNoise(2, kBlock, 0.3f);
-    std::atomic<bool> running{true};
-    std::atomic<std::uint64_t> changes{0};
+    std::atomic<bool> writing{true};
+    std::atomic<int> refusals{0};
 
+    // No Catch2 macro runs on this thread: the assertion state is not thread
+    // safe, so anything worth reporting is counted and checked after the join.
     std::thread writer{[&] {
-        std::uint64_t count = 0;
-        while (running.load(std::memory_order_relaxed)) {
-            const double frequency = 200.0 + static_cast<double>(count % 8000u);
-            const double gain = -18.0 + static_cast<double>(count % 37u);
-            if (preview.setBands(peaking(frequency, gain, 0.7)).ok()) {
-                ++count;
+        for (int i = 1; i <= kChanges; ++i) {
+            const double frequency = 200.0 + static_cast<double>(i % 8000);
+            const double gain = -18.0 + static_cast<double>(i % 37);
+            if (!preview.setBands(peaking(frequency, gain, 0.7)).ok()) {
+                refusals.fetch_add(1, std::memory_order_relaxed);
             }
-            if (count % 64 == 0) {
-                preview.setBypassed((count / 64) % 2 == 0);
+            if (i % 64 == 0) {
+                preview.setBypassed((i / 64) % 2 == 0);
             }
         }
-        changes.store(count, std::memory_order_relaxed);
+        if (!preview.setBands(settled).ok()) {
+            refusals.fetch_add(1, std::memory_order_relaxed);
+        }
+        preview.setBypassed(false);
+        writing.store(false, std::memory_order_release);
     }};
 
     AudioBuffer audio{ChannelLayout::stereo(), kBlock};
     std::uint64_t blocks = 0;
     bool sane = true;
-    {
-        const rt::ScopedAudioThread guard;
-        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
-        while (std::chrono::steady_clock::now() < until) {
-            for (int channel = 0; channel < 2; ++channel) {
-                std::copy_n(source.channel(channel), kBlock, audio.channel(channel));
-            }
-            preview.process(audio.view());
-            for (int channel = 0; channel < 2 && sane; ++channel) {
-                const float* samples = audio.channel(channel);
-                for (SampleCount i = 0; i < kBlock; ++i) {
-                    if (!std::isfinite(samples[i]) || std::abs(samples[i]) > 8.0f) {
-                        sane = false;
-                        break;
-                    }
+
+    const auto pullBlock = [&] {
+        for (int channel = 0; channel < 2; ++channel) {
+            std::copy_n(source.channel(channel), kBlock, audio.channel(channel));
+        }
+        preview.process(audio.view());
+        for (int channel = 0; channel < 2 && sane; ++channel) {
+            const float* samples = audio.channel(channel);
+            for (SampleCount i = 0; i < kBlock; ++i) {
+                if (!std::isfinite(samples[i]) || std::abs(samples[i]) > 8.0f) {
+                    sane = false;
+                    break;
                 }
             }
-            ++blocks;
+        }
+        ++blocks;
+    };
+
+    {
+        const rt::ScopedAudioThread guard;
+        while (writing.load(std::memory_order_acquire)) {
+            pullBlock();
+        }
+        // Long enough to collect the last publish and hear its crossfade out.
+        for (int i = 0; i < 8; ++i) {
+            pullBlock();
         }
     }
 
-    running.store(false, std::memory_order_relaxed);
     writer.join();
 
+    INFO("pulled " << blocks << " blocks against " << kChanges << " curve changes");
     CHECK(sane);
-    CHECK(blocks > 100);
-    CHECK(changes.load(std::memory_order_relaxed) > 100);
+    CHECK(blocks > 0);
+    CHECK(refusals.load(std::memory_order_relaxed) == 0);
     CHECK(preview.refusedBlocks() == 0);
+
+    // Whatever order the two threads ran in, the stage ends on the curve the
+    // writer finished with. Cleared and fed fresh audio it is the offline
+    // render of that curve, sample for sample.
+    constexpr SampleCount kFrames = 4800;
+    const AudioBuffer input = makeNoise(1, kFrames, 0.3f);
+    AudioBuffer stereo{ChannelLayout::stereo(), kFrames};
+    for (int channel = 0; channel < 2; ++channel) {
+        std::copy_n(input.channel(0), kFrames, stereo.channel(channel));
+    }
+
+    preview.reset();
+    processRange(preview, stereo, 0, kFrames, 256);
+
+    const AudioBuffer offline = processOffline(input, settled);
+    for (int channel = 0; channel < 2; ++channel) {
+        INFO("channel " << channel);
+        CHECK(firstDifference(stereo.channel(channel), offline.channel(0), kFrames) == -1);
+    }
 }
 
 TEST_CASE("Resetting clears what was ringing", "[engine][preview][eq]") {
@@ -593,4 +635,64 @@ TEST_CASE("Resetting clears what was ringing", "[engine][preview][eq]") {
         loudest = std::max(loudest, std::abs(silence.channel(0)[i]));
     }
     CHECK(loudest == 0.0f);
+}
+
+TEST_CASE("Resetting part way through a change keeps the change", "[engine][preview][eq]") {
+    constexpr SampleCount kFrames = 4800;
+    const std::vector<dsp::EqBand> before = peaking(500.0, -6.0, 1.0);
+    const std::vector<dsp::EqBand> after = peaking(3000.0, 12.0, 1.5);
+
+    EqPreview preview;
+    REQUIRE(preview.prepare(kRate, 1, 512).ok());
+    REQUIRE(preview.setBands(before).ok());
+    preview.setBypassed(false);
+
+    AudioBuffer warmUp = makeNoise(1, 512, 0.3f);
+    preview.process(warmUp.view());
+
+    // A block shorter than the crossfade, so the change has been collected but
+    // is still only part way in when the seek arrives.
+    REQUIRE(preview.setBands(after).ok());
+    AudioBuffer partial = makeNoise(1, 32, 0.3f);
+    REQUIRE(32 < preview.crossfadeFrames());
+    preview.process(partial.view());
+    REQUIRE(preview.isCrossfading());
+
+    // The seek clears the filters. What it must not do is put the old curve
+    // back: the new one was already taken out of the slot, and nothing would
+    // publish it again.
+    preview.reset();
+    CHECK_FALSE(preview.isCrossfading());
+
+    const AudioBuffer input = makeNoise(1, kFrames, 0.3f);
+    AudioBuffer audio = copyOf(input);
+    processRange(preview, audio, 0, kFrames, 256);
+
+    const AudioBuffer offline = processOffline(input, after);
+    CHECK(firstDifference(audio.channel(0), offline.channel(0), kFrames) == -1);
+}
+
+TEST_CASE("Preparing again discards a curve designed for the old rate", "[engine][preview][eq]") {
+    constexpr SampleCount kFrames = 2048;
+
+    EqPreview preview;
+    REQUIRE(preview.prepare(kSampleRate48000, 1, 512).ok());
+    REQUIRE(preview.setBands(peaking(1000.0, 15.0, 1.0)).ok());
+    preview.setBypassed(false);
+
+    AudioBuffer warmUp = makeNoise(1, 512, 0.3f);
+    preview.process(warmUp.view());
+
+    REQUIRE(preview.prepare(kSampleRate44100, 1, 512).ok());
+    CHECK(preview.sampleRate() == kSampleRate44100);
+    CHECK(preview.isBypassed());
+    CHECK(preview.publishedSettings().sectionCount == 0);
+
+    // Coefficients designed for 48 kHz are a different filter at 44.1 kHz, so
+    // the stage must not still be running them. It comes back bypassed and the
+    // caller has to give it the curve again.
+    const AudioBuffer input = makeNoise(1, kFrames, 0.3f);
+    AudioBuffer audio = copyOf(input);
+    processRange(preview, audio, 0, kFrames, 512);
+    CHECK(firstDifference(audio.channel(0), input.channel(0), kFrames) == -1);
 }

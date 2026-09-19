@@ -192,7 +192,8 @@ public:
             return Error{ErrorCode::InvalidArgument, "sample rate is not a usable audio rate"};
         }
         if (channelCount < 1 || channelCount > kMaxPreviewChannels) {
-            return Error{ErrorCode::InvalidArgument, "preview carries 1 to 8 channels"};
+            return Error{ErrorCode::InvalidArgument,
+                         "channel count is outside what one preview stage carries"};
         }
         if (maxBlockFrames < 1 || maxBlockFrames > kMaxPreviewBlockFrames) {
             return Error{ErrorCode::InvalidArgument, "block size is not a usable callback size"};
@@ -275,10 +276,19 @@ public:
     /// filter state and abandons any crossfade, so what follows depends only on
     /// what comes next -- which is what a seek needs. The settings are kept.
     void reset() noexcept {
+        if (fadeRemaining_ > 0) {
+            // A change already collected is not thrown away. With the state
+            // cleared there is nothing left for a fade to bridge, so the
+            // incoming settings simply become the settings -- abandoning them
+            // would leave the audio thread running a curve the user has
+            // already moved on from, with nothing to publish it again.
+            activeIndex_ = incomingIndex();
+            active_ = target_;
+            fadeRemaining_ = 0;
+        }
         for (Processor& processor : processors_) {
             processor.reset();
         }
-        fadeRemaining_ = 0;
         firstBlock_ = true;
     }
 
@@ -298,11 +308,8 @@ private:
     }
 
     void processPiece(AudioBufferView block) noexcept {
-        if (fadeRemaining_ == 0) {
-            Published incoming;
-            if (slot_.fetch(incoming)) {
-                takeUp(incoming);
-            }
+        if (fadeRemaining_ == 0 && slot_.fetch(collected_)) {
+            takeUp(collected_);
         }
         firstBlock_ = false;
 
@@ -392,6 +399,11 @@ private:
     std::size_t activeIndex_ = 0;
     Published active_{};
     Published target_{};
+
+    /// Where slot_.fetch() puts a collected value. A member rather than a
+    /// local, so that a block with nothing to collect does not pay to
+    /// initialise several hundred bytes it will not read.
+    Published collected_{};
     SampleCount fadeRemaining_ = 0;
     bool firstBlock_ = true;
 
