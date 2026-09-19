@@ -4,6 +4,7 @@ add_library(sa-engine STATIC
     src/Document.cpp
     src/DocumentSource.cpp
     src/Edits.cpp
+    src/EqPreview.cpp
     src/SessionFile.cpp
     src/StreamingConvert.cpp
     src/Timeline.cpp
@@ -22,6 +23,8 @@ if(SA_BUILD_TESTS)
         tests/DocumentSourceTests.cpp
         tests/DocumentTests.cpp
         tests/EditTests.cpp
+        tests/EqPreviewTests.cpp
+        tests/ParameterSlotTests.cpp
         tests/SessionTests.cpp
         tests/StreamingConvertTests.cpp
         tests/UndoTests.cpp
