@@ -92,6 +92,24 @@ public:
         return hasLatest_ ? &latest_ : nullptr;
     }
 
+    /// One row of the panel as it currently stands.
+    struct PanelRow {
+        QString name;
+        QString text;
+        /// False for a row in a section nobody asked for. A hidden row's text
+        /// is whatever it was last set to and means nothing.
+        bool visible = true;
+    };
+
+    /// What the panel is showing, row by row.
+    ///
+    /// Exists so that a headless driver reads the labels rather than
+    /// recomputing what they ought to say. A panel that decided correctly and
+    /// then wrote the right text into the wrong row would pass every check
+    /// made against a recomputation, and this is the only thing that catches
+    /// it.
+    [[nodiscard]] std::vector<PanelRow> shownRows() const;
+
 signals:
     void analysisFinished();
 

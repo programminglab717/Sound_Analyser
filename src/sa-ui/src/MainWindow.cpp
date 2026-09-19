@@ -28,6 +28,7 @@
 #include <QInputDialog>
 #include <QLabel>
 #include <QMenuBar>
+#include <QScrollArea>
 #include <QSplitter>
 #include <QStatusBar>
 #include <QTimer>
@@ -147,9 +148,23 @@ MainWindow::MainWindow() {
     // numbers about this passage, they belong beside the other numbers about
     // it, and they were reachable only from the command line until now -- which
     // for a product that calls itself an analyser was the wrong way round.
+    // The analysis panel scrolls, and the other two do not. Its length is not
+    // fixed -- the room section alone is eight rows, and it appears only when
+    // someone asks for it -- so without this the side column's minimum height
+    // would change with a menu tick and force the whole window taller than the
+    // screen it was opened on.
+    auto* analysisScroll = new QScrollArea{this};
+    analysisScroll->setWidget(analysis_);
+    analysisScroll->setWidgetResizable(true);
+    analysisScroll->setFrameShape(QFrame::NoFrame);
+    analysisScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    // Two rows and a heading: enough that the key is on screen whatever else
+    // the splitter is asked to fit.
+    analysisScroll->setMinimumHeight(96);
+
     auto* side = new QSplitter{Qt::Vertical, this};
     side->addWidget(meters_);
-    side->addWidget(analysis_);
+    side->addWidget(analysisScroll);
     side->addWidget(spectrum_);
     side->setStretchFactor(0, 3);
     side->setStretchFactor(1, 2);
@@ -3188,6 +3203,14 @@ bool MainWindow::printMusicalAnalysis() const {
                 static_cast<long long>(result->requestedFrames));
     text("coverage_note", coverageNote(*result));
 
+    // What the labels actually hold, row by row, before anything recomputed.
+    // A driver that only ever compared the window against a second copy of the
+    // window's own reasoning would agree with it however wrong both were.
+    for (const AnalysisPanel::PanelRow& row : analysis_->shownRows()) {
+        std::printf("shown_%s=%s\n", qPrintable(row.name), qPrintable(row.text));
+        std::printf("visible_%s=%d\n", qPrintable(row.name), row.visible ? 1 : 0);
+    }
+
     // The reading before the raw fields, because the reading is the claim the
     // window is making and the fields are only what it made it from.
     const Reading key = keyReading(result->key, result->keyError);
@@ -3223,6 +3246,12 @@ bool MainWindow::printMusicalAnalysis() const {
     text("room_caveat", room.caveat);
     std::printf("room_certainty=%d\nroom_valid=%d\n", static_cast<int>(room.certainty),
                 result->room.valid ? 1 : 0);
+    // The flags beside the text, so a driver can hold the two against each
+    // other: a figure whose flag is false has to print a dash and never a
+    // number, and that rule is what the room section is for.
+    std::printf("room_has_edt=%d\nroom_has_t20=%d\nroom_has_t30=%d\n",
+                result->room.hasEarlyDecay ? 1 : 0, result->room.hasT20 ? 1 : 0,
+                result->room.hasT30 ? 1 : 0);
     // Through roomSeconds, so that what a test reads is exactly what the panel
     // shows -- "--" included.
     text("room_edt", roomSeconds(result->room.valid && result->room.hasEarlyDecay,

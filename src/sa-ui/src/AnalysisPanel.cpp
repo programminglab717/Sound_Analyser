@@ -290,6 +290,36 @@ void AnalysisPanel::setRow(QLabel* value, QLabel* caveat, const Reading& reading
     caveat->setVisible(!reading.caveat.empty());
 }
 
+std::vector<AnalysisPanel::PanelRow> AnalysisPanel::shownRows() const {
+    const auto row = [](const char* name, const QLabel* label) {
+        return PanelRow{QString::fromUtf8(name), label->text(),
+                        label->isVisibleTo(label->window())};
+    };
+    return {row("heading", heading_),
+            row("coverage", coverage_),
+            row("key", key_),
+            row("key_caveat", keyCaveat_),
+            row("runner_up", runnerUp_),
+            row("tuning", tuning_),
+            row("tempo", tempo_),
+            row("tempo_caveat", tempoCaveat_),
+            row("confidence", tempoConfidence_),
+            row("first_beat", firstBeat_),
+            row("beats", beatCount_),
+            row("pitch", pitch_),
+            row("pitch_caveat", pitchCaveat_),
+            row("voiced", voiced_),
+            row("edt", earlyDecay_),
+            row("t20", t20_),
+            row("t30", t30_),
+            row("c50", clarity50_),
+            row("c80", clarity80_),
+            row("d50", definition50_),
+            row("centre_time", centreTime_),
+            row("usable_decay", usableRange_),
+            row("room_caveat", roomCaveat_)};
+}
+
 void AnalysisPanel::deliver(const MusicalAnalysis& result, const QString& what) {
     busy_ = false;
     show(result, what);
