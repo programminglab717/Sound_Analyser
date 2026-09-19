@@ -11,6 +11,7 @@ add_library(sa-dsp STATIC
     src/Fft.cpp
     src/FilterBank.cpp
     src/LinearPrediction.cpp
+    src/MultibandCompressor.cpp
     src/ParametricEq.cpp
     src/ExactTruePeak.cpp
     src/OfflineDynamics.cpp
@@ -41,6 +42,7 @@ if(SA_BUILD_TESTS)
         tests/FftTests.cpp
         tests/FilterBankTests.cpp
         tests/LinearPredictionTests.cpp
+        tests/MultibandCompressorTests.cpp
         tests/ParametricEqTests.cpp
         tests/ExactTruePeakTests.cpp
         tests/OfflineDynamicsTests.cpp
