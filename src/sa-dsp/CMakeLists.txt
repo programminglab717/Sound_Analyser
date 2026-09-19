@@ -27,6 +27,7 @@ target_link_libraries(sa-dsp PRIVATE sa-warnings)
 if(SA_BUILD_TESTS)
     add_executable(sa-dsp-tests
         tests/BiquadTests.cpp
+        tests/ChannelOpsTests.cpp
         tests/DynamicsTests.cpp
         tests/DeclickTests.cpp
         tests/DeclipTests.cpp

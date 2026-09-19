@@ -13,6 +13,7 @@
 #include <sa/analysis/LoudnessMeter.h>
 #include <sa/analysis/SignalStatistics.h>
 #include <sa/analysis/TruePeakMeter.h>
+#include <sa/dsp/ChannelOps.h>
 #include <sa/dsp/Declick.h>
 #include <sa/dsp/Declip.h>
 #include <sa/dsp/Dehum.h>
@@ -330,6 +331,11 @@ void usage() {
       Change its pitch without changing how long it lasts. Fractions are
       allowed, and 0.01 of a semitone is a cent.
 
+  channels <in> <out> --op reverse|invert|swap|mono [--format 16|24|float]
+      The four edits that are pure arithmetic: play it backwards, flip its
+      polarity, exchange left and right, or put the average of the two
+      channels on both. swap and mono need a stereo file.
+
   render <session.sa> <out.wav> [--format 16|24|float]
       Render a saved arrangement to audio.
 
@@ -611,6 +617,62 @@ int reshape(const Options& options,
     return 0;
 }
 
+int channels(const Options& options) {
+    if (options.positional.size() != 3) {
+        return fail("channels needs an input and an output");
+    }
+    const auto named = options.value("op");
+    if (!named) {
+        return fail("channels needs --op reverse, invert, swap or mono");
+    }
+
+    sa::dsp::ChannelOp operation{};
+    if (*named == "reverse") {
+        operation = sa::dsp::ChannelOp::Reverse;
+    } else if (*named == "invert") {
+        operation = sa::dsp::ChannelOp::InvertPolarity;
+    } else if (*named == "swap") {
+        operation = sa::dsp::ChannelOp::SwapChannels;
+    } else if (*named == "mono") {
+        operation = sa::dsp::ChannelOp::SumToMono;
+    } else {
+        return fail("unknown operation '" + *named + "'; try reverse, invert, swap or mono");
+    }
+
+    std::string error;
+    const auto source = open(options.positional[1], error);
+    if (!source) {
+        return fail(error);
+    }
+    const sa::io::AudioFileInfo& info = source->info();
+
+    // Refused before the file is read, so a mistyped command on a two-hour
+    // mono recording costs nothing.
+    if (sa::dsp::channelOpNeedsStereo(operation) && info.channelCount() != 2) {
+        return fail(*named + " needs a stereo file; this one has " +
+                    std::to_string(info.channelCount()) + " channel" +
+                    (info.channelCount() == 1 ? "" : "s"));
+    }
+
+    sa::AudioBuffer audio{info.layout, info.frameCount};
+    if (const auto read = source->read(0, audio.view()); !read) {
+        return fail(std::string{read.error().what()});
+    }
+
+    if (const auto status = sa::dsp::applyChannelOp(audio.view(), operation); !status) {
+        return fail(std::string{status.error().what()});
+    }
+
+    const sa::engine::BufferSource edited{std::move(audio), info.sampleRate};
+    if (!write(edited, options.positional[2], formatFrom(options, info.format), error)) {
+        return fail(error);
+    }
+    std::printf(
+        "%s: %s -> %s\n", std::filesystem::path{options.positional[1]}.filename().string().c_str(),
+        named->c_str(), std::filesystem::path{options.positional[2]}.filename().string().c_str());
+    return 0;
+}
+
 int dehumFile(const Options& options) {
     if (options.positional.size() != 3) {
         return fail("dehum needs an input and an output");
@@ -847,6 +909,9 @@ int main(int argc, char** argv) {
     }
     if (command == "pitch") {
         return pitch(options);
+    }
+    if (command == "channels") {
+        return channels(options);
     }
     if (command == "render") {
         return render(options);

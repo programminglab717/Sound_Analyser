@@ -53,6 +53,42 @@ def read_wav(path: Path) -> tuple[list[float], int]:
     )
 
 
+def write_stereo(path: Path, left: list[float], right: list[float]) -> None:
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(2)
+        handle.setsampwidth(2)
+        handle.setframerate(SAMPLE_RATE)
+        handle.writeframes(
+            b"".join(
+                struct.pack("<hh", int(max(-1.0, min(1.0, a)) * 32767),
+                            int(max(-1.0, min(1.0, b)) * 32767))
+                for a, b in zip(left, right)
+            )
+        )
+
+
+def read_channels(path: Path) -> list[list[float]]:
+    """Every channel of a WAV, one list per channel."""
+    with wave.open(str(path), "rb") as handle:
+        frames, channels, width = (
+            handle.getnframes(),
+            handle.getnchannels(),
+            handle.getsampwidth(),
+        )
+        raw = handle.readframes(frames)
+    scale = float(1 << (width * 8 - 1))
+    step = channels * width
+    return [
+        [
+            int.from_bytes(raw[i * step + c * width : i * step + (c + 1) * width],
+                           "little", signed=True)
+            / scale
+            for i in range(frames)
+        ]
+        for c in range(channels)
+    ]
+
+
 def rms(values: list[float]) -> float:
     return math.sqrt(sum(v * v for v in values) / max(1, len(values)))
 
@@ -307,6 +343,48 @@ def main() -> int:
                   f"{wanted_hz:.1f} Hz at {moved:.4f}, wanted {was:.4f}")
             check("and nothing was left behind", left < 0.05 * max(was, 1e-9), f"{left:.4f}")
 
+        # Channel operations. Written at 24 bits so the comparison can demand
+        # bit-exactness: at 16 the average of two 16-bit samples is a half-step
+        # that has to be rounded, and the test would be measuring the writer
+        # rather than the operation.
+        print("channels:")
+        stereo = workspace / "stereo.wav"
+        write_stereo(
+            stereo,
+            [0.5 * math.sin(2.0 * math.pi * 300.0 * i / SAMPLE_RATE) for i in range(SAMPLE_RATE)],
+            [0.3 * math.sin(2.0 * math.pi * 1100.0 * i / SAMPLE_RATE + 0.7)
+             for i in range(SAMPLE_RATE)],
+        )
+        pair = read_channels(stereo)
+        averaged = [0.5 * (a + b) for a, b in zip(pair[0], pair[1])]
+        for operation, wanted in (
+            ("reverse", [list(reversed(c)) for c in pair]),
+            ("invert", [[-v for v in c] for c in pair]),
+            ("swap", [pair[1], pair[0]]),
+            ("mono", [averaged, averaged]),
+        ):
+            output = workspace / f"channels-{operation}.wav"
+            result = run("channels", str(stereo), str(output), "--op", operation, "--format", "24")
+            check(f"{operation} exits cleanly", result.returncode == 0, result.stderr)
+            if result.returncode != 0 or not output.exists():
+                continue
+            got = read_channels(output)
+            if len(got) != len(wanted):
+                check(f"{operation} keeps both channels", False, f"{len(got)} channels")
+                continue
+            worst = max(max(abs(x - y) for x, y in zip(a, b)) for a, b in zip(got, wanted))
+            check(f"{operation} is exact to the sample", worst == 0.0, f"worst {worst:.2e}")
+
+        check("swap refuses a mono file",
+              run("channels", str(source), str(workspace / "x.wav"), "--op", "swap").returncode
+              != 0)
+        check("mono refuses a mono file",
+              run("channels", str(source), str(workspace / "x.wav"), "--op", "mono").returncode
+              != 0)
+        check("but reverse accepts one",
+              run("channels", str(source), str(workspace / "x.wav"), "--op",
+                  "reverse").returncode == 0)
+
         print("failure handling:")
         check("a missing file fails", run("analyse", str(workspace / "nope.wav")).returncode != 0)
         check("an unknown command fails", run("frobnicate").returncode != 0)
@@ -319,6 +397,11 @@ def main() -> int:
         check("an impossible stretch fails",
               run("stretch", str(source), str(workspace / "x.wav"),
                   "--length", "5000").returncode != 0)
+        check("channels with no --op fails",
+              run("channels", str(source), str(workspace / "x.wav")).returncode != 0)
+        check("an unknown channel operation fails",
+              run("channels", str(source), str(workspace / "x.wav"),
+                  "--op", "sideways").returncode != 0)
         check("a shift past three octaves fails",
               run("pitch", str(source), str(workspace / "x.wav"),
                   "--semitones", "99").returncode != 0)
