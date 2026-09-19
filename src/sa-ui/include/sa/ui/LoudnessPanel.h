@@ -12,6 +12,7 @@
 #include <mutex>
 #include <optional>
 #include <thread>
+#include <vector>
 
 class QComboBox;
 class QLabel;
@@ -65,6 +66,7 @@ signals:
 private:
     void buildLayout();
     void show(const analysis::ProgrammeAnalysis& result, const QString& what);
+    void showStereo(const analysis::StereoField& field);
     void showCompliance(const analysis::ProgrammeAnalysis& result);
     void setPending(const QString& what);
 
@@ -80,6 +82,15 @@ private:
     QLabel* crest_ = nullptr;
     QLabel* dcOffset_ = nullptr;
     QLabel* peakToLoudness_ = nullptr;
+    QLabel* correlation_ = nullptr;
+    QLabel* width_ = nullptr;
+    QLabel* balance_ = nullptr;
+    QLabel* monoLoss_ = nullptr;
+
+    /// The stereo rows and their heading, so they can be hidden together.
+    /// Mono and 5.1 have no stereo field, and four rows reading "--" forever
+    /// is four rows of the panel spent saying nothing.
+    std::vector<QWidget*> stereoWidgets_;
     QLabel* verdict_ = nullptr;
     QComboBox* target_ = nullptr;
 

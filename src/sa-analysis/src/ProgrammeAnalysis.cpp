@@ -26,6 +26,14 @@ Result<ProgrammeAnalysis> analyseProgramme(ConstAudioBufferView audio, SampleRat
     result.loudness = std::move(loudness).value();
     result.truePeakDbtp = truePeak.value();
     result.statistics = std::move(statistics).value();
+
+    // Not an error when it is not a stereo pair: mono and 5.1 are ordinary
+    // material, and refusing to measure anything else because one of four
+    // meters does not apply would be the wrong shape entirely. The field
+    // carries its own `valid`.
+    if (auto stereo = StereoFieldMeter::measure(audio)) {
+        result.stereo = std::move(stereo).value();
+    }
     return result;
 }
 

@@ -45,6 +45,9 @@ constexpr SampleCount kBlockFrames = 65536;
     if (!loudness || !peaks || !statistics) {
         return false;
     }
+    // Optional, because only a stereo pair has a stereo field and mono is
+    // ordinary material, not a failure.
+    auto stereo = analysis::StereoFieldMeter::create(info.channelCount());
 
     AudioBuffer block{info.layout, kBlockFrames};
     SampleCount done = 0;
@@ -62,11 +65,17 @@ constexpr SampleCount kBlockFrames = 65536;
         loudness.value().process(filled);
         peaks.value().process(filled);
         statistics.value().process(filled);
+        if (stereo) {
+            stereo.value().process(filled);
+        }
         done += read.value();
     }
 
     out.loudness = loudness.value().measurement();
     out.truePeakDbtp = peaks.value().truePeakDbtp();
+    if (stereo) {
+        out.stereo = stereo.value().field();
+    }
 
     // The streaming meter is an interpolator, and an interpolator droops: ours
     // reads up to 0.44 dB low on bright transients. Where the range is small
@@ -156,6 +165,8 @@ void LoudnessPanel::buildLayout() {
     units->setStyleSheet("color: #6d7382;");
     grid->addWidget(units, row++, 0, 1, 2);
 
+    // Both return the widgets they made, so a group of rows can be hidden
+    // together later. Only the stereo section needs that so far.
     const auto addRow = [&](const QString& name, QLabel*& value) {
         auto* label = new QLabel{name, this};
         label->setStyleSheet("color: #8a8fa0;");
@@ -165,12 +176,14 @@ void LoudnessPanel::buildLayout() {
         grid->addWidget(label, row, 0);
         grid->addWidget(value, row, 1);
         ++row;
+        return label;
     };
 
     const auto addSeparator = [&](const QString& title) {
         auto* label = new QLabel{title, this};
         label->setStyleSheet("color: #5a6070; margin-top: 8px;");
         grid->addWidget(label, row++, 0, 1, 2);
+        return label;
     };
 
     addSeparator(tr("LOUDNESS"));
@@ -183,6 +196,16 @@ void LoudnessPanel::buildLayout() {
     addRow(tr("True peak"), truePeak_);
     addRow(tr("Sample peak"), samplePeak_);
     addRow(tr("Peak to loudness"), peakToLoudness_);
+
+    stereoWidgets_ = {addSeparator(tr("STEREO")),
+                      addRow(tr("Correlation"), correlation_),
+                      correlation_,
+                      addRow(tr("Width"), width_),
+                      width_,
+                      addRow(tr("Balance"), balance_),
+                      balance_,
+                      addRow(tr("Mono sum"), monoLoss_),
+                      monoLoss_};
 
     addSeparator(tr("SIGNAL"));
     addRow(tr("RMS"), rms_);
@@ -332,11 +355,34 @@ void LoudnessPanel::show(const analysis::ProgrammeAnalysis& result, const QStrin
     samplePeak_->setText(decibels(result.statistics.samplePeakDbfs, "dBFS"));
     peakToLoudness_->setText(decibels(result.statistics.peakToLoudnessRatioDb, "LU"));
 
+    showStereo(result.stereo);
+
     rms_->setText(decibels(result.statistics.rmsDbfs, "dBFS"));
     crest_->setText(QStringLiteral("%1 dB").arg(result.statistics.crestFactorDb, 0, 'f', 1));
     dcOffset_->setText(QStringLiteral("%1").arg(result.statistics.dcOffset, 0, 'f', 5));
 
     showCompliance(result);
+}
+
+void LoudnessPanel::showStereo(const analysis::StereoField& field) {
+    for (QWidget* widget : stereoWidgets_) {
+        if (widget != nullptr) {
+            widget->setVisible(field.valid);
+        }
+    }
+    if (!field.valid) {
+        return;
+    }
+
+    correlation_->setText(QStringLiteral("%1").arg(field.correlation, 0, 'f', 2));
+    width_->setText(decibels(field.widthDb, "dB"));
+    // Signed and named, because "-6.0 dB" alone does not say which side.
+    balance_->setText(std::abs(field.balanceDb) < 0.05
+                          ? tr("centred")
+                          : tr("%1 dB %2")
+                                .arg(std::abs(field.balanceDb), 0, 'f', 1)
+                                .arg(field.balanceDb > 0.0 ? tr("right") : tr("left")));
+    monoLoss_->setText(decibels(field.monoLossDb, "dB"));
 }
 
 void LoudnessPanel::showCompliance(const analysis::ProgrammeAnalysis& result) {
