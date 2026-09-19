@@ -460,6 +460,56 @@ def main() -> int:
               run("analyse", str(source), "--csv", "--json").returncode != 0)
 
         # Third-octave and octave bands.
+        # Room acoustics from an impulse response whose decay rate is known,
+        # so the check is against the right answer rather than against "it
+        # printed something".
+        print("room:")
+
+        def write_ir(path: Path, t60: float) -> None:
+            # An envelope exp(-t/tau) decays 8.6859 dB per tau in energy, so
+            # sixty decibels takes 6.9078*tau and tau = t60/6.9078.
+            tau = t60 * math.log10(math.e) * 2.0 * 10.0 / 60.0
+            rng_ir = random.Random(17)
+            write_wav32(
+                path,
+                [0.9 * math.exp(-(i / SAMPLE_RATE) / tau) * rng_ir.gauss(0.0, 1.0)
+                 for i in range(int(SAMPLE_RATE * t60 * 2.0))],
+            )
+
+        for t60 in (0.4, 1.2):
+            ir = workspace / f"ir-{t60}.wav"
+            write_ir(ir, t60)
+            result = run("room", str(ir), "--json")
+            check(f"room exits cleanly on a {t60}s decay", result.returncode == 0, result.stderr)
+            if result.returncode != 0:
+                continue
+            report = json.loads(result.stdout)
+            measured = report["channels"][0]
+            check(f"{t60}s decay is valid", measured["valid"] is True, str(measured))
+            # Both reverberation times have to recover the decay they were made
+            # from. Five per cent is generous for a synthetic decay and tight
+            # enough to catch the missing-tail-compensation bug, which read
+            # 0.547 for a 1.000 s decay.
+            for key in ("t20Seconds", "t30Seconds"):
+                value = measured[key]
+                check(f"{key} recovers {t60}s",
+                      value is not None and abs(value - t60) < 0.05 * t60,
+                      f"{value}")
+
+        # Clarity falls as a room gets livelier. Direction, independent of any
+        # absolute calibration.
+        clarities = []
+        for t60 in (0.4, 1.2):
+            result = run("room", str(workspace / f"ir-{t60}.wav"), "--json")
+            if result.returncode == 0:
+                clarities.append(json.loads(result.stdout)["channels"][0]["c80Db"])
+        check("a livelier room reads as less clear",
+              len(clarities) == 2 and clarities[1] < clarities[0], str(clarities))
+
+        check("room with no file fails", run("room").returncode != 0)
+        check("room on a missing file fails",
+              run("room", str(workspace / "nope.wav")).returncode != 0)
+
         print("bands:")
         result = run("bands", str(noise_source), "--csv")
         check("bands exits cleanly", result.returncode == 0, result.stderr)

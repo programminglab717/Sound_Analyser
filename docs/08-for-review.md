@@ -17,9 +17,9 @@ run `sound-analyser.exe`. Qt ships beside it, so there is nothing to install.
 It is about 13.3 MB and it is built and tested by the same run that produces it:
 every CI job green -- both MSVC configurations, AddressSanitizer and
 ThreadSanitizer among them -- before the package is uploaded. `sa-cli.exe` is
-in the folder beside it: the headless driver, with sixteen commands: analyse,
-bands, provenance, convert, normalise, denoise, declick, declip, dehum, deess,
-compress, gate, channels, render, stretch and pitch. `analyse --csv` gives one
+in the folder beside it: the headless driver, with seventeen commands: analyse,
+bands, room, provenance, convert, normalise, denoise, declick, declip, dehum,
+deess, compress, gate, channels, render, stretch and pitch. `analyse --csv` gives one
 row per file, which is what to point at a folder of deliverables.
 
 Then open something real — a recording of your own, not a test tone — and try:
@@ -145,6 +145,19 @@ Not blocked, but a person's judgement would be better than mine.
   synthetic sibilance is filtered noise and a real one is not. Try it on
   something spoken; the split frequency is the control to move first, and
   lower is what a bright voice wants.
+
+- **Whether `sa-cli room` agrees with a meter you trust.** It takes an
+  impulse response and reports EDT, T20, T30, C50, C80, D50 and centre time.
+  On synthetic decays it recovers the rate to within one per cent across a
+  6:1 range, which says the arithmetic is right and says nothing about
+  whether it agrees with whatever measured your room. If you have an impulse
+  response with a published or previously-measured T30, that comparison is
+  worth more than anything I can do here.
+
+  Note what it will not do: it reports "--" rather than a number when the
+  decay has no range for a figure, which is most impulse responses for T30.
+  A tool that always prints a number for T30 is not measuring more than this
+  one, it is extrapolating through its own noise floor.
 
 - **Where the band display should live.** `sa-cli bands` prints thirty-one
   third-octaves, or ten octaves with --octave, and nothing in the window

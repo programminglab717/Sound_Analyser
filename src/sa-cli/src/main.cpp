@@ -13,6 +13,7 @@
 #include <sa/analysis/LoudnessMeter.h>
 #include <sa/analysis/OctaveBands.h>
 #include <sa/analysis/Provenance.h>
+#include <sa/analysis/RoomAcoustics.h>
 #include <sa/analysis/SignalStatistics.h>
 #include <sa/analysis/StereoField.h>
 #include <sa/analysis/TruePeakMeter.h>
@@ -451,6 +452,19 @@ void usage() {
       specifies -- nothing here claims to meet its tolerance masks, and a
       certified measurement needs a bank this does not have.
 
+  room <impulse.wav> [--json]
+      Reverberation and clarity from an impulse response: EDT, T20, T30, C50,
+      C80, D50 and centre time, per the definitions in ISO 3382.
+
+      Not claimed to be ISO 3382 conformant -- the definitions are implemented
+      from their arithmetic and no certified reference material has been run
+      against them. What is checked is that on a synthetic decay whose rate is
+      known exactly, they recover it.
+
+      A figure the recording has no range for is reported as "--" rather than
+      extrapolated. Measuring T30 needs the decay to fall 35 dB clear of the
+      noise, and most impulse responses do not.
+
   provenance <file>... [--json]
       What the audio says about where it came from, as opposed to what its
       header claims. Reports the frequency above which there is nothing and
@@ -656,6 +670,104 @@ int bands(const Options& options) {
             std::printf("#");
         }
         std::printf("\n");
+    }
+    return 0;
+}
+
+int room(const Options& options) {
+    if (options.positional.size() != 2) {
+        return fail("room needs one impulse response");
+    }
+    const bool asJson = options.has("json");
+
+    std::string error;
+    const auto source = open(options.positional[1], error);
+    if (!source) {
+        return fail(error);
+    }
+    const sa::io::AudioFileInfo& info = source->info();
+
+    // An impulse response is short by nature; the whole thing is read.
+    sa::AudioBuffer audio{info.layout, info.frameCount};
+    if (const auto read = source->read(0, audio.view()); !read) {
+        return fail(std::string{read.error().what()});
+    }
+
+    const auto name = std::filesystem::path{options.positional[1]}.filename().string();
+    if (asJson) {
+        std::printf("{\n  \"file\": \"%s\",\n  \"channels\": [\n", name.c_str());
+    } else {
+        std::printf("%s\n", name.c_str());
+    }
+
+    for (int channel = 0; channel < info.channelCount(); ++channel) {
+        const auto measured =
+            sa::analysis::measureRoomAcoustics(audio.view(), info.sampleRate, channel);
+        if (!measured) {
+            return fail(std::string{measured.error().what()});
+        }
+        const sa::analysis::RoomAcoustics& r = measured.value();
+
+        if (asJson) {
+            std::printf("    {\"channel\": %d, ", channel);
+            if (!r.valid) {
+                std::printf("\"valid\": false}%s\n", channel + 1 < info.channelCount() ? "," : "");
+                continue;
+            }
+            std::printf("\"valid\": true, ");
+            // Null rather than zero for a figure the decay had no range for:
+            // a consumer averaging these must not be handed a zero that looks
+            // like a very dead room.
+            if (r.hasEarlyDecay) {
+                std::printf("\"edtSeconds\": %.3f, ", r.earlyDecaySeconds);
+            } else {
+                std::printf("\"edtSeconds\": null, ");
+            }
+            if (r.hasT20) {
+                std::printf("\"t20Seconds\": %.3f, ", r.t20Seconds);
+            } else {
+                std::printf("\"t20Seconds\": null, ");
+            }
+            if (r.hasT30) {
+                std::printf("\"t30Seconds\": %.3f, ", r.t30Seconds);
+            } else {
+                std::printf("\"t30Seconds\": null, ");
+            }
+            std::printf("\"c50Db\": %.2f, \"c80Db\": %.2f, \"d50\": %.3f, "
+                        "\"centreTimeSeconds\": %.4f, \"usableRangeDb\": %.1f}%s\n",
+                        r.clarity50Db, r.clarity80Db, r.definition50, r.centreTimeSeconds,
+                        r.usableRangeDb, channel + 1 < info.channelCount() ? "," : "");
+            continue;
+        }
+
+        if (info.channelCount() > 1) {
+            std::printf("  channel %d\n", channel);
+        }
+        if (!r.valid) {
+            std::printf("    not an impulse response, or too short to measure\n");
+            continue;
+        }
+        const auto seconds = [](bool have, double value) {
+            static char buffer[32];
+            if (!have) {
+                std::snprintf(buffer, sizeof buffer, "      --");
+            } else {
+                std::snprintf(buffer, sizeof buffer, "%8.3f", value);
+            }
+            return buffer;
+        };
+        std::printf("    EDT        %s s\n", seconds(r.hasEarlyDecay, r.earlyDecaySeconds));
+        std::printf("    T20        %s s\n", seconds(r.hasT20, r.t20Seconds));
+        std::printf("    T30        %s s\n", seconds(r.hasT30, r.t30Seconds));
+        std::printf("    C50        %8.2f dB\n", r.clarity50Db);
+        std::printf("    C80        %8.2f dB\n", r.clarity80Db);
+        std::printf("    D50        %8.3f\n", r.definition50);
+        std::printf("    centre     %8.4f s\n", r.centreTimeSeconds);
+        std::printf("    usable     %8.1f dB of decay\n", r.usableRangeDb);
+    }
+
+    if (asJson) {
+        std::printf("  ]\n}\n");
     }
     return 0;
 }
@@ -1405,6 +1517,9 @@ int main(int argc, char** argv) {
     }
     if (command == "bands") {
         return bands(options);
+    }
+    if (command == "room") {
+        return room(options);
     }
     if (command == "provenance") {
         return provenance(options);
