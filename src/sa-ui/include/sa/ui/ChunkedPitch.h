@@ -38,22 +38,22 @@ namespace sa::ui {
 /// for seconds. trackPitch() takes a buffer and runs to the end of it, so the
 /// only way to make it interruptible is to hand it less at a time.
 ///
-/// This produces exactly the contour one call would have produced, and that is
-/// worth spelling out rather than hoping for. trackPitch places a frame at
-/// every multiple of the hop for which window + longestLag samples remain, and
-/// each frame's reading depends on nothing outside that span. So a chunk
-/// starting at a multiple of the hop and carrying that span past its own end
-/// gives its frames the identical samples they would have had, and the frames
-/// kept from each chunk tile the whole exactly once. The alternative -- cutting
-/// the buffer up and keeping whatever came back -- drops the frames straddling
-/// every seam, and a contour with a hole every second is a contour that says
-/// "unvoiced" where it means "not looked at".
+/// This produces the contour one call would have produced. The argument is
+/// worth spelling out, and then worth holding to account. trackPitch places a
+/// frame at every multiple of the hop for which window + longestLag samples
+/// remain, and each frame's reading depends on nothing outside that span. So a
+/// chunk starting at a multiple of the hop and carrying that span past its own
+/// end gives its frames the identical samples they would have had, and the
+/// frames kept from each chunk tile the whole exactly once. The alternative --
+/// cutting the buffer up and keeping whatever came back -- drops the frames
+/// straddling every seam, and a contour with a hole every second is a contour
+/// that says "unvoiced" where it means "not looked at".
 ///
-/// That is now measured rather than argued, and the measurement is not quite
-/// the round claim above. ChunkedPitchTests tracks the same passage both ways
-/// at eight lengths -- several chunks, a whole number of them, a sample past
-/// one, a tail either side of a frame, one frame exactly, and less -- and hz,
-/// confidence and voiced come back bit for bit every time, because the samples
+/// The holding to account is ChunkedPitchTests, and it does not come back with
+/// quite the round answer. It tracks the same passage both ways at eight
+/// lengths -- several chunks, a whole number of them, a sample past one, a tail
+/// either side of a frame, one frame exactly, and less -- and hz, confidence
+/// and voiced come back bit for bit every time, because the samples
 /// a frame reads are the same bytes in both cases. The time does not, and the
 /// reason is arithmetic and not audio: one call divides once, and this divides
 /// the frame's offset and the chunk's and adds them. That lands within one unit
