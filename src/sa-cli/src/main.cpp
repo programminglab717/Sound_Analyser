@@ -14,6 +14,7 @@
 #include <sa/analysis/SignalStatistics.h>
 #include <sa/analysis/TruePeakMeter.h>
 #include <sa/dsp/Declick.h>
+#include <sa/dsp/Declip.h>
 #include <sa/dsp/Resampler.h>
 #include <sa/dsp/TimeStretch.h>
 #include <sa/engine/BufferSource.h>
@@ -308,6 +309,10 @@ void usage() {
   denoise <in> <out> --noise <from>-<to> [--amount <dB>] [--format 16|24|float]
       Learn a noise profile from <from>-<to> in seconds, then clean the file.
 
+  declip <in> <out> [--keep-level] [--format 16|24|float]
+      Restore clipped peaks. The result is brought down to fit them unless
+      --keep-level says otherwise, and the gain applied is printed.
+
   declick <in> <out> [--sensitivity <n>] [--format 16|24|float]
       Find and repair clicks. Prints how many it found, and how many stretches
       of damage were too long to be clicks and were left alone.
@@ -601,6 +606,45 @@ int reshape(const Options& options,
     return 0;
 }
 
+int declipFile(const Options& options) {
+    if (options.positional.size() != 3) {
+        return fail("declip needs an input and an output");
+    }
+
+    sa::dsp::DeclipSettings settings;
+    settings.fitToCeiling = !options.has("keep-level");
+
+    std::string error;
+    const auto source = open(options.positional[1], error);
+    if (!source) {
+        return fail(error);
+    }
+    const sa::io::AudioFileInfo& info = source->info();
+
+    sa::AudioBuffer audio{info.layout, info.frameCount};
+    if (const auto read = source->read(0, audio.view()); !read) {
+        return fail(std::string{read.error().what()});
+    }
+
+    const auto report = sa::dsp::declip(audio.view(), settings);
+    if (!report) {
+        return fail(std::string{report.error().what()});
+    }
+
+    const sa::engine::BufferSource restored{std::move(audio), info.sampleRate};
+    if (!write(restored, options.positional[2], formatFrom(options, info.format), error)) {
+        return fail(error);
+    }
+    std::printf("%s: %d clipped peak%s restored, %lld samples, %.2f dB applied to fit, "
+                "%d left as too long -> %s\n",
+                std::filesystem::path{options.positional[1]}.filename().string().c_str(),
+                report.value().runs, report.value().runs == 1 ? "" : "s",
+                static_cast<long long>(report.value().samplesRestored), report.value().gainDb,
+                report.value().tooLong,
+                std::filesystem::path{options.positional[2]}.filename().string().c_str());
+    return 0;
+}
+
 int declickFile(const Options& options) {
     if (options.positional.size() != 3) {
         return fail("declick needs an input and an output");
@@ -739,6 +783,9 @@ int main(int argc, char** argv) {
     }
     if (command == "denoise") {
         return denoise(options);
+    }
+    if (command == "declip") {
+        return declipFile(options);
     }
     if (command == "declick") {
         return declickFile(options);

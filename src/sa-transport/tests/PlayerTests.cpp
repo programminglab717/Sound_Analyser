@@ -169,8 +169,19 @@ TEST_CASE("Playing again while playing restarts cleanly", "[transport][player]")
 
 TEST_CASE("A whole file plays without underrunning", "[transport][player]") {
     // Underruns mean the worker fell behind the callback. Against a ramp source
-    // and the null device there is no excuse for one, so any is a real defect
-    // in the buffering rather than a slow machine.
+    // and the null device, on a machine that can schedule the worker, there is
+    // no excuse for one.
+    //
+    // That last clause is not a hedge, it is the whole caveat, and it is here
+    // because the comment that used to sit in its place denied it. The null
+    // device paces itself against a real clock; a worker thread that the
+    // scheduler does not run cannot fill a ring buffer however correct its
+    // buffering is. This test was seen to fail exactly once, on a machine
+    // compiling three sanitiser builds at the time, and passed immediately on
+    // its own. So: a failure here on an idle machine is a buffering defect and
+    // should be treated as one. A failure while the machine is saturated is
+    // the scheduler, and re-running it on an idle machine is the way to tell
+    // which you have -- a real defect underruns every time.
     Player player = makePlayer(2, 128);
     const auto source = std::make_shared<RampSource>(96000, 2);
 
@@ -178,6 +189,7 @@ TEST_CASE("A whole file plays without underrunning", "[transport][player]") {
     CHECK(waitUntil([&] { return player.position() >= 96000; }));
     player.stop();
 
+    INFO("underruns: " << player.underruns());
     CHECK(player.underruns() == 0);
 }
 

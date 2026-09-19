@@ -120,6 +120,24 @@ def error_db(actual: list[float], wanted: list[float]) -> float:
     return 10.0 * math.log10(error / signal) if error > 0.0 and signal > 0.0 else -200.0
 
 
+def shape_error_db(actual: list[float], wanted: list[float]) -> float:
+    """Error against a reference with the level difference taken out.
+
+    A declipped file is deliberately quieter than the original -- the restored
+    peaks have to fit somewhere. Comparing raw samples would measure that gain
+    and call it damage, so both are scaled to the same peak first and what is
+    left is the shape.
+    """
+    actual_peak = max((abs(v) for v in actual), default=0.0)
+    wanted_peak = max((abs(v) for v in wanted), default=0.0)
+    if actual_peak <= 0.0 or wanted_peak <= 0.0:
+        return 0.0
+    scale = wanted_peak / actual_peak
+    error = sum((a * scale - b) ** 2 for a, b in zip(actual, wanted))
+    signal = sum(b * b for b in wanted)
+    return 10.0 * math.log10(error / signal) if error > 0.0 and signal > 0.0 else -200.0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", type=Path, help="path to the sound-analyser executable")
@@ -578,6 +596,54 @@ def main() -> int:
                 )
             else:
                 print("  ok  declick: clean material comes back bit-identical")
+
+        # Declipping. The peaks have to come back, the waveform has to be
+        # closer to the undamaged one than it was, and the result has to still
+        # fit in a file -- a restoration that clips on export has undone
+        # itself.
+        print("\ndeclip:")
+        peak = max(abs(v) for v in clean_samples)
+        clip_level = 0.7 * peak
+        clipped_samples = [max(-clip_level, min(clip_level, v)) for v in clean_samples]
+        clipped_file = workspace / "clipped.wav"
+        write_samples(clipped_file, clipped_samples)
+
+        restored = declicked(clipped_file, "declip", "declipped")
+        if restored is not None:
+            before = shape_error_db(load(clipped_file), reference)
+            after = shape_error_db(restored, reference)
+            restored_peak = max(abs(v) for v in restored)
+            clipped_peak = max(abs(v) for v in load(clipped_file))
+            if after > before - 15.0:
+                failures.append(
+                    f"declip: shape error {before:.1f} dB -> {after:.1f} dB, wanted at "
+                    "least 15 dB better"
+                )
+            elif restored_peak <= clipped_peak:
+                failures.append(
+                    f"declip: peak went {clipped_peak:.4f} -> {restored_peak:.4f}; the peaks "
+                    "did not come back"
+                )
+            elif restored_peak > 1.0:
+                failures.append(
+                    f"declip: peak came out at {restored_peak:.4f}, which clips on export"
+                )
+            else:
+                print(
+                    f"  ok  declip: shape {before:.1f} dB -> {after:.1f} dB, peak "
+                    f"{clipped_peak:.4f} -> {restored_peak:.4f}, still under full scale"
+                )
+
+        unclipped = declicked(clean_file, "declip", "declipped-clean")
+        if unclipped is not None:
+            moved = max((abs(a - b) for a, b in zip(unclipped, reference)), default=0.0)
+            if moved > 2e-4:
+                failures.append(
+                    f"declip: unclipped material moved by {moved:.6f} -- it found clipping "
+                    "that was not there"
+                )
+            else:
+                print("  ok  declip: unclipped material is left alone")
 
         # Playback, against the null device. That device runs a real thread on a
         # real clock, so this exercises the ring, the render worker, the

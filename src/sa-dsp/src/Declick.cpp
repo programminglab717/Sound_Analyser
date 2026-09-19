@@ -27,126 +27,6 @@ struct Run {
     SampleIndex end = 0; // Exclusive.
 };
 
-/// Solves a symmetric positive-definite system in place by Cholesky.
-/// False where the matrix is not positive definite, which the caller treats as
-/// "this passage cannot be interpolated" rather than as an error.
-[[nodiscard]] bool solveSymmetric(std::vector<double>& matrix, std::vector<double>& rhs, int n) {
-    const auto at = [n](std::vector<double>& m, int row, int column) -> double& {
-        return m[static_cast<std::size_t>(row) * static_cast<std::size_t>(n) +
-                 static_cast<std::size_t>(column)];
-    };
-
-    for (int i = 0; i < n; ++i) {
-        for (int j = 0; j <= i; ++j) {
-            double total = at(matrix, i, j);
-            for (int k = 0; k < j; ++k) {
-                total -= at(matrix, i, k) * at(matrix, j, k);
-            }
-            if (i == j) {
-                if (!(total > 0.0) || !std::isfinite(total)) {
-                    return false;
-                }
-                at(matrix, i, i) = std::sqrt(total);
-            } else {
-                at(matrix, i, j) = total / at(matrix, j, j);
-            }
-        }
-    }
-
-    for (int i = 0; i < n; ++i) {
-        double total = rhs[static_cast<std::size_t>(i)];
-        for (int k = 0; k < i; ++k) {
-            total -= at(matrix, i, k) * rhs[static_cast<std::size_t>(k)];
-        }
-        rhs[static_cast<std::size_t>(i)] = total / at(matrix, i, i);
-    }
-    for (int i = n - 1; i >= 0; --i) {
-        double total = rhs[static_cast<std::size_t>(i)];
-        for (int k = i + 1; k < n; ++k) {
-            total -= at(matrix, k, i) * rhs[static_cast<std::size_t>(k)];
-        }
-        rhs[static_cast<std::size_t>(i)] = total / at(matrix, i, i);
-    }
-    return true;
-}
-
-/// Replaces [gap.start, gap.end) with the values the model finds least
-/// surprising given everything within `order` samples either side.
-///
-/// The derivation, because the result looks like magic otherwise. Minimising
-/// the residual energy over every window that touches the gap, with respect to
-/// each unknown sample, gives one equation per unknown:
-///
-///     sum over all q of R[q - m] * x[q] = 0,   R[d] = sum over t of a[t]a[t-d]
-///
-/// Splitting q into the unknowns and the knowns turns that into a symmetric
-/// system whose matrix is R of the index difference -- Toeplitz, banded by the
-/// filter order, and positive definite for any model with power in it.
-[[nodiscard]] bool interpolate(float* channel, SampleCount frames, const Run& gap,
-                               const LinearPrediction& prediction) {
-    const int order = prediction.order();
-    const auto length = static_cast<int>(gap.end - gap.start);
-    if (length <= 0 || order <= 0) {
-        return false;
-    }
-    if (gap.start - order < 0 || gap.end + order > frames) {
-        return false;
-    }
-
-    std::vector<double> correlation(static_cast<std::size_t>(order) + 1, 0.0);
-    for (int lag = 0; lag <= order; ++lag) {
-        double total = 0.0;
-        for (int k = 0; k + lag <= order; ++k) {
-            total += prediction.coefficients[static_cast<std::size_t>(k)] *
-                     prediction.coefficients[static_cast<std::size_t>(k + lag)];
-        }
-        correlation[static_cast<std::size_t>(lag)] = total;
-    }
-    if (!(correlation[0] > 0.0)) {
-        return false;
-    }
-
-    const auto r = [&](SampleIndex difference) {
-        const auto distance = static_cast<SampleIndex>(std::abs(difference));
-        return distance <= order ? correlation[static_cast<std::size_t>(distance)] : 0.0;
-    };
-
-    std::vector<double> matrix(static_cast<std::size_t>(length) * static_cast<std::size_t>(length),
-                               0.0);
-    std::vector<double> rhs(static_cast<std::size_t>(length), 0.0);
-
-    for (int i = 0; i < length; ++i) {
-        for (int j = 0; j < length; ++j) {
-            matrix[static_cast<std::size_t>(i) * static_cast<std::size_t>(length) +
-                   static_cast<std::size_t>(j)] = r(i - j);
-        }
-        matrix[static_cast<std::size_t>(i) * static_cast<std::size_t>(length) +
-               static_cast<std::size_t>(i)] += correlation[0] * kSolveRidge;
-
-        const SampleIndex here = gap.start + i;
-        double total = 0.0;
-        for (SampleIndex q = here - order; q <= here + order; ++q) {
-            if (q >= gap.start && q < gap.end) {
-                continue; // Unknown: it belongs on the other side.
-            }
-            total += r(q - here) * static_cast<double>(channel[q]);
-        }
-        rhs[static_cast<std::size_t>(i)] = -total;
-    }
-
-    if (!solveSymmetric(matrix, rhs, length)) {
-        return false;
-    }
-    for (int i = 0; i < length; ++i) {
-        const double value = rhs[static_cast<std::size_t>(i)];
-        if (!std::isfinite(value)) {
-            return false;
-        }
-        channel[gap.start + i] = static_cast<float>(value);
-    }
-    return true;
-}
-
 } // namespace
 
 Result<DeclickReport> declick(AudioBufferView audio, const DeclickSettings& settings) {
@@ -316,7 +196,7 @@ Result<DeclickReport> declick(AudioBufferView audio, const DeclickSettings& sett
                     ++report.tooLong;
                     continue;
                 }
-                if (!interpolate(samples, frames, gap, fitted.value())) {
+                if (!interpolateThroughModel(fitted.value(), samples, frames, gap.start, gap.end)) {
                     ++report.unsolved;
                     continue;
                 }

@@ -207,6 +207,38 @@ def main() -> int:
             after = error_db(repaired_samples, clean_samples)
             check("the clicks are gone", after < before - 20.0, f"{before:.1f} -> {after:.1f} dB")
 
+        print("declip:")
+        # Deliberately not the 1 kHz tone the other checks use. A single
+        # sustained tone, clipped every cycle, is the one case a model-based
+        # declipper cannot help with -- the flat top is the shape, repeated,
+        # with no unclipped example to learn the real peak from. sa-dsp's own
+        # tests pin that limit; here the point is the ordinary case, so the
+        # material is three partials that do not share a period.
+        rich_samples = []
+        for i in range(len(clean_samples)):
+            t_seconds = i / SAMPLE_RATE
+            rich_samples.append(
+                0.55 * math.sin(2.0 * math.pi * 180.0 * t_seconds)
+                + 0.28 * math.sin(2.0 * math.pi * 431.0 * t_seconds)
+                + 0.14 * math.sin(2.0 * math.pi * 1103.0 * t_seconds)
+            )
+        peak = max(abs(v) for v in rich_samples)
+        level = 0.7 * peak
+        clipped_samples = [max(-level, min(level, v)) for v in rich_samples]
+        clipped_file = workspace / "clipped.wav"
+        write_wav(clipped_file, clipped_samples)
+
+        declipped_file = workspace / "declipped.wav"
+        result = run("declip", str(clipped_file), str(declipped_file))
+        check("exits cleanly", result.returncode == 0, result.stderr)
+        check("says what it restored", "clipped peak" in result.stdout, result.stdout)
+        if declipped_file.exists():
+            declipped_samples, _ = read_wav(declipped_file)
+            restored_peak = max(abs(v) for v in declipped_samples)
+            check("the peaks came back", restored_peak > level + 0.01,
+                  f"{level:.4f} -> {restored_peak:.4f}")
+            check("and it still fits in a file", restored_peak <= 1.0, f"{restored_peak:.4f}")
+
         print("stretch:")
         longer = workspace / "longer.wav"
         result = run("stretch", str(source), str(longer), "--length", "175")

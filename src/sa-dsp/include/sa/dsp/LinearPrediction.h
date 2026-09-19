@@ -75,6 +75,37 @@ inline constexpr int kMaximumPredictionOrder = 256;
 void predictionResidual(const LinearPrediction& prediction, const float* samples, SampleCount count,
                         float* residual) noexcept;
 
+/// Longest run of samples `interpolateThroughModel` will fill. The solve is
+/// cubic in the length, and a gap this long is not being reconstructed from its
+/// surroundings in any meaningful sense.
+inline constexpr int kMaximumInterpolationGap = 1024;
+
+/// Replace [start, end) with the values the model finds least surprising, given
+/// everything within `order` samples either side.
+///
+/// The derivation, because the result looks like magic otherwise. Minimising
+/// the residual energy over every window that touches the gap, with respect to
+/// each unknown sample, gives one equation per unknown:
+///
+///     sum over all q of R[q - m] * x[q] = 0,   R[d] = sum over t of a[t]a[t-d]
+///
+/// Splitting q into the unknowns and the knowns turns that into a symmetric
+/// system whose matrix is R of the index difference -- Toeplitz, banded by the
+/// filter order, and positive definite for any model with power in it. So the
+/// answer is a single Cholesky solve rather than an iteration, and it is the
+/// exact minimiser rather than an approach to one.
+///
+/// What comes back is therefore not a line drawn across the gap: it is the
+/// continuation of whatever the model says the signal was doing, which for a
+/// held note means the right frequency in the right phase.
+///
+/// False where the gap runs off either end of the buffer with less than `order`
+/// samples beside it, where it is longer than kMaximumInterpolationGap, or
+/// where the model has no power in it -- silence, most often. In every one of
+/// those cases `samples` is left untouched.
+[[nodiscard]] bool interpolateThroughModel(const LinearPrediction& prediction, float* samples,
+                                           SampleCount count, SampleIndex start, SampleIndex end);
+
 /// The same, run backwards: e[n] = sum over k of a[k] * x[n + k].
 ///
 /// Worth having as its own function rather than as a reversed copy, because the

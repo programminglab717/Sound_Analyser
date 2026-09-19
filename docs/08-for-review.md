@@ -17,8 +17,8 @@ run `sound-analyser.exe`. Qt ships beside it, so there is nothing to install.
 It is about 12.6 MB and it is built and tested by the same run that produces it:
 all ten CI jobs green, including both MSVC configurations, before the package is
 uploaded. `sa-cli.exe` is not in the package yet -- say if you want it and it is
-a one-line change. It now has eight commands: analyse, convert, normalise,
-denoise, declick, render, stretch and pitch.
+a one-line change. It now has nine commands: analyse, convert, normalise,
+denoise, declick, declip, render, stretch and pitch.
 
 Then open something real — a recording of your own, not a test tone — and try:
 
@@ -37,6 +37,7 @@ Then open something real — a recording of your own, not a test tone — and tr
 | Repair | Draw a box round a hum or a click, then Repair ▸ Attenuate or Heal |
 | Denoise | Select a passage of noise alone ▸ Repair ▸ Learn noise profile, then select the whole thing ▸ Repair ▸ Reduce noise |
 | Declick | Repair ▸ Remove clicks. It says how many it found. On a clean recording the right answer is none, and it gives that answer |
+| Declip | Repair ▸ Restore clipped peaks. It says how many it put back, and how far it had to bring the file down so they fit |
 | Save | File ▸ Save session, reopen it, check nothing was lost |
 
 **What I need back.** Not a bug list — impressions. Where did you expect
@@ -80,6 +81,14 @@ that becomes exact.
 ## 4. Things I would want a second opinion on
 
 Not blocked, but a person's judgement would be better than mine.
+
+- **Whether declipping helps on something you actually have.** On synthetic
+  material it puts the peaks back to within a decibel of where they started
+  even when nearly half the samples were pinned. It also has a limit I can
+  state exactly: a recording that is a single sustained tone, clipped, cannot
+  be restored at all, because the flat top is then the shape rather than damage
+  to it. Real music is not a sustained tone and does not hit this, but if you
+  have a genuinely clipped file I would like to know what it does with it.
 
 - **Whether the declicker is finding the right things.** On synthetic damage
   it takes the error down by 32 dB and leaves clean material bit-identical,

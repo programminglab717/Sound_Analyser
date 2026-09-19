@@ -19,7 +19,121 @@ namespace {
 /// worst case.
 constexpr double kRidge = 1e-6;
 
+/// Lifts the diagonal of the interpolation system, relatively. The system is
+/// singular wherever the model has a perfect null, which a synthetic tone
+/// obligingly provides; this is far below the audio and makes the solve
+/// well-posed there.
+constexpr double kSolveRidge = 1e-9;
+
+/// Solves a symmetric positive-definite system in place by Cholesky.
+/// False where the matrix is not positive definite, which the caller treats as
+/// "this passage cannot be interpolated" rather than as an error.
+[[nodiscard]] bool solveSymmetric(std::vector<double>& matrix, std::vector<double>& rhs, int n) {
+    const auto at = [n](std::vector<double>& m, int row, int column) -> double& {
+        return m[static_cast<std::size_t>(row) * static_cast<std::size_t>(n) +
+                 static_cast<std::size_t>(column)];
+    };
+
+    for (int i = 0; i < n; ++i) {
+        for (int j = 0; j <= i; ++j) {
+            double total = at(matrix, i, j);
+            for (int k = 0; k < j; ++k) {
+                total -= at(matrix, i, k) * at(matrix, j, k);
+            }
+            if (i == j) {
+                if (!(total > 0.0) || !std::isfinite(total)) {
+                    return false;
+                }
+                at(matrix, i, i) = std::sqrt(total);
+            } else {
+                at(matrix, i, j) = total / at(matrix, j, j);
+            }
+        }
+    }
+
+    for (int i = 0; i < n; ++i) {
+        double total = rhs[static_cast<std::size_t>(i)];
+        for (int k = 0; k < i; ++k) {
+            total -= at(matrix, i, k) * rhs[static_cast<std::size_t>(k)];
+        }
+        rhs[static_cast<std::size_t>(i)] = total / at(matrix, i, i);
+    }
+    for (int i = n - 1; i >= 0; --i) {
+        double total = rhs[static_cast<std::size_t>(i)];
+        for (int k = i + 1; k < n; ++k) {
+            total -= at(matrix, k, i) * rhs[static_cast<std::size_t>(k)];
+        }
+        rhs[static_cast<std::size_t>(i)] = total / at(matrix, i, i);
+    }
+    return true;
+}
+
 } // namespace
+
+bool interpolateThroughModel(const LinearPrediction& prediction, float* samples, SampleCount count,
+                             SampleIndex start, SampleIndex end) {
+    const int order = prediction.order();
+    const auto length = static_cast<int>(end - start);
+    if (length <= 0 || length > kMaximumInterpolationGap || order <= 0) {
+        return false;
+    }
+    if (start - order < 0 || end + order > count) {
+        return false;
+    }
+
+    std::vector<double> correlation(static_cast<std::size_t>(order) + 1, 0.0);
+    for (int lag = 0; lag <= order; ++lag) {
+        double total = 0.0;
+        for (int k = 0; k + lag <= order; ++k) {
+            total += prediction.coefficients[static_cast<std::size_t>(k)] *
+                     prediction.coefficients[static_cast<std::size_t>(k + lag)];
+        }
+        correlation[static_cast<std::size_t>(lag)] = total;
+    }
+    if (!(correlation[0] > 0.0)) {
+        return false;
+    }
+
+    const auto r = [&](SampleIndex difference) {
+        const auto distance = static_cast<SampleIndex>(std::abs(difference));
+        return distance <= order ? correlation[static_cast<std::size_t>(distance)] : 0.0;
+    };
+
+    std::vector<double> matrix(static_cast<std::size_t>(length) * static_cast<std::size_t>(length),
+                               0.0);
+    std::vector<double> rhs(static_cast<std::size_t>(length), 0.0);
+
+    for (int i = 0; i < length; ++i) {
+        for (int j = 0; j < length; ++j) {
+            matrix[static_cast<std::size_t>(i) * static_cast<std::size_t>(length) +
+                   static_cast<std::size_t>(j)] = r(i - j);
+        }
+        matrix[static_cast<std::size_t>(i) * static_cast<std::size_t>(length) +
+               static_cast<std::size_t>(i)] += correlation[0] * kSolveRidge;
+
+        const SampleIndex here = start + i;
+        double total = 0.0;
+        for (SampleIndex q = here - order; q <= here + order; ++q) {
+            if (q >= start && q < end) {
+                continue; // Unknown: it belongs on the other side.
+            }
+            total += r(q - here) * static_cast<double>(samples[q]);
+        }
+        rhs[static_cast<std::size_t>(i)] = -total;
+    }
+
+    if (!solveSymmetric(matrix, rhs, length)) {
+        return false;
+    }
+    for (int i = 0; i < length; ++i) {
+        const double value = rhs[static_cast<std::size_t>(i)];
+        if (!std::isfinite(value)) {
+            return false;
+        }
+        samples[start + i] = static_cast<float>(value);
+    }
+    return true;
+}
 
 Result<LinearPrediction> fitLinearPrediction(const float* samples, SampleCount count, int order) {
     if (samples == nullptr) {

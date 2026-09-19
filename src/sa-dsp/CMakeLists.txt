@@ -4,6 +4,7 @@ add_library(sa-dsp STATIC
     src/Dynamics.cpp
     src/EnvelopeFollower.cpp
     src/Declick.cpp
+    src/Declip.cpp
     src/Fft.cpp
     src/LinearPrediction.cpp
     src/ParametricEq.cpp
@@ -27,6 +28,7 @@ if(SA_BUILD_TESTS)
         tests/BiquadTests.cpp
         tests/DynamicsTests.cpp
         tests/DeclickTests.cpp
+        tests/DeclipTests.cpp
         tests/FftTests.cpp
         tests/LinearPredictionTests.cpp
         tests/ParametricEqTests.cpp

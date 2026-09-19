@@ -1,6 +1,7 @@
 #include <sa/device/AudioDeviceManager.h>
 #include <sa/device/NullAudioDevice.h>
 #include <sa/dsp/Declick.h>
+#include <sa/dsp/Declip.h>
 #include <sa/dsp/Dynamics.h>
 #include <sa/dsp/OfflineLimiter.h>
 #include <sa/dsp/ParametricEq.h>
@@ -259,6 +260,7 @@ void MainWindow::buildMenus() {
                                        this, &MainWindow::chooseDenoise);
     repair->addAction(tr("Remove &clicks…"), QKeySequence{Qt::CTRL | Qt::SHIFT | Qt::Key_C}, this,
                       &MainWindow::chooseDeclick);
+    repair->addAction(tr("Restore clipped &peaks"), this, &MainWindow::restoreClipping);
     repair->addSeparator();
     repair->addAction(tr("Select all &frequencies"), this,
                       [this] { selectFrequencyBand(0.0, document_.sampleRate().hz() * 0.5); });
@@ -1200,6 +1202,57 @@ bool MainWindow::applyDeclick(double threshold, const QString& label) {
     return changed;
 }
 
+void MainWindow::restoreClipping() {
+    const TimeSelection range = targetRange();
+    if (range.isEmpty() || !documentSource_) {
+        return;
+    }
+
+    // The whole selection, with no run-up: unlike a filter or the declicker,
+    // this fits its model around each flat top out of the material it is given,
+    // and the level it detects the clipping at is the loudest sample in that
+    // material. A run-up would move that level.
+    AudioBuffer span{document_.layout(), range.length()};
+    if (!documentSource_->read(range.start, span.view())) {
+        status_->setText(tr("Could not read the selection"));
+        return;
+    }
+
+    status_->setText(tr("Looking for clipping…"));
+    status_->repaint();
+
+    const auto report = dsp::declip(span.view());
+    if (!report) {
+        status_->setText(tr("Could not restore clipping: %1")
+                             .arg(QString::fromStdString(std::string{report.error().what()})));
+        return;
+    }
+    if (report.value().runs == 0) {
+        status_->setText(report.value().tooLong > 0
+                             ? tr("Nothing restored — the flat parts are too long to be peaks")
+                             : tr("No clipping found"));
+        return;
+    }
+
+    const bool changed = applyEdit(tr("restore clipped peaks"), [this, &range, &span] {
+        return engine::replaceRange(document_, range.start, std::move(span)).ok();
+    });
+    if (changed) {
+        QString note = tr("Restored %n clipped peak(s)", nullptr, report.value().runs);
+        if (report.value().gainDb < 0.0) {
+            // Said out loud, because a repair that quietly changes the level of
+            // a master is not a repair the user can trust.
+            note += tr(" — and brought the file down %1 dB so they fit")
+                        .arg(-report.value().gainDb, 0, 'f', 2);
+        }
+        if (report.value().tooLong > 0) {
+            note += tr(", leaving %n flat stretch(es) too long to be peaks", nullptr,
+                       report.value().tooLong);
+        }
+        status_->setText(note);
+    }
+}
+
 void MainWindow::chooseTimeStretch() {
     if (!hasDocument()) {
         return;
@@ -1697,6 +1750,10 @@ bool MainWindow::applyOperation(const QString& name) {
         }
         applyFilter(static_cast<int>(dsp::FilterType::LowPass), frequency, dsp::kButterworthQ, 0.0,
                     QStringLiteral("low-pass"));
+        return true;
+    }
+    if (name == "declip") {
+        restoreClipping();
         return true;
     }
     if (name == "declick") {
