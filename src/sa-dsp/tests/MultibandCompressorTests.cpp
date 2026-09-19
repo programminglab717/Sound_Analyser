@@ -87,14 +87,14 @@ constexpr SampleRate kRate{48000.0};
 /// with the Butterworth section Qs, and it is built here out of
 /// BiquadCoefficients::allPass -- a designer the crossover itself never calls,
 /// so the two agreeing is evidence rather than a restatement.
-[[nodiscard]] BiquadCascade referenceAllPass(int order, double frequency) {
+[[nodiscard]] BiquadCascade referenceAllPass(int order, double frequency, SampleRate rate = kRate) {
     BiquadCascade cascade;
     const int butterworthOrder = order / 2;
     for (int k = 0; k < butterworthOrder / 2; ++k) {
         const double angle = std::numbers::pi * static_cast<double>(2 * k + 1) /
                              (2.0 * static_cast<double>(butterworthOrder));
         const Result<BiquadCoefficients> section =
-            BiquadCoefficients::allPass(kRate, frequency, 0.5 / std::cos(angle));
+            BiquadCoefficients::allPass(rate, frequency, 0.5 / std::cos(angle));
         REQUIRE(section);
         REQUIRE(cascade.append(section.value()));
     }
@@ -102,9 +102,9 @@ constexpr SampleRate kRate{48000.0};
 }
 
 void applyReferenceAllPasses(AudioBufferView audio, const std::vector<double>& crossoverHz,
-                             int order) {
+                             int order, SampleRate rate = kRate) {
     for (const double frequency : crossoverHz) {
-        const BiquadCascade prototype = referenceAllPass(order, frequency);
+        const BiquadCascade prototype = referenceAllPass(order, frequency, rate);
         for (int channel = 0; channel < audio.channelCount(); ++channel) {
             BiquadCascade filter = prototype;
             filter.processInPlace(audio.channel(channel), audio.frames());
@@ -210,6 +210,34 @@ TEST_CASE("Bypassed bands sum back to the input through one all-pass per crossov
         const Result<MultibandResult> result = compressMultiband(audio.view(), kRate, settings);
         REQUIRE(result);
         REQUIRE(result.value().gainReductionDb.size() == one.crossovers.size() + 1);
+
+        const double residual = worstDifference(audio, reference);
+        CAPTURE(residual);
+        REQUIRE(residual < 1e-6);
+    }
+}
+
+TEST_CASE("The bands recombine at every sample rate, not just at 48 kHz") {
+    // The one thing in the design that a rate could break. Every cutoff is
+    // pre-warped before the bilinear transform, and the warping depends on the
+    // rate, so a crossover at 200 Hz is a different set of coefficients at
+    // 44.1 kHz than at 96 -- and a crossover whose halves no longer sum is a
+    // crossover that colours the signal at that rate and no other.
+    //
+    // 44.1 kHz is the one worth having for its own sake, because a top
+    // crossover at 8 kHz sits much closer to its Nyquist there than at 192.
+    for (const double hz : {44100.0, 88200.0, 96000.0, 192000.0}) {
+        CAPTURE(hz);
+        const SampleRate rate{hz};
+
+        AudioBuffer audio = noise(48000, 1, 0.5, 31u);
+        AudioBuffer reference = copyOf(audio);
+
+        MultibandSettings settings;
+        settings.bands = bandsOf(settings.crossoverHz.size() + 1, true);
+        applyReferenceAllPasses(reference.view(), settings.crossoverHz, settings.order, rate);
+
+        REQUIRE(compressMultiband(audio.view(), rate, settings));
 
         const double residual = worstDifference(audio, reference);
         CAPTURE(residual);
