@@ -296,7 +296,10 @@ TEST_CASE("An empty AIFF is valid and reads as zero frames", "[io][aiff][writer]
     REQUIRE(writer.hasValue());
     REQUIRE(writer.value().finish().ok());
 
-    auto reader = AiffReader::fromMemory(toBytes(stream.str()));
+    // Named, not a temporary: fromMemory does not copy, so a reader over the
+    // result of an expression outlives the bytes it is reading.
+    const auto bytes = toBytes(stream.str());
+    auto reader = AiffReader::fromMemory(bytes);
     REQUIRE(reader.hasValue());
     CHECK(reader.value().info().frameCount == 0);
     CHECK(reader.value().info().channelCount() == 2);
@@ -322,7 +325,8 @@ TEST_CASE("Streamed AIFF writes reassemble into one file", "[io][aiff][writer]")
     REQUIRE(writer.value().finish().ok());
     CHECK(writer.value().framesWritten() == 1000);
 
-    auto reader = AiffReader::fromMemory(toBytes(stream.str()));
+    const auto bytes = toBytes(stream.str());
+    auto reader = AiffReader::fromMemory(bytes);
     REQUIRE(reader.hasValue());
     CHECK(reader.value().info().frameCount == 1000);
     auto restored = reader.value().readAll();

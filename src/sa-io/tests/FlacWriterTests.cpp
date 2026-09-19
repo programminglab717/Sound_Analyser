@@ -199,7 +199,10 @@ TEST_CASE("Streamed FLAC writes in uneven blocks reassemble exactly", "[io][flac
     REQUIRE(writer.value().finish().ok());
     CHECK(writer.value().framesWritten() == 5000);
 
-    requireIdentical(decode(toBytes(stream.str()), 5000, 2, kSampleRate48000), source);
+    // Named, not a temporary: fromMemory does not copy, so a reader built over
+    // the result of an expression can outlive the bytes it is reading.
+    const auto bytes = toBytes(stream.str());
+    requireIdentical(decode(bytes, 5000, 2, kSampleRate48000), source);
 }
 
 TEST_CASE("Channel counts round-trip, mono to the eight FLAC allows", "[io][flac][writer]") {
@@ -352,7 +355,8 @@ TEST_CASE("An empty FLAC is valid and reads as zero frames", "[io][flac][writer]
     REQUIRE(writer.hasValue());
     REQUIRE(writer.value().finish().ok());
 
-    auto reader = FlacReader::fromMemory(toBytes(stream.str()));
+    const auto bytes = toBytes(stream.str());
+    auto reader = FlacReader::fromMemory(bytes);
     REQUIRE(reader.hasValue());
     CHECK(reader.value().info().frameCount == 0);
     CHECK(reader.value().info().channelCount() == 2);
