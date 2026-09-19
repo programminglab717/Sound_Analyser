@@ -42,10 +42,15 @@ branch unnoticed.
 3. **Stereo linking for dynamics.** Every processor is single-channel today, so
    two instances across a stereo pair shift the image on hard-panned transients.
    Needs a summed sidechain and a link amount.
-4. **Lazy spectrogram tiles with LRU eviction.** The Phase 0 spike measured an
-   eager full-file pyramid at 1.3 GB per hour of stereo, which is not viable.
-   Generate for the visible range plus a margin, evict under a memory budget,
-   persist keyed by content hash.
+4. **Lazy spectrogram tiles with LRU eviction.** Done. A decimated overview,
+   always resident and bounded by a memory budget, plus full-resolution tiles
+   fetched for the view and evicted least-recently-used. The window draws from
+   it; the length limit and the coarse-hop fallback are gone. Tiles are checked
+   bit-identical to the eager pyramid over the same frames.
+
+   *Not* persisted across sessions keyed by content hash, which this item also
+   asked for. Nothing caches to disk yet, so reopening a long file rebuilds the
+   overview. That is a separate piece of work and is not done.
 5. **High-quality resampler.** Needed for rate conversion on import and export,
    and by the time-stretch work below.
 6. **Time-stretch and pitch-shift.** Rubber Band is GPL/commercial and excluded
@@ -57,11 +62,27 @@ branch unnoticed.
    engine independent of any UI.
 9. **Spectral repair primitives.** De-hum, de-click, de-clip, noise-profile
    denoise. Phase 3 work, all testable headlessly.
-10. **Acoustic measurement.** Octave and third-octave bands to IEC 61260,
-    impulse response capture, RT60/EDT/C50/C80.
+10. **Acoustic measurement.** Mostly done, with one part deliberately not
+    claimed and one part not started.
+
+    Done: octave and third-octave band energy; EDT, T20, T30, C50, C80, D50
+    and centre time from an impulse response, per band as well as overall.
+    Reachable as `sa-cli bands` and `sa-cli room`.
+
+    Not claimed: **IEC 61260**. The band energies are integrated from the
+    transform rather than taken from a filter bank, and the banded
+    reverberation filters are two biquad sections, which is a gentler skirt
+    than the standard's. Meeting the tolerance masks needs a real filter bank
+    and the published masks to check it against, and neither exists here.
+
+    Not started: **impulse response capture**. Deconvolving a swept sine is
+    pure computation and testable without hardware -- generate a sweep,
+    convolve with a known response, deconvolve, compare -- so it belongs in
+    this queue rather than in Blocked. Playing the sweep and recording the
+    room does not.
 11. **Content analysis.** Pitch and F0 contour, tempo and beat grid, key.
-12. **Forensics.** Lossy-codec cutoff detection, true bit-depth detection,
-    A/B null test.
+12. **Forensics.** Half done. Lossy-codec cutoff detection and true bit-depth
+    detection are in `sa-cli provenance`; the **A/B null test** is not started.
 
 ## Worth attempting, uncertain
 
