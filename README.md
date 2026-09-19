@@ -78,6 +78,7 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | `sa-transport`: playback with a playhead | ✅ Done |
 | `sa-ui`: waveform, spectrogram, spectrum, rulers, markers, meters, editing, repair | ✅ Done |
 | Resampling: any ratio, streaming, real-time safe | ✅ Done |
+| File conversion without holding the file | ✅ Done — block at a time, so length costs disk rather than memory; a same-rate conversion comes back bit-identical |
 | Noise profile learning and spectral denoise | ✅ Done |
 | Click detection and repair, by linear prediction | ✅ Done |
 | Declipping: restoring peaks a converter took off | ✅ Done |
