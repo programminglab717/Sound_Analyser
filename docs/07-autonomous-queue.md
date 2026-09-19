@@ -241,9 +241,10 @@ same bargain with smaller audiences. The download page says plainly what
 warning to expect and why, because a user who was warned in advance clicks
 through and a user who was not closes the tab.
 
-This is a decision rather than a deferral. Revisit it only if the licensing
-model changes -- an open-source release would qualify for free signing, and
-that is a product decision, not a build one.
+This is a decision rather than a deferral, and it is the owner's: put to them
+on 2026-09-19 with the trade above stated plainly, and confirmed. Revisit it
+only if the licensing model changes -- an open-source release would qualify
+for free signing, and that is a product decision, not a build one.
 
 ## Standing rules for unattended work
 
