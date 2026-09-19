@@ -92,6 +92,7 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | Room acoustics from an impulse response | ✅ Done — EDT, T20, T30, C50, C80, D50, centre time; recovers a known decay to 1%, and per octave band |
 | Measuring an impulse response with a swept sine | ✅ Done — exponential sweep and deconvolution; harmonic distortion separates to negative time and is cut off. Playing and recording it needs hardware this build has not been run on |
 | Key detection | ✅ Done — chromagram against twenty-four key profiles; reports its own tuning offset, and says so when the music has no key |
+| Spectrogram tiles cached on disk between sessions | ✅ Done — keyed by a SHA-256 of the settings and sampled content; every stored file CRC-checked and discarded rather than trusted |
 | Pitch and F0 contour | ✅ Done — YIN, monophonic; recovers a known period to 0.5%, and reports nothing rather than guessing on noise |
 | Tempo and beat grid | ✅ Done — onset flux and autocorrelation; recovers a known tempo to within 1 BPM with every beat inside one hop, and reports no tempo rather than a number on material that has none |
 | A/B null test | ✅ Done — aligns, gain-matches, subtracts; finds a 137-sample delay exactly and nulls an exact copy to the float floor |

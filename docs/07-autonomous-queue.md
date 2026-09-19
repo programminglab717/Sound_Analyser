@@ -48,9 +48,37 @@ branch unnoticed.
    it; the length limit and the coarse-hop fallback are gone. Tiles are checked
    bit-identical to the eager pyramid over the same frames.
 
-   *Not* persisted across sessions keyed by content hash, which this item also
-   asked for. Nothing caches to disk yet, so reopening a long file rebuilds the
-   overview. That is a separate piece of work and is not done.
+   Persisted across sessions too, keyed by content hash, which this item also
+   asked for: reopening a file analysed before reads its overview off disk
+   instead of rebuilding it. `%LOCALAPPDATA%` on Windows and
+   `$XDG_CACHE_HOME` elsewhere, bounded at a gibibyte, least-recently-used
+   eviction.
+
+   The key is SHA-256 over every setting that changes a stored byte plus the
+   file's size, timestamp, header and sixteen sampled blocks. That is a
+   *sampled* hash and is documented as one: two files of the same length and
+   timestamp differing only between the sampled blocks would collide, so it
+   must never be used as an integrity check. The timestamp is in the key to
+   narrow that window, at the cost of a needless rebuild after a restore or a
+   copy -- a rebuild is cheap where wrong pixels are not.
+
+   Every stored file is treated as untrusted input, because a crash or a full
+   disk produces a half-written one without anyone attacking anything. Header
+   CRC checked before any field in it is believed, payload CRC after, lengths
+   checked against the real file size in 64-bit arithmetic before any
+   allocation, and a file that fails any of it is deleted rather than used.
+   Truncations, header and body corruption and zeroed files are all tested
+   under ASan.
+
+   The SHA-256 was checked here against the published vectors independently
+   of the module's own tests -- a hash that is stable and wrong still works
+   perfectly as a cache key, so nothing else in the suite would ever have
+   noticed.
+
+   Windows is entirely unproven: `%LOCALAPPDATA%`, the wide-character
+   environment read, rename-over-existing semantics and the sharing-violation
+   behaviour on deleting an open file are reasoned about in comments and
+   compiled nowhere here.
 5. **High-quality resampler.** Needed for rate conversion on import and export,
    and by the time-stretch work below.
 6. **Time-stretch and pitch-shift.** Rubber Band is GPL/commercial and excluded
