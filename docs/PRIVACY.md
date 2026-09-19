@@ -34,13 +34,20 @@ machine, and none of it is visible to us.
 | Session files (`.sa`) | Wherever you save them | So a project can be reopened |
 | Exported audio | Wherever you save it | It is the output you asked for |
 | Spectrogram cache | `%LOCALAPPDATA%\Auscultate\spectrogram-tiles` on Windows | So reopening a long file does not re-analyse it |
-| Window size and preferences | The standard per-user settings location for your operating system | So the application opens as you left it |
+| Window size and preferences | An INI file in the standard per-user settings location for your operating system — or beside the application itself, if you put one there | So the application opens as you left it |
+| The names of files you have opened | The same INI file, at most ten of them | The File menu's recent list |
 
 The spectrogram cache holds analysed *pictures* of audio you have opened, not
 the audio itself, and it is keyed by a hash of the file and the analysis
 settings. It is bounded in size and evicts what has not been used recently.
 You may delete the whole folder at any time; the application will rebuild what
 it needs.
+
+The settings file is plain text. It is an INI file rather than an entry in the
+Windows registry so that you can read it, correct it, copy it to another
+machine, or delete it — which is also how you clear the recent file list for
+good, although the File menu has an entry that does it for you. Deleting the
+file loses nothing but the settings themselves.
 
 ## 4. What we share
 
