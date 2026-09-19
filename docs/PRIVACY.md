@@ -26,24 +26,38 @@ of any audio you open.
 
 ## 3. What stays on your computer
 
-Auscultate writes only what you ask it to write. It keeps no cache, no history,
-no log and no settings file: close it and the only traces of your session are
-the files you saved yourself.
+Auscultate writes what you ask it to write, and one settings file. It keeps no
+cache, no history and no log.
 
 | What | Where | Why |
 | --- | --- | --- |
 | Session files (`.sa`) | Wherever you save them | So a project can be reopened |
 | Exported audio | Wherever you save it | It is the output you asked for |
+| Window size and preferences | An INI file in the standard per-user settings location for your operating system -- or beside the application itself, if you put one there | So the application opens as you left it |
+| The names of files you have opened | The same INI file, at most ten of them | The File menu's recent list |
 
-That is the complete list, and it is short for a reason worth stating. Every
-analysis this product performs -- the spectrogram, the loudness measurement, the
-key, the tempo -- is done in memory and discarded when you close the file. A
-long recording is therefore analysed again each time you open it, which costs
-you a little time and means nothing about what you have been listening to is
-left behind on the disk.
+That is the complete list. Two things about it are worth saying plainly rather
+than leaving to be inferred.
 
-If a future version adds a cache or remembers your preferences, this section
-will say so before that version ships, and will name the exact location.
+**The recent list is the only record of what you have opened**, and it holds
+paths rather than any part of the audio. It is capped at ten, the File menu has
+an entry that clears it, and deleting the settings file clears it permanently.
+Nothing else in this product keeps a history of what you have worked on.
+
+**No analysis is stored.** The spectrogram, the loudness measurement, the key,
+the tempo -- all of it is computed in memory and discarded when you close the
+file. A long recording is analysed again each time you open it, which costs you
+a little time and means that nothing about what you have been listening to is
+left on the disk to be found later.
+
+If a future version adds a cache, this section will say so before that version
+ships, and will name the exact location.
+
+The settings file is plain text. It is an INI file rather than an entry in the
+Windows registry so that you can read it, correct it, copy it to another
+machine, or delete it — which is also how you clear the recent file list for
+good, although the File menu has an entry that does it for you. Deleting the
+file loses nothing but the settings themselves.
 
 ## 4. What we share
 

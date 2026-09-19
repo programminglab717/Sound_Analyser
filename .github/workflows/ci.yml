@@ -169,6 +169,15 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: python3 tools/ui_analysis_test.py ./build/release/bin/auscultate
+      # Settings are a state machine with a file on disk, so what matters is
+      # the awkward cases: nothing stored, a file full of rubbish, a file
+      # written by a newer build, and a geometry that would open the window on
+      # a monitor that is no longer attached. The windowless tests decide what
+      # each of those should do; this checks that a real window does it.
+      - name: Check the settings survive a restart
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python3 tools/ui_settings_test.py ./build/release/bin/auscultate
       - name: Upload the rendering
         if: always()
         uses: actions/upload-artifact@v4

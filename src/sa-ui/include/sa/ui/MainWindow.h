@@ -16,6 +16,8 @@
 #include <sa/ui/Colourmap.h>
 #include <sa/ui/EqCurveView.h>
 #include <sa/ui/LoudnessPanel.h>
+#include <sa/ui/Settings.h>
+#include <sa/ui/SettingsStore.h>
 #include <sa/ui/SpectrogramView.h>
 #include <sa/ui/TimeRuler.h>
 #include <sa/ui/WaveformView.h>
@@ -27,10 +29,14 @@
 #include <memory>
 #include <optional>
 #include <thread>
+#include <utility>
 #include <vector>
 
 class QAction;
+class QCloseEvent;
 class QLabel;
+class QMenu;
+class QSplitter;
 class QTimer;
 
 namespace sa::ui {
@@ -46,7 +52,16 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
-    MainWindow();
+    /// Where the settings are kept.
+    ///
+    /// Nothing -- the usual case -- means the file chooseSettingsFile() picks.
+    /// A path means that file, which is what makes persistence checkable from
+    /// a driver without standing on whatever the person running it has saved.
+    /// An *empty* path means no settings at all: nothing is read and nothing
+    /// is written, which is what a batch run gets unless it asks otherwise.
+    /// A script is not a person, and should neither inherit somebody's window
+    /// position nor leave its own behind in their recent file list.
+    explicit MainWindow(std::optional<std::filesystem::path> settingsFile = std::nullopt);
     ~MainWindow() override;
 
     /// Load an audio file, build its caches and display it. Returns false and
@@ -59,6 +74,14 @@ public:
 
     /// Reopen a saved arrangement.
     bool openSession(const std::filesystem::path& path);
+
+    /// Open audio or a session, deciding which by the extension.
+    ///
+    /// A .sa argument is an arrangement, not audio. Sniffing by extension is
+    /// right here: the user chose the name, and a session is ours to define.
+    /// One copy of that rule, because the command line, the recent list and
+    /// anything else that is handed a path all have to make the same call.
+    bool openPath(const std::filesystem::path& path);
 
     /// Write the edited document to a WAV file.
     bool exportTo(const std::filesystem::path& path, bool selectionOnly);
@@ -116,6 +139,28 @@ public:
 
     [[nodiscard]] bool saveScreenshot(const std::filesystem::path& path);
 
+    /// The settings as restored and now in force, as key=value lines on
+    /// stdout: the window the confining rule settled on, the splitter sizes
+    /// that were accepted, every preference, and the recent list.
+    ///
+    /// The live values, read back out of the widgets rather than out of the
+    /// file, because the claim being checked is that the file reached them.
+    [[nodiscard]] bool printSettings() const;
+
+    /// True when a stored window geometry was found and applied.
+    ///
+    /// The batch paths ask, because a run with nothing saved has to be a
+    /// predictable size for a screenshot to be comparable, and a run that did
+    /// restore something must not then be resized out from under it.
+    [[nodiscard]] bool restoredWindow() const noexcept { return restoredWindow_; }
+
+    /// Write the current state to the settings file now.
+    ///
+    /// Called on close, and from the destructor for the ways out that deliver
+    /// no close event -- a batch run ends by returning from main, and the
+    /// settings a batch run was given are the point of giving it one.
+    void saveSettings();
+
     /// Render just the spectrogram's plotting area, with no gutter and no
     /// window chrome. A test that checks pixels needs to know what it is
     /// looking at; grabbing the whole window makes it guess where the plot
@@ -132,6 +177,9 @@ public:
     /// claim being made about them.
     [[nodiscard]] bool saveWaveformImage(const std::filesystem::path& path);
 
+protected:
+    void closeEvent(QCloseEvent* event) override;
+
 private slots:
     void chooseFile();
     void chooseSaveSession();
@@ -141,6 +189,40 @@ private slots:
 
 private:
     void buildMenus();
+
+    /// Read the settings file and put what it holds into the window.
+    ///
+    /// Called from the constructor, before the widgets exist, because the
+    /// preferences decide what several of them are built with. The parts that
+    /// need a widget -- the geometry, the splitters -- are applied by
+    /// applySavedLayout once there is one.
+    [[nodiscard]] SavedSettings loadSettings();
+    void applyPreferences();
+    void applySavedLayout(const SavedSettings& saved);
+
+    /// The available area of every attached screen, in desktop coordinates.
+    [[nodiscard]] std::vector<Rect> attachedScreens() const;
+
+    /// The rectangle to save: where the window would be if it were not
+    /// maximised.
+    ///
+    /// QWidget::normalGeometry() answers that, but only once the window has
+    /// been shown as a normal window at least once. A window restored straight
+    /// into a maximised state never has been, and it answers with an invalid
+    /// rectangle -- which is how "maximise, quit, reopen" loses the position
+    /// as well as the maximised state. So the rectangle the restore applied is
+    /// kept, and used when the widget has nothing better to say.
+    [[nodiscard]] Rect normalFrame() const;
+
+    void choosePreferences();
+
+    /// Rebuild the recent files submenu, greying out what is not there.
+    void rebuildRecentMenu();
+
+    /// Put `path` at the top of the recent list and save, so the list survives
+    /// a crash as well as a quit.
+    void rememberRecent(const std::filesystem::path& path);
+
     void setColourmap(Colourmap map);
     void setFrequencyScale(FrequencyScale scale);
     void showWaveformCursor(double seconds, double peakDecibels);
@@ -361,20 +443,73 @@ private:
     QAction* trimAction_ = nullptr;
     QAction* normaliseAction_ = nullptr;
 
-    /// Which curve Fade in and Fade out use. Linear by default: it is what
-    /// people mean by a fade, and equal power is for crossfades, where two of
-    /// them have to sum to a constant.
-    engine::FadeShape fadeShape_ = engine::FadeShape::Linear;
-
-    /// What an export is written as, and what is done about the bits it drops.
+    /// Everything the window used to hard-code, and now remembers.
     ///
-    /// 24-bit by default because it is the safe delivery depth and the one
-    /// that needs nothing done to it. The dither setting is a standing policy
-    /// and applies only to a 16-bit export, where it is the difference between
-    /// a noise floor and a distortion floor; see exportTo for why it stops
-    /// there.
-    io::SampleFormat exportFormat_ = io::SampleFormat::PcmInt24;
-    dsp::DitherType ditherType_ = dsp::DitherType::Tpdf;
+    /// One struct rather than a member per setting, because it is what is read
+    /// from the file, what the dialog edits and what is written back: three
+    /// copies of the same values kept in step by hand is how one of them gets
+    /// forgotten. The menus write into this directly and re-tick themselves
+    /// from it, so a batch verb and a menu press leave the window in the same
+    /// state -- which is the rule refreshActions() was already following for
+    /// the analysis toggles.
+    ///
+    /// What an export is written as: 24-bit by default because it is the safe
+    /// delivery depth and the one that needs nothing done to it. The dither
+    /// setting is a standing policy and applies only to a 16-bit export, where
+    /// it is the difference between a noise floor and a distortion floor; see
+    /// exportTo for why it stops there. Fades are linear by default because it
+    /// is what people mean by a fade, and equal power is for crossfades, where
+    /// two of them have to sum to a constant.
+    Preferences preferences_;
+
+    /// The File menu's list, and where it is drawn.
+    RecentFiles recent_;
+    QMenu* recentMenu_ = nullptr;
+
+    /// Which file the settings live in, and whether it is the portable one.
+    SettingsFile settingsFile_;
+
+    /// False once a file written by a newer build has been read. See
+    /// SavedSettings::writeBack: this build then reads and does not write.
+    bool mayWriteSettings_ = true;
+
+    /// Set when a stored geometry was applied, and when the settings have
+    /// already been written by a close, so the destructor does not write them
+    /// a second time.
+    bool restoredWindow_ = false;
+    bool settingsWritten_ = false;
+
+    /// The layout as it was restored: the rectangle the confining rule
+    /// settled on, whether it was maximised, and the two splitters' stored
+    /// sizes.
+    ///
+    /// Kept because a run that never shows the window still saves -- opening a
+    /// file from the command line saves the recent list, and that writes the
+    /// whole file. Widgets that have never been laid out answer with nonsense
+    /// when asked how big they are, and writing that nonsense back is how one
+    /// launch that was killed before it drew anything loses the layout of
+    /// every launch before it.
+    std::optional<Rect> restoredFrame_;
+    bool restoredMaximised_ = false;
+    std::vector<int> loadedMainSplit_;
+    std::vector<int> loadedSideSplit_;
+
+    /// The two splitters, kept so their sizes can be saved and restored. The
+    /// main one holds the waveform over the spectrogram; the side one holds
+    /// the meters, the analysis panel and the spectrum.
+    QSplitter* splitter_ = nullptr;
+    QSplitter* sideSplitter_ = nullptr;
+
+    /// Menu entries that tick according to a preference, with the question
+    /// each one answers.
+    ///
+    /// The radio groups -- export format, dither, fade shape, frequency scale,
+    /// dynamic range, colour map -- are ticked from here rather than each
+    /// keeping its own state, so that a preference changed in the dialog
+    /// re-ticks the menu that shows the same thing. Two controls for one
+    /// setting is fine; two answers is not.
+    std::vector<std::pair<QAction*, std::function<bool()>>> preferenceTicks_;
+
     QAction* attenuateAction_ = nullptr;
     QAction* healAction_ = nullptr;
     QAction* denoiseAction_ = nullptr;
@@ -392,15 +527,12 @@ private:
     /// spectrum and would crowd it unasked, a contour is expensive and means
     /// one note at a time, and room acoustics are an answer about an impulse
     /// response and nonsense about anything else -- so the user says which of
-    /// those three they meant.
+    /// those three they meant. All four are remembered; the flags live in
+    /// preferences_.
     QAction* beatGridAction_ = nullptr;
     QAction* pitchContourAction_ = nullptr;
     QAction* octaveBandsAction_ = nullptr;
     QAction* roomAction_ = nullptr;
-    bool showBeatGrid_ = true;
-    bool showPitchContour_ = false;
-    bool showOctaveBands_ = false;
-    bool measureRoom_ = false;
 
     QAction* playAction_ = nullptr;
     QTimer* playheadTimer_ = nullptr;

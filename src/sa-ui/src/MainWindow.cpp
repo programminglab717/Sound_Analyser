@@ -18,16 +18,21 @@
 #include <sa/spectral/SpectralEdit.h>
 #include <sa/ui/FieldDialog.h>
 #include <sa/ui/MainWindow.h>
+#include <sa/ui/PreferencesDialog.h>
 #include <sa/ui/ViewGeometry.h>
 
 #include <QActionGroup>
 #include <QApplication>
+#include <QCloseEvent>
 #include <QElapsedTimer>
 #include <QFileDialog>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QLabel>
+#include <QList>
 #include <QMenuBar>
+#include <QScreen>
 #include <QScrollArea>
 #include <QSplitter>
 #include <QStatusBar>
@@ -37,6 +42,9 @@
 #include <cstdio>
 #include <fstream>
 #include <numbers>
+#include <string>
+#include <system_error>
+#include <utility>
 
 namespace sa::ui {
 
@@ -52,25 +60,34 @@ namespace {
 struct FadeShapeEntry {
     engine::FadeShape shape;
     QString (*label)();
-    const char* verb;
 };
 
 const FadeShapeEntry kFadeShapes[] = {
-    {engine::FadeShape::Linear, [] { return MainWindow::tr("&Linear"); }, "linear"},
-    {engine::FadeShape::EqualPower, [] { return MainWindow::tr("&Equal power"); }, "equalpower"},
-    {engine::FadeShape::Logarithmic, [] { return MainWindow::tr("Lo&garithmic"); }, "logarithmic"},
-    {engine::FadeShape::Exponential, [] { return MainWindow::tr("E&xponential"); }, "exponential"},
-    {engine::FadeShape::SCurve, [] { return MainWindow::tr("&S-curve"); }, "scurve"},
+    {engine::FadeShape::Linear, [] { return MainWindow::tr("&Linear"); }},
+    {engine::FadeShape::EqualPower, [] { return MainWindow::tr("&Equal power"); }},
+    {engine::FadeShape::Logarithmic, [] { return MainWindow::tr("Lo&garithmic"); }},
+    {engine::FadeShape::Exponential, [] { return MainWindow::tr("E&xponential"); }},
+    {engine::FadeShape::SCurve, [] { return MainWindow::tr("&S-curve"); }},
 };
 
 /// The shape a verb names, or nothing if it names none of them.
+///
+/// The words are the settings layer's, which is also what writes them into the
+/// file. One table for the verb and the stored name, because a shape renamed
+/// in one of the two places and not the other is a settings file that silently
+/// stops restoring.
 [[nodiscard]] std::optional<engine::FadeShape> fadeShapeFor(const QString& verb) {
-    for (const FadeShapeEntry& entry : kFadeShapes) {
-        if (verb == QLatin1String{entry.verb}) {
-            return entry.shape;
-        }
+    return fadeShapeFromName(verb.toStdString());
+}
+
+/// A .sa file is an arrangement, not audio.
+[[nodiscard]] bool isSessionPath(const std::filesystem::path& path) {
+    const std::string extension = path.extension().string();
+    if (extension.size() != 3 || extension[0] != '.') {
+        return false;
     }
-    return std::nullopt;
+    return (extension[1] == 's' || extension[1] == 'S') &&
+           (extension[2] == 'a' || extension[2] == 'A');
 }
 
 /// What to call a shape in an undo label. Lower case and without the menu's
@@ -85,14 +102,18 @@ const FadeShapeEntry kFadeShapes[] = {
     return MainWindow::tr("unknown");
 }
 
-/// Display analysis settings. 4096 at 48 kHz is an 11.7 Hz bin and a 21 ms hop.
-/// A log axis stretches the bottom two octaves over half the display, and 2048
-/// gives them four bins to fill it with; this gives them eight, at a time
-/// resolution transients still survive.
-[[nodiscard]] spectral::SpectrogramConfig displayConfig() {
+/// Display analysis settings. The defaults -- 4096 at 48 kHz -- are an 11.7 Hz
+/// bin and a 21 ms hop. A log axis stretches the bottom two octaves over half
+/// the display, and 2048 gives them four bins to fill it with; 4096 gives them
+/// eight, at a time resolution transients still survive.
+///
+/// A preference rather than a constant because the right answer depends on the
+/// material: speech and drums want the time resolution, a room measurement or
+/// a hum hunt wants the frequency resolution, and neither can be had at once.
+[[nodiscard]] spectral::SpectrogramConfig displayConfig(const Preferences& preferences) {
     spectral::SpectrogramConfig config;
-    config.fftSize = 4096;
-    config.hopSize = 1024;
+    config.fftSize = preferences.fftSize;
+    config.hopSize = preferences.hopSize;
     return config;
 }
 
@@ -110,9 +131,20 @@ const FadeShapeEntry kFadeShapes[] = {
 
 } // namespace
 
-MainWindow::MainWindow() {
+MainWindow::MainWindow(std::optional<std::filesystem::path> settingsFile)
+    // A file named on the command line is neither the portable one nor the
+    // per-user one; it is the one that was asked for. PerUser is the honest
+    // label for the one sentence that reads it, which says where the settings
+    // are and claims nothing else about them.
+    : settingsFile_{!settingsFile ? settingsFileForThisBuild()
+                                  : SettingsFile{std::move(*settingsFile), SettingsHome::PerUser}} {
+    // First, because the preferences decide what several of the widgets below
+    // are built with, and because the window's own size is one of them.
+    const SavedSettings saved = loadSettings();
+    spectrogramConfig_ = displayConfig(preferences_);
+
     setWindowTitle(tr("Auscultate"));
-    resize(1280, 760);
+    resize(kDefaultWindowWidth, kDefaultWindowHeight);
 
     auto* central = new QWidget{this};
     auto* column = new QVBoxLayout{central};
@@ -122,6 +154,7 @@ MainWindow::MainWindow() {
     ruler_ = new TimeRuler{central};
 
     auto* splitter = new QSplitter{Qt::Vertical, central};
+    splitter_ = splitter;
     waveform_ = new WaveformView{splitter};
     spectrogram_ = new SpectrogramView{splitter};
     splitter->addWidget(waveform_);
@@ -164,6 +197,7 @@ MainWindow::MainWindow() {
     analysisScroll->setMinimumHeight(96);
 
     auto* side = new QSplitter{Qt::Vertical, this};
+    sideSplitter_ = side;
     side->addWidget(meters_);
     side->addWidget(analysisScroll);
     side->addWidget(spectrum_);
@@ -172,7 +206,8 @@ MainWindow::MainWindow() {
     // about the panel inside it, so the analysis panel would be handed the
     // smallest share of the three and its tempo would start below the fold.
     // These are the shares that put the key and the tempo on screen at the
-    // default window height. Anyone who wants it otherwise drags the handle.
+    // default window height. Anyone who wants it otherwise drags the handle --
+    // and, since the sizes are saved, drags it once rather than every launch.
     side->setSizes({420, 230, 140});
     // Where a larger window's extra height goes. Not to the analysis panel:
     // it has a fixed amount to say, and once it is all on screen more room
@@ -258,9 +293,33 @@ MainWindow::MainWindow() {
                   "QStatusBar::item { border: none; }"
                   "QLabel { color: #8a8fa0; }"
                   "QSplitter::handle { background: #2a2c38; }");
+
+    // Last: the preferences go into the widgets that draw with them, and the
+    // saved layout goes into the widgets that have just been laid out.
+    applyPreferences();
+    applySavedLayout(saved);
+
+    // Only now. The target lives in the panel's combo, and this is how a
+    // change there reaches the file -- saved at once rather than at the next
+    // close, for the reason the preferences dialog is: a setting somebody has
+    // just made is the one they would most notice losing. Connected after the
+    // preferences have been applied, because applying them sets the combo, and
+    // a window that saved its settings while it was still being built would
+    // write the file on every launch for no reason.
+    connect(meters_, &LoudnessPanel::targetChanged, this, [this] {
+        preferences_.loudnessTarget = meters_->target();
+        saveSettings();
+    });
 }
 
 MainWindow::~MainWindow() {
+    // The ways out that deliver no close event still have settings worth
+    // keeping: a batch run ends by returning from main, and a window torn down
+    // without being closed is how several of the headless paths finish.
+    if (!settingsWritten_) {
+        saveSettings();
+    }
+
     // The worker holds a pointer to this window's cancellation token and posts
     // back to this object. Joining here is what makes both safe; a detached
     // worker would outlive the thing it reports to.
@@ -282,6 +341,14 @@ TimeSelection MainWindow::selection() const noexcept {
 void MainWindow::buildMenus() {
     QMenu* file = menuBar()->addMenu(tr("&File"));
     file->addAction(tr("&Open audio…"), QKeySequence::Open, this, &MainWindow::chooseFile);
+
+    // Rebuilt as it opens rather than as the list changes, because whether a
+    // file is still there is a question about the disk whose answer keeps for
+    // about as long as it takes to read it.
+    recentMenu_ = file->addMenu(tr("Open &recent"));
+    connect(recentMenu_, &QMenu::aboutToShow, this, &MainWindow::rebuildRecentMenu);
+    rebuildRecentMenu();
+
     file->addSeparator();
     file->addAction(tr("Open &session…"), QKeySequence{Qt::CTRL | Qt::SHIFT | Qt::Key_O}, this,
                     &MainWindow::chooseOpenSession);
@@ -298,12 +365,13 @@ void MainWindow::buildMenus() {
     auto* formatGroup = new QActionGroup{this};
     const auto addFormat = [&](const QString& label, io::SampleFormat format) {
         QAction* action = formats->addAction(label, this, [this, format] {
-            exportFormat_ = format;
+            preferences_.exportFormat = format;
             refreshActions();
         });
         action->setCheckable(true);
-        action->setChecked(format == exportFormat_);
         formatGroup->addAction(action);
+        preferenceTicks_.emplace_back(
+            action, [this, format] { return preferences_.exportFormat == format; });
     };
     addFormat(tr("&16-bit"), io::SampleFormat::PcmInt16);
     addFormat(tr("&24-bit"), io::SampleFormat::PcmInt24);
@@ -312,14 +380,21 @@ void MainWindow::buildMenus() {
     QMenu* dithers = file->addMenu(tr("&Dither"));
     auto* ditherGroup = new QActionGroup{this};
     const auto addDither = [&](const QString& label, dsp::DitherType type) {
-        QAction* action = dithers->addAction(label, this, [this, type] { ditherType_ = type; });
+        QAction* action = dithers->addAction(label, this, [this, type] {
+            preferences_.dither = type;
+            refreshActions();
+        });
         action->setCheckable(true);
-        action->setChecked(type == ditherType_);
         ditherGroup->addAction(action);
+        preferenceTicks_.emplace_back(action, [this, type] { return preferences_.dither == type; });
     };
     addDither(tr("&None"), dsp::DitherType::None);
     addDither(tr("&Triangular"), dsp::DitherType::Tpdf);
     addDither(tr("Triangular, noise-&shaped"), dsp::DitherType::TpdfNoiseShaped);
+
+    file->addSeparator();
+    file->addAction(tr("&Preferences…"), QKeySequence::Preferences, this,
+                    &MainWindow::choosePreferences);
 
     file->addSeparator();
     file->addAction(tr("&Quit"), QKeySequence::Quit, qApp, &QApplication::quit);
@@ -403,8 +478,8 @@ void MainWindow::buildMenus() {
         process->addAction(tr("&Normalise to target"), QKeySequence{Qt::CTRL | Qt::Key_N}, this,
                            &MainWindow::normaliseToTarget);
     process->addSeparator();
-    process->addAction(tr("Fade &in"), this, [this] { applyFade(true, fadeShape_); });
-    process->addAction(tr("Fade &out"), this, [this] { applyFade(false, fadeShape_); });
+    process->addAction(tr("Fade &in"), this, [this] { applyFade(true, preferences_.fadeShape); });
+    process->addAction(tr("Fade &out"), this, [this] { applyFade(false, preferences_.fadeShape); });
 
     // The shape is a setting rather than five pairs of menu entries. Ten
     // entries for what is one choice made once and then left alone would push
@@ -413,11 +488,14 @@ void MainWindow::buildMenus() {
     auto* shapeGroup = new QActionGroup{this};
     for (const FadeShapeEntry& entry : kFadeShapes) {
         const engine::FadeShape shape = entry.shape;
-        QAction* action =
-            shapes->addAction(entry.label(), this, [this, shape] { fadeShape_ = shape; });
+        QAction* action = shapes->addAction(entry.label(), this, [this, shape] {
+            preferences_.fadeShape = shape;
+            refreshActions();
+        });
         action->setCheckable(true);
-        action->setChecked(shape == fadeShape_);
         shapeGroup->addAction(action);
+        preferenceTicks_.emplace_back(action,
+                                      [this, shape] { return preferences_.fadeShape == shape; });
     }
     process->addSeparator();
     process->addAction(tr("F&latten"), this, &MainWindow::flattenRange);
@@ -479,19 +557,21 @@ void MainWindow::buildMenus() {
         return action;
     };
 
-    beatGridAction_ = addToggle(tr("&Beat grid over the waveform"),
-                                QKeySequence{Qt::CTRL | Qt::SHIFT | Qt::Key_B}, showBeatGrid_);
+    beatGridAction_ =
+        addToggle(tr("&Beat grid over the waveform"),
+                  QKeySequence{Qt::CTRL | Qt::SHIFT | Qt::Key_B}, preferences_.showBeatGrid);
     pitchContourAction_ =
         addToggle(tr("&Pitch contour over the waveform"),
-                  QKeySequence{Qt::CTRL | Qt::SHIFT | Qt::Key_P}, showPitchContour_);
+                  QKeySequence{Qt::CTRL | Qt::SHIFT | Qt::Key_P}, preferences_.showPitchContour);
     octaveBandsAction_ =
         addToggle(tr("Third-&octave bands on the spectrum"),
-                  QKeySequence{Qt::CTRL | Qt::SHIFT | Qt::Key_T}, showOctaveBands_);
+                  QKeySequence{Qt::CTRL | Qt::SHIFT | Qt::Key_T}, preferences_.showOctaveBands);
     analyse->addSeparator();
     // Named for what it assumes rather than for what it reports. Run on music
     // it produces a refusal and not a reverberation time, and the entry should
     // say so before it is pressed rather than after.
-    roomAction_ = addToggle(tr("Measure as an &impulse response"), QKeySequence{}, measureRoom_);
+    roomAction_ =
+        addToggle(tr("Measure as an &impulse response"), QKeySequence{}, preferences_.measureRoom);
 
     QMenu* view = menuBar()->addMenu(tr("&View"));
     view->addAction(tr("Zoom to &fit"), QKeySequence{Qt::Key_F}, this,
@@ -502,42 +582,57 @@ void MainWindow::buildMenus() {
 
     QMenu* scales = view->addMenu(tr("&Frequency scale"));
     auto* scaleGroup = new QActionGroup{this};
-    const auto addScale = [&](const QString& label, FrequencyScale scale, bool checked) {
-        QAction* action =
-            scales->addAction(label, this, [this, scale] { setFrequencyScale(scale); });
+    const auto addScale = [&](const QString& label, FrequencyScale scale) {
+        QAction* action = scales->addAction(label, this, [this, scale] {
+            preferences_.frequencyScale = scale;
+            setFrequencyScale(scale);
+            refreshActions();
+        });
         action->setCheckable(true);
-        action->setChecked(checked);
         scaleGroup->addAction(action);
+        preferenceTicks_.emplace_back(
+            action, [this, scale] { return preferences_.frequencyScale == scale; });
     };
-    addScale(tr("&Logarithmic"), FrequencyScale::Logarithmic, true);
-    addScale(tr("Li&near"), FrequencyScale::Linear, false);
+    addScale(tr("&Logarithmic"), FrequencyScale::Logarithmic);
+    addScale(tr("Li&near"), FrequencyScale::Linear);
 
     QMenu* range = view->addMenu(tr("&Dynamic range"));
     auto* rangeGroup = new QActionGroup{this};
-    const auto addRange = [&](float floorDb, bool checked) {
+    // Built from the same list the settings validator holds a stored floor to,
+    // so a value the file may contain and a value the menu offers cannot come
+    // apart.
+    const auto addRange = [&](double floorDb) {
         QAction* action =
-            range->addAction(tr("%1 dB").arg(static_cast<int>(floorDb)), this,
-                             [this, floorDb] { spectrogram_->setFloorDecibels(floorDb); });
+            range->addAction(tr("%1 dB").arg(static_cast<int>(floorDb)), this, [this, floorDb] {
+                preferences_.spectrogramFloorDb = floorDb;
+                spectrogram_->setFloorDecibels(static_cast<float>(floorDb));
+                refreshActions();
+            });
         action->setCheckable(true);
-        action->setChecked(checked);
         rangeGroup->addAction(action);
+        preferenceTicks_.emplace_back(
+            action, [this, floorDb] { return preferences_.spectrogramFloorDb == floorDb; });
     };
-    addRange(-60.0f, false);
-    addRange(-80.0f, false);
-    addRange(-96.0f, true);
-    addRange(-120.0f, false);
+    for (const double floorDb : kFloorChoicesDb) {
+        addRange(floorDb);
+    }
 
     QMenu* colours = view->addMenu(tr("&Colour map"));
     auto* group = new QActionGroup{this};
-    const auto addMap = [&](const QString& label, Colourmap map, bool checked) {
-        QAction* action = colours->addAction(label, this, [this, map] { setColourmap(map); });
+    const auto addMap = [&](const QString& label, Colourmap map) {
+        QAction* action = colours->addAction(label, this, [this, map] {
+            preferences_.colourmap = map;
+            setColourmap(map);
+            refreshActions();
+        });
         action->setCheckable(true);
-        action->setChecked(checked);
         group->addAction(action);
+        preferenceTicks_.emplace_back(action,
+                                      [this, map] { return preferences_.colourmap == map; });
     };
-    addMap(tr("Magma"), Colourmap::Magma, true);
-    addMap(tr("Viridis"), Colourmap::Viridis, false);
-    addMap(tr("Greyscale"), Colourmap::Grey, false);
+    addMap(tr("Magma"), Colourmap::Magma);
+    addMap(tr("Viridis"), Colourmap::Viridis);
+    addMap(tr("Greyscale"), Colourmap::Grey);
 
     view->addSeparator();
     // Ctrl+Shift+R, because Ctrl+R is Repair > Attenuate. Two actions on one
@@ -547,6 +642,342 @@ void MainWindow::buildMenus() {
                     this, &MainWindow::captureSpectrumReference);
     clearReferenceAction_ =
         view->addAction(tr("Clear spectrum reference"), this, &MainWindow::clearSpectrumReference);
+}
+
+SavedSettings MainWindow::loadSettings() {
+    const SettingsStore store{settingsFile_.path};
+    SavedSettings saved = readSettings(store.read());
+    preferences_ = saved.preferences;
+    recent_ = saved.recent;
+    mayWriteSettings_ = saved.writeBack;
+    loadedMainSplit_ = saved.mainSplit;
+    loadedSideSplit_ = saved.sideSplit;
+    return saved;
+}
+
+void MainWindow::applyPreferences() {
+    spectrogram_->setColourmap(preferences_.colourmap);
+    spectrogram_->setFrequencyScale(preferences_.frequencyScale);
+    spectrogram_->setFloorDecibels(static_cast<float>(preferences_.spectrogramFloorDb));
+    meters_->setTarget(preferences_.loudnessTarget);
+    analysis_->setBounds(preferences_.analysisSeconds, preferences_.keySeconds);
+    refreshActions();
+}
+
+std::vector<Rect> MainWindow::attachedScreens() const {
+    std::vector<Rect> screens;
+    const QList<QScreen*> attached = QGuiApplication::screens();
+    screens.reserve(static_cast<std::size_t>(attached.size()));
+    for (const QScreen* screen : attached) {
+        // The available area rather than the whole screen: a window restored
+        // under the taskbar is a window with its title bar under the taskbar.
+        const QRect area = screen->availableGeometry();
+        screens.push_back(Rect{area.x(), area.y(), area.width(), area.height()});
+    }
+    return screens;
+}
+
+void MainWindow::applySavedLayout(const SavedSettings& saved) {
+    // Two panes above, three beside. The counts are given rather than taken
+    // from the splitters, because a stored list that happens to be the wrong
+    // length is exactly what this is checking for.
+    if (splitter_ != nullptr && splitterSizesUsable(saved.mainSplit, 2)) {
+        splitter_->setSizes(QList<int>{saved.mainSplit.begin(), saved.mainSplit.end()});
+    }
+    if (sideSplitter_ != nullptr && splitterSizesUsable(saved.sideSplit, 3)) {
+        sideSplitter_->setSizes(QList<int>{saved.sideSplit.begin(), saved.sideSplit.end()});
+    }
+
+    if (!saved.window) {
+        return;
+    }
+
+    const Rect placed = confineToScreens(saved.window->frame, attachedScreens());
+    setGeometry(placed.x, placed.y, placed.width, placed.height);
+    restoredFrame_ = placed;
+    restoredMaximised_ = saved.window->maximised;
+    if (saved.window->maximised) {
+        // Set rather than shown: the window is not visible yet -- whoever
+        // constructed it decides when it appears -- and a state set now is the
+        // state it appears in, with the geometry above as the size it returns
+        // to when it is un-maximised.
+        setWindowState(windowState() | Qt::WindowMaximized);
+    }
+    restoredWindow_ = true;
+}
+
+Rect MainWindow::normalFrame() const {
+    // geometry() rather than frameGeometry(), because setGeometry() is what
+    // puts it back: saving one and restoring through the other is how a window
+    // creeps down the screen by its own title bar height on every launch.
+    const QRect live = isMaximized() ? normalGeometry() : geometry();
+    if (live.isValid() && live.width() > 0 && live.height() > 0) {
+        return Rect{live.x(), live.y(), live.width(), live.height()};
+    }
+    // Maximised, and never shown any other way. The rectangle the restore
+    // applied is the best answer anyone has to where this window goes when it
+    // is not maximised, and it is a great deal better than nothing -- nothing
+    // means the next launch opens at the default size, in the default place,
+    // and not maximised either.
+    if (restoredFrame_) {
+        return *restoredFrame_;
+    }
+    const QRect fallback = geometry();
+    return Rect{fallback.x(), fallback.y(), fallback.width(), fallback.height()};
+}
+
+void MainWindow::saveSettings() {
+    // No file is not a failure to write one: a batch run without --settings
+    // has asked to keep nothing, and saying so on stderr every time would make
+    // a clean run look broken.
+    if (!mayWriteSettings_ || settingsFile_.path.empty()) {
+        return;
+    }
+
+    SavedSettings settings;
+    settings.preferences = preferences_;
+    settings.recent = recent_;
+    if (meters_ != nullptr) {
+        // The panel's combo owns the target; the preference is a copy of its
+        // answer, taken here so that a change made in the panel is saved
+        // whether or not anything told the window about it.
+        settings.preferences.loudnessTarget = meters_->target();
+    }
+
+    // A window that has never been shown has never been laid out either: its
+    // splitters answer with a handful of pixels each and its geometry is
+    // whatever the constructor asked for. That is not a layout anybody chose,
+    // and saving it would mean that opening a file from the command line and
+    // then being killed -- which saves, because the recent list is saved at
+    // once -- quietly replaced the layout of every launch before it.
+    //
+    // So a run that has not shown the window writes back what it read.
+    if (isVisible()) {
+        const Rect frame = normalFrame();
+        if (frame.width > 0 && frame.height > 0) {
+            WindowPlacement placement;
+            placement.frame = frame;
+            placement.maximised = isMaximized();
+            settings.window = placement;
+        }
+
+        // A reading that is not a usable layout falls back to the stored one
+        // rather than to nothing: losing a layout somebody dragged into place
+        // because the widget answered oddly once would be the same failure
+        // this whole branch exists to avoid.
+        const auto sizesOf = [](const QSplitter* splitter, std::size_t panes,
+                                const std::vector<int>& stored) {
+            std::vector<int> held;
+            if (splitter != nullptr) {
+                const QList<int> sizes = splitter->sizes();
+                held.assign(sizes.begin(), sizes.end());
+            }
+            return splitterSizesUsable(held, panes) ? held : stored;
+        };
+        settings.mainSplit = sizesOf(splitter_, 2, loadedMainSplit_);
+        settings.sideSplit = sizesOf(sideSplitter_, 3, loadedSideSplit_);
+    } else {
+        if (restoredFrame_) {
+            settings.window = WindowPlacement{*restoredFrame_, restoredMaximised_};
+        }
+        settings.mainSplit = loadedMainSplit_;
+        settings.sideSplit = loadedSideSplit_;
+    }
+
+    const SettingsStore store{settingsFile_.path};
+    if (!store.write(writeSettings(settings))) {
+        // Nothing to show: by the time this runs on the way out, the status
+        // bar is going with it. On stderr so that a run started from a
+        // terminal says something -- which is how a portable copy in a folder
+        // its user cannot write to would be diagnosed.
+        std::fprintf(stderr, "could not write settings to %s\n",
+                     toUtf8(settingsFile_.path).c_str());
+    }
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+    saveSettings();
+    settingsWritten_ = true;
+    QMainWindow::closeEvent(event);
+}
+
+void MainWindow::choosePreferences() {
+    const std::optional<Preferences> chosen =
+        PreferencesDialog::ask(this, preferences_, settingsFile_.path, settingsFile_.home);
+    if (!chosen) {
+        return;
+    }
+
+    const bool analysisMoved =
+        chosen->fftSize != preferences_.fftSize || chosen->hopSize != preferences_.hopSize;
+    preferences_ = *chosen;
+    applyPreferences();
+    // Saved at once rather than at the next close: a preference somebody has
+    // just set is the one thing they would most notice losing to a crash.
+    saveSettings();
+
+    if (analysisMoved) {
+        // The only preference here that is not a way of drawing what has
+        // already been analysed: a different window or hop is a different
+        // spectrogram, and it has to be built again.
+        spectrogramConfig_ = displayConfig(preferences_);
+        startSpectrogramBuild();
+    }
+    // The bounds and the loudness target feed the panels rather than the
+    // picture, so they are answered by measuring again.
+    reanalyseNow();
+    updateStatus();
+}
+
+void MainWindow::rebuildRecentMenu() {
+    if (recentMenu_ == nullptr) {
+        return;
+    }
+    recentMenu_->clear();
+
+    if (recent_.empty()) {
+        QAction* nothing = recentMenu_->addAction(tr("Nothing opened yet"));
+        nothing->setEnabled(false);
+        return;
+    }
+
+    int number = 1;
+    for (const std::filesystem::path& path : recent_.paths()) {
+        const QString name = QString::fromStdString(toUtf8(path));
+        // &1 to &9 and then no mnemonic, because &10 is not one: Qt would
+        // read it as "1" followed by a zero and give two entries the same key.
+        QAction* action = recentMenu_->addAction(
+            number <= 9 ? tr("&%1  %2").arg(number).arg(name) : name, this, [this, path] {
+                if (openPath(path)) {
+                    return;
+                }
+                // Dropped now, and only now. A file that is merely absent
+                // stays on the list -- a recording on a drive that is not
+                // plugged in this morning is the case the list is most useful
+                // for -- but one that has actually failed to open has earned
+                // its removal.
+                recent_.forget(path);
+                saveSettings();
+                refreshActions();
+            });
+
+        // Greyed rather than pruned. Pruning at load would empty the list of
+        // everything on a network share that happened to be down, or on a
+        // stick that happened to be out, and those are the entries a person
+        // most wants to still be there when it comes back. The cost is a stat
+        // per entry each time this menu opens, which for a path on a
+        // disconnected share can be slow -- and is paid by the person who
+        // opened the menu rather than by everyone at launch.
+        std::error_code failed;
+        const bool there = std::filesystem::exists(path, failed) && !failed;
+        action->setEnabled(there);
+        if (!there) {
+            action->setStatusTip(tr("%1 is not where it was").arg(name));
+        }
+        ++number;
+    }
+
+    recentMenu_->addSeparator();
+    recentMenu_->addAction(tr("&Clear the list"), this, [this] {
+        recent_.clear();
+        saveSettings();
+        refreshActions();
+    });
+}
+
+void MainWindow::rememberRecent(const std::filesystem::path& path) {
+    std::error_code failed;
+    // Absolute, so that one file opened from two working directories is one
+    // entry -- and so that it is still findable next launch, whose working
+    // directory is wherever the shortcut points rather than wherever a
+    // terminal was.
+    std::filesystem::path full = std::filesystem::absolute(path, failed);
+    if (failed) {
+        full = path;
+    }
+    recent_.remember(full);
+    saveSettings();
+    refreshActions();
+}
+
+bool MainWindow::openPath(const std::filesystem::path& path) {
+    return isSessionPath(path) ? openSession(path) : openFile(path);
+}
+
+bool MainWindow::printSettings() const {
+    const auto printName = [](const char* key, std::string_view name) {
+        std::printf("%s=%.*s\n", key, static_cast<int>(name.size()), name.data());
+    };
+
+    std::printf("settings_file=%s\n", toUtf8(settingsFile_.path).c_str());
+    std::printf("settings_portable=%d\n", settingsFile_.home == SettingsHome::Portable ? 1 : 0);
+    std::printf("settings_writeback=%d\n", mayWriteSettings_ ? 1 : 0);
+
+    // The live geometry rather than what the file said, because the claim
+    // being checked is that the file reached the window -- including the case
+    // where the confining rule decided the file was asking for somewhere
+    // nobody could see.
+    const Rect frame = normalFrame();
+    std::printf("window_restored=%d\nwindow_x=%d\nwindow_y=%d\nwindow_width=%d\n"
+                "window_height=%d\nwindow_maximised=%d\n",
+                restoredWindow_ ? 1 : 0, frame.x, frame.y, frame.width, frame.height,
+                isMaximized() ? 1 : 0);
+
+    // The screens the confining rule was given, so that a driver can hold the
+    // window to them rather than to numbers somebody typed into a test. What
+    // counts as off-screen depends entirely on what is attached.
+    const std::vector<Rect> screens = attachedScreens();
+    std::printf("screen_count=%d\n", static_cast<int>(screens.size()));
+    int screenNumber = 0;
+    for (const Rect& screen : screens) {
+        std::printf("screen%d=%d,%d,%d,%d\n", screenNumber, screen.x, screen.y, screen.width,
+                    screen.height);
+        ++screenNumber;
+    }
+
+    const auto printSizes = [](const char* key, const QSplitter* splitter) {
+        if (splitter == nullptr) {
+            return;
+        }
+        const QList<int> sizes = splitter->sizes();
+        std::string joined;
+        for (const int size : sizes) {
+            if (!joined.empty()) {
+                joined += ',';
+            }
+            joined += std::to_string(size);
+        }
+        std::printf("%s=%s\n", key, joined.c_str());
+    };
+    printSizes("split_main", splitter_);
+    printSizes("split_side", sideSplitter_);
+
+    // Read back out of the widgets wherever a widget holds the answer, for the
+    // same reason as the geometry: a preference that was parsed correctly and
+    // then applied to nothing would pass a check made against the struct.
+    printName("pref_exportformat", toName(preferences_.exportFormat));
+    printName("pref_dither", toName(preferences_.dither));
+    printName("pref_fadeshape", toName(preferences_.fadeShape));
+    printName("pref_loudnesstarget", toName(meters_->target()));
+    printName("pref_frequencyscale", toName(spectrogram_->frequencyScale()));
+    printName("pref_colourmap", toName(spectrogram_->colourmap()));
+    std::printf("pref_floordb=%.1f\n", static_cast<double>(spectrogram_->floorDecibels()));
+    std::printf("pref_fftsize=%d\npref_hopsize=%d\n", spectrogramConfig_.fftSize,
+                spectrogramConfig_.hopSize);
+    std::printf("pref_analysisseconds=%.0f\npref_keyseconds=%.0f\n", analysis_->mostSeconds(),
+                analysis_->keySeconds());
+    std::printf("pref_beatgrid=%d\npref_pitchcontour=%d\npref_octavebands=%d\npref_room=%d\n",
+                preferences_.showBeatGrid ? 1 : 0, preferences_.showPitchContour ? 1 : 0,
+                preferences_.showOctaveBands ? 1 : 0, preferences_.measureRoom ? 1 : 0);
+
+    std::printf("recent_count=%d\n", static_cast<int>(recent_.size()));
+    int index = 1;
+    for (const std::filesystem::path& path : recent_.paths()) {
+        std::printf("recent%d=%s\n", index, toUtf8(path).c_str());
+        ++index;
+    }
+    std::fflush(stdout);
+    return true;
 }
 
 void MainWindow::captureSpectrumReference() {
@@ -627,8 +1058,8 @@ void MainWindow::remeasureMusical() {
     }
 
     AnalysisPanel::Request request;
-    request.pitch = showPitchContour_;
-    request.room = measureRoom_;
+    request.pitch = preferences_.showPitchContour;
+    request.room = preferences_.measureRoom;
 
     const TimeSelection selected = selection();
     if (selected.isEmpty()) {
@@ -650,14 +1081,14 @@ void MainWindow::showMusicalAnalysis() {
     // The grid is drawn only where there is a tempo to draw. A refused tempo
     // leaves the waveform bare, which is the same answer the panel gives in
     // words, and is not the same picture as a grid nobody can see.
-    if (showBeatGrid_ && result->hasBeats()) {
+    if (preferences_.showBeatGrid && result->hasBeats()) {
         waveform_->setBeatGrid(result->tempo.beatSeconds, result->start,
                                result->tempo.confidence < kTempoDoubtfulBelow);
     } else {
         waveform_->setBeatGrid({}, result->start, false);
     }
 
-    if (showPitchContour_ && result->pitchRequested) {
+    if (preferences_.showPitchContour && result->pitchRequested) {
         const analysis::PitchSettings settings;
         waveform_->setPitchContour(result->pitch, result->start, settings.minHz, settings.maxHz);
     } else {
@@ -670,7 +1101,8 @@ void MainWindow::showMusicalAnalysis() {
                                   ? result->start + result->analysedFrames
                                   : -1);
 
-    spectrum_->setOctaveBands(showOctaveBands_ ? result->bands : std::vector<analysis::Band>{});
+    spectrum_->setOctaveBands(preferences_.showOctaveBands ? result->bands
+                                                           : std::vector<analysis::Band>{});
 }
 
 void MainWindow::respectrum() {
@@ -866,6 +1298,7 @@ bool MainWindow::openSession(const std::filesystem::path& path) {
                              .arg(details.missingSources.size()));
     }
     setWindowTitle(tr("%1 — Auscultate").arg(QString::fromStdString(path.filename().string())));
+    rememberRecent(path);
     return true;
 }
 
@@ -918,6 +1351,7 @@ bool MainWindow::openFile(const std::filesystem::path& path) {
     refreshViews();
     waveform_->showAll();
     setWindowTitle(tr("%1 — Auscultate").arg(name));
+    rememberRecent(path);
     return true;
 }
 
@@ -969,7 +1403,7 @@ void MainWindow::rebuildCaches() {
     // cache holds a decimated overview plus whatever detail the view is
     // actually over, so the resident cost no longer grows with the file and the
     // picture is at full resolution wherever the user is looking.
-    spectrogramConfig_ = displayConfig();
+    spectrogramConfig_ = displayConfig(preferences_);
     spectrogramResolutionNote_.clear();
 
     startSpectrogramBuild();
@@ -1188,12 +1622,19 @@ void MainWindow::refreshActions() {
     }
 
     // The ticks follow the flags rather than the other way round, so that a
-    // batch verb and a menu press leave the menu saying the same thing.
+    // batch verb, a menu press and a restored settings file all leave the menu
+    // saying the same thing.
+    for (const auto& [action, wanted] : preferenceTicks_) {
+        action->setChecked(wanted());
+    }
+    if (recentMenu_ != nullptr) {
+        recentMenu_->setEnabled(!recent_.empty());
+    }
     if (beatGridAction_ != nullptr) {
-        beatGridAction_->setChecked(showBeatGrid_);
-        pitchContourAction_->setChecked(showPitchContour_);
-        octaveBandsAction_->setChecked(showOctaveBands_);
-        roomAction_->setChecked(measureRoom_);
+        beatGridAction_->setChecked(preferences_.showBeatGrid);
+        pitchContourAction_->setChecked(preferences_.showPitchContour);
+        octaveBandsAction_->setChecked(preferences_.showOctaveBands);
+        roomAction_->setChecked(preferences_.measureRoom);
     }
 }
 
@@ -2901,11 +3342,11 @@ bool MainWindow::applyOperation(const QString& name) {
     if (name.startsWith("format:")) {
         const QString wanted = name.mid(7);
         if (wanted == QLatin1String{"16"}) {
-            exportFormat_ = io::SampleFormat::PcmInt16;
+            preferences_.exportFormat = io::SampleFormat::PcmInt16;
         } else if (wanted == QLatin1String{"24"}) {
-            exportFormat_ = io::SampleFormat::PcmInt24;
+            preferences_.exportFormat = io::SampleFormat::PcmInt24;
         } else if (wanted == QLatin1String{"float"}) {
-            exportFormat_ = io::SampleFormat::Float32;
+            preferences_.exportFormat = io::SampleFormat::Float32;
         } else {
             return false;
         }
@@ -2914,11 +3355,11 @@ bool MainWindow::applyOperation(const QString& name) {
     if (name.startsWith("dither:")) {
         const QString wanted = name.mid(7);
         if (wanted == QLatin1String{"none"}) {
-            ditherType_ = dsp::DitherType::None;
+            preferences_.dither = dsp::DitherType::None;
         } else if (wanted == QLatin1String{"tpdf"}) {
-            ditherType_ = dsp::DitherType::Tpdf;
+            preferences_.dither = dsp::DitherType::Tpdf;
         } else if (wanted == QLatin1String{"shaped"}) {
-            ditherType_ = dsp::DitherType::TpdfNoiseShaped;
+            preferences_.dither = dsp::DitherType::TpdfNoiseShaped;
         } else {
             return false;
         }
@@ -2934,13 +3375,13 @@ bool MainWindow::applyOperation(const QString& name) {
         const bool wanted = !name.startsWith(QLatin1String{"no"});
         const QString which = wanted ? name : name.mid(2);
         if (which == QLatin1String{"beatgrid"}) {
-            showBeatGrid_ = wanted;
+            preferences_.showBeatGrid = wanted;
         } else if (which == QLatin1String{"pitchcontour"}) {
-            showPitchContour_ = wanted;
+            preferences_.showPitchContour = wanted;
         } else if (which == QLatin1String{"bands"}) {
-            showOctaveBands_ = wanted;
+            preferences_.showOctaveBands = wanted;
         } else {
-            measureRoom_ = wanted;
+            preferences_.measureRoom = wanted;
         }
         refreshActions();
         reanalyseNow();
@@ -3015,9 +3456,9 @@ bool MainWindow::applyOperation(const QString& name) {
     if (name == "normalise") {
         normaliseToTarget();
     } else if (name == "fadein") {
-        applyFade(true, fadeShape_);
+        applyFade(true, preferences_.fadeShape);
     } else if (name == "fadeout") {
-        applyFade(false, fadeShape_);
+        applyFade(false, preferences_.fadeShape);
     } else if (name == "flatten") {
         flattenRange();
     } else if (name == "cut") {
@@ -3063,7 +3504,7 @@ bool MainWindow::exportTo(const std::filesystem::path& path, bool selectionOnly)
     }
 
     io::WavOptions options;
-    options.format = exportFormat_;
+    options.format = preferences_.exportFormat;
     auto writer =
         io::WavWriter::create(stream, document_.sampleRate(), document_.layout(), options);
     if (!writer) {
@@ -3092,10 +3533,10 @@ bool MainWindow::exportTo(const std::filesystem::path& path, bool selectionOnly)
     // carries its error across the join and restarting it at every block would
     // put a discontinuity in the noise floor every 65536 samples.
     std::optional<dsp::Ditherer> ditherer;
-    const int exportBits = exportFormat_ == io::SampleFormat::PcmInt16 ? 16 : 0;
-    if (exportBits > 0 && ditherType_ != dsp::DitherType::None) {
+    const int exportBits = preferences_.exportFormat == io::SampleFormat::PcmInt16 ? 16 : 0;
+    if (exportBits > 0 && preferences_.dither != dsp::DitherType::None) {
         dsp::DitherSettings settings;
-        settings.type = ditherType_;
+        settings.type = preferences_.dither;
         settings.bits = exportBits;
         if (auto made = dsp::Ditherer::create(settings, document_.layout().count())) {
             ditherer.emplace(std::move(made).value());
@@ -3287,8 +3728,9 @@ bool MainWindow::printMusicalAnalysis() const {
         const analysis::Band& band = result->bands[i];
         std::printf("band_%zu=%.1f,%.4f\n", i, band.centreHz, band.levelDb);
     }
-    std::printf("bands_drawn=%d\nbeat_grid_drawn=%d\ncontour_drawn=%d\n", showOctaveBands_ ? 1 : 0,
-                showBeatGrid_ ? 1 : 0, showPitchContour_ ? 1 : 0);
+    std::printf("bands_drawn=%d\nbeat_grid_drawn=%d\ncontour_drawn=%d\n",
+                preferences_.showOctaveBands ? 1 : 0, preferences_.showBeatGrid ? 1 : 0,
+                preferences_.showPitchContour ? 1 : 0);
     std::fflush(stdout);
     return true;
 }

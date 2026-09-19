@@ -55,6 +55,16 @@ public:
     /// Name of the selected target, for an undo label.
     [[nodiscard]] QString targetName() const;
 
+    /// The delivery specification the verdict is measured against.
+    ///
+    /// The panel owns this rather than the window, because the combo is in the
+    /// panel and a second copy of the answer in the window would be a second
+    /// thing to keep in step. The window reads it to save it and sets it to
+    /// restore it, and is told when the user changes it.
+    [[nodiscard]] analysis::LoudnessPlatform target() const;
+
+    void setTarget(analysis::LoudnessPlatform platform);
+
     /// The last completed measurement, or nothing if none has completed.
     [[nodiscard]] const analysis::ProgrammeAnalysis* latest() const noexcept {
         return hasLatest_ ? &latest_ : nullptr;
@@ -62,6 +72,9 @@ public:
 
 signals:
     void measurementFinished();
+
+    /// The user picked a different delivery target.
+    void targetChanged();
 
 private:
     void buildLayout();

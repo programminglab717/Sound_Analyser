@@ -22,6 +22,9 @@ add_library(sa-ui STATIC
     src/FieldDialog.cpp
     src/LoudnessPanel.cpp
     src/MainWindow.cpp
+    src/PreferencesDialog.cpp
+    src/Settings.cpp
+    src/SettingsStore.cpp
     src/SpectrogramView.cpp
     src/SpectrumView.cpp
     src/TimeAxisView.cpp
@@ -33,6 +36,7 @@ add_library(sa-ui STATIC
     include/sa/ui/FieldDialog.h
     include/sa/ui/LoudnessPanel.h
     include/sa/ui/MainWindow.h
+    include/sa/ui/PreferencesDialog.h
     include/sa/ui/SpectrogramView.h
     include/sa/ui/SpectrumView.h
     include/sa/ui/TimeAxisView.h
@@ -61,6 +65,7 @@ if(SA_BUILD_TESTS)
         tests/AnalysisOverlayTests.cpp
         tests/AnalysisReadoutTests.cpp
         tests/EqCurveTests.cpp
+        tests/SettingsTests.cpp
         tests/TimePlotTests.cpp
     )
     target_link_libraries(sa-ui-tests PRIVATE sa-ui sa-warnings Catch2::Catch2WithMain)

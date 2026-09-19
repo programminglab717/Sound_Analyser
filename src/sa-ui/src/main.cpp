@@ -3,6 +3,8 @@
 #include <QApplication>
 #include <QCommandLineParser>
 #include <cstdio>
+#include <filesystem>
+#include <optional>
 
 namespace {
 
@@ -67,35 +69,70 @@ int main(int argc, char** argv) {
     QCommandLineOption play{"play",
                             "Play the selection to its end and report where the transport got "
                             "to. Runs in real time."};
-    for (const QCommandLineOption& option : {screenshot, plot, curve, wave, select, apply, exportTo,
-                                             printAnalysis, printMusical, play, saveSession}) {
+    // A settings file of its own, so that a run can be given one rather than
+    // standing on whatever the person running it has saved. Without this,
+    // checking that settings persist would mean writing into the real
+    // per-user file -- and every other headless check would inherit whatever
+    // the last one left there.
+    QCommandLineOption settingsFile{"settings", "Read and write settings in <ini>.", "ini"};
+    QCommandLineOption printSettings{"print-settings",
+                                     "Print the settings in force on stdout, as restored."};
+    for (const QCommandLineOption& option :
+         {screenshot, plot, curve, wave, select, apply, exportTo, printAnalysis, printMusical, play,
+          saveSession, settingsFile, printSettings}) {
         parser.addOption(option);
     }
     parser.process(app);
 
-    sa::ui::MainWindow window;
+    // A run that is here to do a job rather than to be looked at.
+    const bool working = parser.isSet(screenshot) || parser.isSet(plot) || parser.isSet(curve) ||
+                         parser.isSet(wave) || parser.isSet(exportTo) || parser.isSet(apply) ||
+                         parser.isSet(printAnalysis) || parser.isSet(printMusical) ||
+                         parser.isSet(play) || parser.isSet(saveSession);
+    const bool batch = working || parser.isSet(printSettings);
+
+    // A named file, or -- for a run that is doing a job and named none -- no
+    // file at all. A script is not a person: it should not open at somebody's
+    // remembered window position, and the files it opens are not files that
+    // person chose to open. Without the second rule, every check in tools/
+    // would depend on whatever the check before it happened to leave behind.
+    //
+    // --print-settings is the exception, because the question it asks is
+    // "which settings are in force", and answering that from a file nobody
+    // uses would answer a different question.
+    const auto where = [&]() -> std::optional<std::filesystem::path> {
+        if (parser.isSet(settingsFile)) {
+            return std::filesystem::path{parser.value(settingsFile).toStdString()};
+        }
+        if (working) {
+            return std::filesystem::path{};
+        }
+        return std::nullopt;
+    };
+
+    sa::ui::MainWindow window{where()};
     const QStringList positional = parser.positionalArguments();
-    // A .sa argument is an arrangement, not audio. Sniffing by extension is
-    // right here: the user chose the name, and a session is ours to define.
     const auto openPositional = [&window](const QString& path) {
-        return path.endsWith(".sa", Qt::CaseInsensitive) ? window.openSession(path.toStdString())
-                                                         : window.openFile(path.toStdString());
+        return window.openPath(path.toStdString());
     };
     if (!positional.isEmpty() && !openPositional(positional.first())) {
         std::fprintf(stderr, "could not open %s\n", qPrintable(positional.first()));
         return 1;
     }
 
-    const bool batch = parser.isSet(screenshot) || parser.isSet(plot) || parser.isSet(curve) ||
-                       parser.isSet(wave) || parser.isSet(exportTo) || parser.isSet(apply) ||
-                       parser.isSet(printAnalysis) || parser.isSet(printMusical) ||
-                       parser.isSet(play) || parser.isSet(saveSession);
     if (!batch) {
         window.show();
         return QApplication::exec();
     }
 
-    window.resize(1280, 760);
+    // A fixed size, unless a stored geometry was restored. The screenshots the
+    // batch options exist for are compared pixel by pixel, so a run with
+    // nothing saved has to be the same size every time; a run that did restore
+    // something must not then be resized out from under the thing being
+    // checked.
+    if (!window.restoredWindow()) {
+        window.resize(1280, 760);
+    }
     window.show();
 
     if (parser.isSet(select)) {
@@ -136,6 +173,10 @@ int main(int argc, char** argv) {
     }
     if (parser.isSet(printMusical) && !window.printMusicalAnalysis()) {
         std::fprintf(stderr, "no musical analysis to print\n");
+        return 1;
+    }
+    if (parser.isSet(printSettings) && !window.printSettings()) {
+        std::fprintf(stderr, "no settings to print\n");
         return 1;
     }
     if (parser.isSet(saveSession) && !window.saveSession(parser.value(saveSession).toStdString())) {
