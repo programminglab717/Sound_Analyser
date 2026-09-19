@@ -239,6 +239,7 @@ void LoudnessPanel::buildLayout() {
         if (hasLatest_) {
             showCompliance(latest_);
         }
+        emit targetChanged();
     });
 
     grid->setRowStretch(row, 1);
@@ -341,6 +342,19 @@ std::optional<double> LoudnessPanel::conformGainDb() const {
 
 QString LoudnessPanel::targetName() const {
     return target_->currentText();
+}
+
+analysis::LoudnessPlatform LoudnessPanel::target() const {
+    return static_cast<analysis::LoudnessPlatform>(target_->currentData().toInt());
+}
+
+void LoudnessPanel::setTarget(analysis::LoudnessPlatform platform) {
+    // A platform the list does not hold leaves the selection alone, rather than
+    // falling back to whatever is first. The list is every target this build
+    // knows, so the only way here is a value from somewhere else entirely.
+    if (const int index = target_->findData(static_cast<int>(platform)); index >= 0) {
+        target_->setCurrentIndex(index);
+    }
 }
 
 void LoudnessPanel::show(const analysis::ProgrammeAnalysis& result, const QString& what) {

@@ -68,6 +68,10 @@ public:
     /// -- and an unbounded read of a two-hour file would be a gigabyte and
     /// several minutes. The panel says what it read whenever it read less than
     /// was asked for; see coverageNote().
+    ///
+    /// Both are the defaults rather than the law: a preference can move them,
+    /// and somebody working on hour-long concert recordings has a real reason
+    /// to. See setBounds.
     static constexpr double kMostSeconds = 120.0;
     static constexpr double kKeySeconds = 60.0;
 
@@ -87,6 +91,18 @@ public:
 
     explicit AnalysisPanel(QWidget* parent = nullptr);
     ~AnalysisPanel() override;
+
+    /// Change how much audio a run reads and how much of it the key comes
+    /// from. Takes effect on the next analysis, not on the one in flight.
+    ///
+    /// No validation here: sa::ui::validated() holds both bounds to the same
+    /// rule for the file, the dialog and this, and a second opinion in the
+    /// panel is a second place for them to disagree.
+    void setBounds(double mostSeconds, double keySeconds) noexcept;
+
+    [[nodiscard]] double mostSeconds() const noexcept { return mostSeconds_; }
+
+    [[nodiscard]] double keySeconds() const noexcept { return keySeconds_; }
 
     /// Analyse [start, start + length) of `source`. Passing nullptr clears.
     void analyse(std::shared_ptr<const io::AudioSource> source, SampleIndex start,
@@ -180,6 +196,9 @@ private:
     MusicalAnalysis latest_;
     bool hasLatest_ = false;
     bool busy_ = false;
+
+    double mostSeconds_ = kMostSeconds;
+    double keySeconds_ = kKeySeconds;
 
     void deliver(const MusicalAnalysis& result, const QString& what);
 

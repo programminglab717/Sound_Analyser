@@ -162,9 +162,9 @@ trackPitchInChunks(ConstAudioBufferView audio, SampleRate rate,
 /// the fifth could not be computed would be worse than the command line it is
 /// replacing.
 void analyseBuffer(ConstAudioBufferView audio, SampleRate rate, AnalysisPanel::Request request,
-                   const CancellationToken& cancellation, MusicalAnalysis& out) {
-    const auto keyFrames = std::min<SampleCount>(
-        audio.frames(), static_cast<SampleCount>(AnalysisPanel::kKeySeconds * rate.hz()));
+                   double keySeconds, const CancellationToken& cancellation, MusicalAnalysis& out) {
+    const auto keyFrames =
+        std::min<SampleCount>(audio.frames(), static_cast<SampleCount>(keySeconds * rate.hz()));
     out.keyFrames = keyFrames;
 
     if (auto estimate = analysis::detectKey(audio.subRange(0, keyFrames), rate); estimate) {
@@ -379,6 +379,11 @@ void AnalysisPanel::buildLayout() {
     grid->setColumnStretch(1, 1);
 }
 
+void AnalysisPanel::setBounds(double mostSeconds, double keySeconds) noexcept {
+    mostSeconds_ = mostSeconds;
+    keySeconds_ = keySeconds;
+}
+
 void AnalysisPanel::clear() {
     // An analysis in flight belongs to whatever was open before. Bumping the
     // generation is what stops its result landing in a panel that has been
@@ -487,8 +492,12 @@ void AnalysisPanel::analyse(std::shared_ptr<const io::AudioSource> source, Sampl
     cancellation_ = std::make_shared<CancellationToken>();
     finished_ = std::make_shared<std::atomic<bool>>(false);
 
+    // The bounds are copied into the worker rather than read from the panel
+    // inside it: the panel belongs to the main thread, and a preference changed
+    // while a run was in flight would otherwise be read from another one.
     worker_ = std::thread{[source = std::move(source), start, length, what, request, mine,
-                           session = session_, cancellation = cancellation_, finished = finished_] {
+                           session = session_, cancellation = cancellation_, finished = finished_,
+                           mostSeconds = mostSeconds_, keySeconds = keySeconds_] {
         // First, so that it covers every way out of the lambda. The flag is
         // what tells the panel this thread can be joined without waiting, and
         // one set only on the successful path would leave a cancelled worker
@@ -502,7 +511,7 @@ void AnalysisPanel::analyse(std::shared_ptr<const io::AudioSource> source, Sampl
         result.requestedFrames = length;
 
         const auto wanted = std::min<SampleCount>(
-            length, static_cast<SampleCount>(kMostSeconds * info.sampleRate.hz()));
+            length, static_cast<SampleCount>(mostSeconds * info.sampleRate.hz()));
         if (wanted > 0) {
             AudioBuffer audio{info.layout, wanted};
             const SampleCount read = readBlocks(*source, start, audio.view(), *cancellation);
@@ -513,7 +522,7 @@ void AnalysisPanel::analyse(std::shared_ptr<const io::AudioSource> source, Sampl
                 // full width would have them all analysing the silence past
                 // the end of it.
                 analyseBuffer(audio.constView().subRange(0, read), info.sampleRate, request,
-                              *cancellation, result);
+                              keySeconds, *cancellation, result);
             }
         }
 
