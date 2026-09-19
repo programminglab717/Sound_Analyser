@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(SoundAnalyser
+project(Auscult
     VERSION 0.1.0
     DESCRIPTION "Analysis-first audio repair and mastering workstation"
     LANGUAGES CXX)

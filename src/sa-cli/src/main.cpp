@@ -393,7 +393,7 @@ void printCsvRow(const std::filesystem::path& path, const sa::io::AudioFileInfo&
 }
 
 void usage() {
-    std::printf(R"(sa-cli -- headless driver for Sound Analyser
+    std::printf(R"(auscult-cli -- headless driver for Auscult
 
   analyse <file>... [--json | --csv]
       Measure loudness, peaks and statistics. --csv writes one row per file

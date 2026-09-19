@@ -44,8 +44,8 @@ target_link_libraries(sa-ui PUBLIC sa-analysis sa-core sa-device sa-engine sa-io
 # applied to the UI layer. Everything below it still builds with -Werror.
 target_compile_features(sa-ui PUBLIC cxx_std_20)
 
-add_executable(sound-analyser src/main.cpp)
-target_link_libraries(sound-analyser PRIVATE sa-ui)
+add_executable(auscult src/main.cpp)
+target_link_libraries(auscult PRIVATE sa-ui)
 
 # The view geometry and the EQ curve are deliberately windowless, so they are
 # tested the same way every other module is: by calling them. sa-warnings is

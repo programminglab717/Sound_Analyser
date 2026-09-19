@@ -146,18 +146,18 @@ jobs:
       - name: Configure
         run: cmake --preset release
       - name: Build
-        run: cmake --build --preset release --target sound-analyser
+        run: cmake --build --preset release --target auscult
       - name: Render and inspect
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python3 tools/ui_smoke_test.py ./build/release/bin/sound-analyser --keep artefacts/window.png
+        run: python3 tools/ui_smoke_test.py ./build/release/bin/auscult --keep artefacts/window.png
       # Drawing the right picture and editing the right samples are separate
       # claims. An editor that cuts the wrong four seconds would pass the check
       # above, because that one stops at the picture.
       - name: Edit and verify the samples
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python3 tools/ui_edit_test.py ./build/release/bin/sound-analyser
+        run: python3 tools/ui_edit_test.py ./build/release/bin/auscult
       - name: Upload the rendering
         if: always()
         uses: actions/upload-artifact@v4
@@ -166,7 +166,7 @@ jobs:
           path: artefacts/
           if-no-files-found: ignore
 
-  # sa-cli needs no Qt, so it gets its own job rather than riding on one that
+  # auscult-cli needs no Qt, so it gets its own job rather than riding on one that
   # installs it. It is also the path a batch user's script depends on, which
   # makes its output and its exit codes an interface rather than a convenience.
   cli:
@@ -180,9 +180,9 @@ jobs:
       - name: Configure
         run: cmake --preset release
       - name: Build
-        run: cmake --build --preset release --target sa-cli
+        run: cmake --build --preset release --target auscult-cli
       - name: Drive every command
-        run: python3 tools/cli_test.py ./build/release/bin/sa-cli
+        run: python3 tools/cli_test.py ./build/release/bin/auscult-cli
 
   # A build the product owner can actually run. Everything above proves the code
   # is correct; this is what lets someone judge whether it is any good.
@@ -225,23 +225,23 @@ jobs:
       - name: Stage the application
         shell: pwsh
         run: |
-          $stage = "package/Sound Analyser"
+          $stage = "package/Auscult"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
-          $exe = Get-ChildItem -Recurse -Filter sound-analyser.exe |
+          $exe = Get-ChildItem -Recurse -Filter auscult.exe |
                  Select-Object -First 1 -ExpandProperty FullName
-          if (-not $exe) { throw "sound-analyser.exe was not built" }
+          if (-not $exe) { throw "auscult.exe was not built" }
           Copy-Item $exe $stage
 
           # The headless driver goes in the same folder. It links nothing the
           # window does not already bring, so it costs a megabyte and makes the
           # package usable from a script without a second download.
-          $cli = Get-ChildItem -Recurse -Filter sa-cli.exe |
+          $cli = Get-ChildItem -Recurse -Filter auscult-cli.exe |
                  Select-Object -First 1 -ExpandProperty FullName
-          if (-not $cli) { throw "sa-cli.exe was not built" }
+          if (-not $cli) { throw "auscult-cli.exe was not built" }
           Copy-Item $cli $stage
 
           & "$env:CMAKE_PREFIX_PATH/bin/windeployqt.exe" --release --no-translations `
-              --no-system-d3d-compiler --no-opengl-sw "$stage/sound-analyser.exe"
+              --no-system-d3d-compiler --no-opengl-sw "$stage/auscult.exe"
 
       # Qt is LGPL-3.0 and may only ship dynamically linked. windeployqt putting
       # the DLLs beside the executable is what makes that true in the artefact,
@@ -249,7 +249,7 @@ jobs:
       - name: Check Qt ships as replaceable DLLs
         shell: pwsh
         run: |
-          $stage = "package/Sound Analyser"
+          $stage = "package/Auscult"
           foreach ($dll in @("Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll")) {
             if (-not (Test-Path "$stage/$dll")) {
               throw "$dll is missing: Qt must ship dynamically linked (ADR 0006)"
@@ -260,6 +260,6 @@ jobs:
       - name: Upload the application
         uses: actions/upload-artifact@v4
         with:
-          name: sound-analyser-windows
+          name: auscult-windows
           path: package/
           if-no-files-found: error

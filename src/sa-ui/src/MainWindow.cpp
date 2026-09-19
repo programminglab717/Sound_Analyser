@@ -110,7 +110,7 @@ const FadeShapeEntry kFadeShapes[] = {
 } // namespace
 
 MainWindow::MainWindow() {
-    setWindowTitle(tr("Sound Analyser"));
+    setWindowTitle(tr("Auscult"));
     resize(1280, 760);
 
     auto* central = new QWidget{this};
@@ -653,15 +653,15 @@ void MainWindow::chooseSaveSession() {
     }
     const QString path = QFileDialog::getSaveFileName(this, tr("Save session"),
                                                       QString::fromStdString(sessionPath_.string()),
-                                                      tr("Sound Analyser session (*.sa)"));
+                                                      tr("Auscult session (*.sa)"));
     if (!path.isEmpty()) {
         saveSession(path.toStdString());
     }
 }
 
 void MainWindow::chooseOpenSession() {
-    const QString path = QFileDialog::getOpenFileName(this, tr("Open session"), {},
-                                                      tr("Sound Analyser session (*.sa)"));
+    const QString path =
+        QFileDialog::getOpenFileName(this, tr("Open session"), {}, tr("Auscult session (*.sa)"));
     if (!path.isEmpty()) {
         openSession(path.toStdString());
     }
@@ -691,7 +691,7 @@ bool MainWindow::saveSession(const std::filesystem::path& path) {
     }
 
     sessionPath_ = path;
-    setWindowTitle(tr("%1 — Sound Analyser").arg(QString::fromStdString(path.filename().string())));
+    setWindowTitle(tr("%1 — Auscult").arg(QString::fromStdString(path.filename().string())));
     status_->setText(consolidated.written.empty()
                          ? tr("Saved %1").arg(QString::fromStdString(path.filename().string()))
                          : tr("Saved %1 with %2 consolidated file(s)")
@@ -735,7 +735,7 @@ bool MainWindow::openSession(const std::filesystem::path& path) {
                              .arg(QString::fromStdString(path.filename().string()))
                              .arg(details.missingSources.size()));
     }
-    setWindowTitle(tr("%1 — Sound Analyser").arg(QString::fromStdString(path.filename().string())));
+    setWindowTitle(tr("%1 — Auscult").arg(QString::fromStdString(path.filename().string())));
     return true;
 }
 
@@ -787,7 +787,7 @@ bool MainWindow::openFile(const std::filesystem::path& path) {
     rebuildCaches();
     refreshViews();
     waveform_->showAll();
-    setWindowTitle(tr("%1 — Sound Analyser").arg(name));
+    setWindowTitle(tr("%1 — Auscult").arg(name));
     return true;
 }
 

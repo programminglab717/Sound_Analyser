@@ -15,7 +15,7 @@ namespace {
 
 using Json = nlohmann::json;
 
-constexpr const char* kFormatTag = "sound-analyser-session";
+constexpr const char* kFormatTag = "auscult-session";
 
 std::string_view fadeShapeName(FadeShape shape) noexcept {
     switch (shape) {
@@ -175,7 +175,7 @@ Result<SessionLoadResult> sessionFromJson(std::string_view json, SourceResolver&
     }
 
     if (root.value("format", std::string{}) != kFormatTag) {
-        return Error{ErrorCode::UnsupportedFormat, "not a Sound Analyser session file"};
+        return Error{ErrorCode::UnsupportedFormat, "not an Auscult session file"};
     }
 
     const int version = root.value("version", 0);

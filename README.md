@@ -1,10 +1,15 @@
-# Sound Analyser
+# Auscult
 
 **An analysis-first audio repair and mastering workstation for Windows.**
 
-> Working title. The product is a Windows desktop application that treats the
-> spectrogram — not the waveform — as the primary editing surface, and pairs a
-> standards-compliant measurement engine with on-device ML.
+> Developed by Delta Creation Co. The product is a Windows desktop application
+> that treats the spectrogram — not the waveform — as the primary editing
+> surface, and pairs a measurement engine that refuses to overstate what it
+> knows with on-device ML.
+>
+> *Auscult*: to auscultate is to listen to something closely with an
+> instrument, the way a doctor listens through a stethoscope. That is what this
+> is for — listening instrumentally rather than by ear.
 
 ---
 
@@ -12,14 +17,14 @@
 
 Every audio editor shows you a waveform and hides analysis in a side panel. That
 is backwards for the work people actually struggle with: rescuing a bad
-recording. Sound Analyser inverts it — you *see* the noise, the hum, the click,
+recording. Auscult inverts it — you *see* the noise, the hum, the click,
 the room, and you edit it directly where you see it. It is free to use, it runs
 entirely on your machine, and its measurements are accurate enough to deliver
 against a broadcast spec.
 
 ## Positioning
 
-|                     | Sound Analyser | iZotope RX | Adobe Audition | Audacity | SpectraLayers |
+|                     | Auscult | iZotope RX | Adobe Audition | Audacity | SpectraLayers |
 | ------------------- | -------------- | ---------- | -------------- | -------- | ------------- |
 | Price               | **Free → freemium** | $400–1200 | Subscription | Free | ~$300 |
 | Spectral editing    | **Core**       | Strong     | Moderate       | None     | Core          |
@@ -100,7 +105,7 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | Tempo and beat grid | ✅ Done — onset flux and autocorrelation; recovers a known tempo to within 1 BPM with every beat inside one hop, and reports no tempo rather than a number on material that has none |
 | A/B null test | ✅ Done — aligns, gain-matches, subtracts; finds a 137-sample delay exactly and nulls an exact copy to the float floor |
 | Batch report export | ✅ Done — JSON per file, or CSV across a folder |
-| `sa-cli`: headless batch driver | ✅ Done — twenty-four commands, tested end to end |
+| `auscult-cli`: headless batch driver | ✅ Done — twenty-four commands, tested end to end |
 | Time-stretch and pitch-shift | ✅ Done — phase vocoder with identity phase locking |
 | Markers and regions in the interface | ✅ Done — add, name, navigate, saved in sessions |
 | Reverse, invert polarity, swap channels, sum to mono | ✅ Done — exact to the sample, and obeys the selection |
@@ -114,7 +119,7 @@ under ThreadSanitizer**, plus four end-to-end driver scripts that run the real
 binaries: one that edits and compares exported samples, one that renders the
 window and inspects the pixels, one that drives the EQ curve with synthesised
 pointer events and checks the drawing against the filter's own maths, and one
-that exercises every `sa-cli` command.
+that exercises every `auscult-cli` command.
 CI runs the same suite on MSVC 19 (Visual Studio 18), and the most recent run
 was green on every job -- both Windows configurations included -- and produced
 a packaged Windows build as an artifact.

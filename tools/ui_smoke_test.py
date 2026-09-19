@@ -146,7 +146,7 @@ def spectrum_column(width: int, hz: float) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("binary", type=Path, help="path to the sound-analyser executable")
+    parser.add_argument("binary", type=Path, help="path to the auscult executable")
     parser.add_argument("--keep", type=Path, help="write the screenshot here instead of a temp dir")
     arguments = parser.parse_args()
 

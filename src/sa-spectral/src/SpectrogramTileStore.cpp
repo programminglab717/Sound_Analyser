@@ -471,7 +471,7 @@ std::filesystem::path SpectrogramTileStore::defaultDirectory() {
         const std::filesystem::path base{value};
         std::free(value);
         if (!base.empty()) {
-            return base / L"Sound Analyser" / L"spectrogram-tiles";
+            return base / L"Auscult" / L"spectrogram-tiles";
         }
     } else {
         std::free(value);

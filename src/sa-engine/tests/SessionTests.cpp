@@ -238,7 +238,7 @@ TEST_CASE("Malformed and foreign files are rejected", "[engine][session]") {
 
     // Valid JSON, wrong document.
     CHECK_FALSE(sessionFromJson(R"({"format":"something-else","version":1})", resolver).hasValue());
-    CHECK_FALSE(sessionFromJson(R"({"format":"sound-analyser-session"})", resolver).hasValue());
+    CHECK_FALSE(sessionFromJson(R"({"format":"auscult-session"})", resolver).hasValue());
 }
 
 TEST_CASE("Degenerate header values are rejected", "[engine][session]") {
@@ -247,17 +247,17 @@ TEST_CASE("Degenerate header values are rejected", "[engine][session]") {
         return sessionFromJson(body, resolver).hasValue();
     };
 
-    CHECK_FALSE(attempt(R"({"format":"sound-analyser-session","version":1,
+    CHECK_FALSE(attempt(R"({"format":"auscult-session","version":1,
                             "sampleRate":0,"channels":2})"));
-    CHECK_FALSE(attempt(R"({"format":"sound-analyser-session","version":1,
+    CHECK_FALSE(attempt(R"({"format":"auscult-session","version":1,
                             "sampleRate":-48000,"channels":2})"));
-    CHECK_FALSE(attempt(R"({"format":"sound-analyser-session","version":1,
+    CHECK_FALSE(attempt(R"({"format":"auscult-session","version":1,
                             "sampleRate":48000,"channels":0})"));
-    CHECK_FALSE(attempt(R"({"format":"sound-analyser-session","version":1,
+    CHECK_FALSE(attempt(R"({"format":"auscult-session","version":1,
                             "sampleRate":48000,"channels":9999})"));
-    CHECK_FALSE(attempt(R"({"format":"sound-analyser-session","version":0,
+    CHECK_FALSE(attempt(R"({"format":"auscult-session","version":0,
                             "sampleRate":48000,"channels":2})"));
-    CHECK(attempt(R"({"format":"sound-analyser-session","version":1,
+    CHECK(attempt(R"({"format":"auscult-session","version":1,
                       "sampleRate":48000,"channels":2})"));
 }
 
@@ -268,7 +268,7 @@ TEST_CASE("Structurally invalid entries are dropped and reported", "[engine][ses
     resolver.add("a.wav", makeRamp(2, 500));
 
     const std::string json = R"({
-      "format": "sound-analyser-session",
+      "format": "auscult-session",
       "version": 1,
       "sampleRate": 48000,
       "channels": 2,
@@ -297,7 +297,7 @@ TEST_CASE("A source with no path loads as silence", "[engine][session]") {
     // the session opening.
     FakeResolver resolver;
     const std::string json = R"({
-      "format": "sound-analyser-session", "version": 1,
+      "format": "auscult-session", "version": 1,
       "sampleRate": 48000, "channels": 2,
       "sources": [{"id": 1, "name": "recorded", "frameCount": 480}],
       "clips": [{"id": 2, "source": 1, "sourceStart": 0, "length": 480, "timelineStart": 0}]
@@ -317,7 +317,7 @@ TEST_CASE("Loading never reissues a live clip id", "[engine][session]") {
     resolver.add("a.wav", makeRamp(2, 500));
 
     const std::string json = R"({
-      "format": "sound-analyser-session", "version": 1,
+      "format": "auscult-session", "version": 1,
       "sampleRate": 48000, "channels": 2,
       "nextId": 2,
       "sources": [{"id": 1, "path": "a.wav", "frameCount": 500}],
@@ -339,7 +339,7 @@ TEST_CASE("A fade longer than its clip is clamped on load", "[engine][session]")
     resolver.add("a.wav", makeRamp(2, 500));
 
     const std::string json = R"({
-      "format": "sound-analyser-session", "version": 1,
+      "format": "auscult-session", "version": 1,
       "sampleRate": 48000, "channels": 2,
       "sources": [{"id": 1, "path": "a.wav", "frameCount": 500}],
       "clips": [{"id": 2, "source": 1, "sourceStart": 0, "length": 100, "timelineStart": 0,

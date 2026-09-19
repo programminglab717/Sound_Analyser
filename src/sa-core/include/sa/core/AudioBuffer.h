@@ -26,7 +26,7 @@ template <typename Sample>
 class BasicAudioBufferView {
 public:
     static_assert(std::is_same_v<std::remove_const_t<Sample>, float>,
-                  "Sound Analyser processes float32 internally");
+                  "Auscult processes float32 internally");
 
     BasicAudioBufferView() = default;
 

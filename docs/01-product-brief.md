@@ -160,7 +160,7 @@ These are cheap to honour now and enormously expensive to retrofit.
 
 ## 8. Naming
 
-`Sound Analyser` is a working title — descriptive, unprotectable, and hard to
+`Auscult` is a working title — descriptive, unprotectable, and hard to
 search for. Worth resolving before any public beta, since the name lands in the
 binary, the installer, the file associations and the domain. Candidate
 directions: a coined single word (Sonoscope, Auralis, Resonant), or a plain

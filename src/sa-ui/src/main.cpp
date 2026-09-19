@@ -29,8 +29,8 @@ bool parseSpan(const QString& text, double& from, double& to) {
 /// engine up correctly, which is a different claim.
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
-    QApplication::setApplicationName("Sound Analyser");
-    QApplication::setOrganizationName("Sound Analyser");
+    QApplication::setApplicationName("Auscult");
+    QApplication::setOrganizationName("Delta Creation Co.");
 
     QCommandLineParser parser;
     parser.setApplicationDescription("Analysis-first audio repair and mastering");
