@@ -89,6 +89,7 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | Export depth and dither | ✅ Done — 16/24/float, triangular and noise-shaped, measured at 12–14 dB less distortion |
 | Provenance: encoder cutoff and true bit depth | ✅ Done — reads what a file has been through, not what its header claims |
 | Octave and third-octave bands | ✅ Done — window-noise-bandwidth corrected; not an IEC 61260 filter bank, and does not claim to be |
+| Butterworth octave filter bank | ✅ Done — centres derived from the definition, 0.015 dB worst passband deviation, skirts 1.5x steeper than the two-section filter as the order implies. Not checked against IEC 61260's masks, which are not here |
 | Room acoustics from an impulse response | ✅ Done — EDT, T20, T30, C50, C80, D50, centre time; recovers a known decay to 1%, and per octave band |
 | Measuring an impulse response with a swept sine | ✅ Done — exponential sweep and deconvolution; harmonic distortion separates to negative time and is cut off. Playing and recording it needs hardware this build has not been run on |
 | Key detection | ✅ Done — chromagram against twenty-four key profiles; reports its own tuning offset, and says so when the music has no key |

@@ -97,11 +97,24 @@ branch unnoticed.
     and centre time from an impulse response, per band as well as overall.
     Reachable as `sa-cli bands` and `sa-cli room`.
 
-    Not claimed: **IEC 61260**. The band energies are integrated from the
-    transform rather than taken from a filter bank, and the banded
-    reverberation filters are two biquad sections, which is a gentler skirt
-    than the standard's. Meeting the tolerance masks needs a real filter bank
-    and the published masks to check it against, and neither exists here.
+    Half of that gap is now closed. There **is** a real filter bank, in
+    `sa-dsp`: Butterworth band-passes of configurable order, default six
+    poles, on centres derived from the base-ten definition rather than
+    tabulated. Measured, through the audio path: passband deviation at worst
+    0.015 dB, band edges landing on -3.0103 dB to within 6e-8 dB, and a skirt
+    of 18.48 dB per octave against the two-section filter's 12.27 -- a ratio
+    of 1.506 where the two orders imply 1.5.
+
+    Still **not claimed: IEC 61260**. The tolerance masks are not in this
+    repository and were not available when the bank was written, so nothing
+    has been compared against them and no part of this claims conformance to
+    that standard. What is claimed is only what the tests measure: centres on
+    1000 Hz x 10^(n/10) for third-octaves and 10^(3n/10) for octaves, edges a
+    factor of 2^(+/-1/6) and 2^(+/-1/2) around them, each band a Butterworth
+    band-pass of the stated order, and passband, edges and skirts behaving as
+    that order implies. The phrase "IEC 61260" should not appear beside this
+    code until the masks are here and the realised response has been checked
+    against them.
 
     Done since: **impulse response capture**. `sa-cli sweep` writes an
     exponential sine sweep and `sa-cli deconvolve` turns a recording of it
