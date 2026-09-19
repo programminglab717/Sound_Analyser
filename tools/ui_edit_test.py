@@ -200,7 +200,7 @@ def shape_error_db(actual: list[float], wanted: list[float]) -> float:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("binary", type=Path, help="path to the auscult executable")
+    parser.add_argument("binary", type=Path, help="path to the auscultate executable")
     arguments = parser.parse_args()
 
     failures: list[str] = []

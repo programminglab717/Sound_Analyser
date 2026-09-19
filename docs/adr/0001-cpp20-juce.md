@@ -24,7 +24,7 @@ C#/.NET with WinUI, Rust, and Python/Qt.
 
 ## Consequences
 - Slower UI iteration than a modern declarative framework. Mitigate by keeping
-  `sa-ui` thin and the engine headlessly testable via `auscult-cli`.
+  `sa-ui` thin and the engine headlessly testable via `auscultate-cli`.
 - JUCE licensing must be actively managed — see ADR 0002.
 - Manual memory management demands discipline. Mitigate with sanitiser builds in
   CI and an audio-thread allocation assertion in debug builds.

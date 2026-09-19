@@ -63,7 +63,7 @@ A module marked ⬜ is planned and does not exist yet; everything else is built.
 ├──────────────────────────────────────────────────────────────┤
 │ sa-core       buffers · channel layouts · time units · errors │
 └──────────────────────────────────────────────────────────────┘
-                 auscult-cli  ──▶ links sa-engine and below (no UI)
+                 auscultate-cli  ──▶ links sa-engine and below (no UI)
 ```
 
 Two things in that picture are worth saying out loud, because both were
@@ -81,7 +81,7 @@ built by streaming a file that does not fit in memory; a time stretch takes a
 buffer and returns a buffer, so putting it there would drag `sa-io` into every
 caller that only wants to stretch some samples.
 
-`auscult-cli` existing from early on is a forcing function: if the engine can be
+`auscultate-cli` existing from early on is a forcing function: if the engine can be
 driven headlessly, the UI is genuinely decoupled, and batch/scripting in P5
 becomes almost free.
 

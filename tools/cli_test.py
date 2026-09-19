@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """End-to-end check of the headless driver.
 
-auscult-cli is the path a batch user takes and the one a script depends on, so its
+auscultate-cli is the path a batch user takes and the one a script depends on, so its
 output and its exit codes are an interface, not a convenience. This drives every
 command against generated audio and checks the numbers that come back.
 

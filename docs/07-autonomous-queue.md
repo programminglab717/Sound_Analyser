@@ -85,7 +85,7 @@ branch unnoticed.
    by ADR 0006, so this is in-house: phase-locked vocoder plus WSOLA.
 7. **FLAC decoding.** dr_flac is Unlicense and passes the gate. Unlike WAV,
    there is no metadata reason to write our own.
-8. **`auscult-cli`.** A headless driver for the engine: analyse, convert, batch. The
+8. **`auscultate-cli`.** A headless driver for the engine: analyse, convert, batch. The
    architecture doc calls for it early as a forcing function for keeping the
    engine independent of any UI.
 9. **Spectral repair primitives.** De-hum, de-click, de-clip, noise-profile
@@ -95,7 +95,7 @@ branch unnoticed.
 
     Done: octave and third-octave band energy; EDT, T20, T30, C50, C80, D50
     and centre time from an impulse response, per band as well as overall.
-    Reachable as `auscult-cli bands` and `auscult-cli room`.
+    Reachable as `auscultate-cli bands` and `auscultate-cli room`.
 
     Half of that gap is now closed. There **is** a real filter bank, in
     `sa-dsp`: Butterworth band-passes of configurable order, default six
@@ -116,9 +116,9 @@ branch unnoticed.
     code until the masks are here and the realised response has been checked
     against them.
 
-    Done since: **impulse response capture**. `auscult-cli sweep` writes an
-    exponential sine sweep and `auscult-cli deconvolve` turns a recording of it
-    back into an impulse response, which `auscult-cli room` then measures. Proved
+    Done since: **impulse response capture**. `auscultate-cli sweep` writes an
+    exponential sine sweep and `auscultate-cli deconvolve` turns a recording of it
+    back into an impulse response, which `auscultate-cli room` then measures. Proved
     against synthetic material only: a sweep convolved with its own inverse is
     an impulse 53 dB above its own skirt; a three-tap room comes back with the
     taps on the right samples at the right levels and polarities; a 0.900 s
@@ -130,7 +130,7 @@ branch unnoticed.
     needs the owner, and §08 tells them what to watch.
 11. **Content analysis.** Pitch and F0 contour, tempo and beat grid, key.
 
-    Key: done, as `auscult-cli key`. A chromagram folded onto twelve pitch classes,
+    Key: done, as `auscultate-cli key`. A chromagram folded onto twelve pitch classes,
     correlated against twenty-four profiles, with the correlation scaled by how
     shaped the chroma is -- a bare correlation reads 0.65 on material that uses
     all twelve notes evenly, which is why `strength` is not one. Right on all
@@ -143,13 +143,13 @@ branch unnoticed.
     small change once someone has the actual numbers to hand, which is not the
     same as recalling them.
 
-    Pitch: done, as `auscult-cli pitch-of`. YIN, with the cumulative mean
+    Pitch: done, as `auscultate-cli pitch-of`. YIN, with the cumulative mean
     normalisation, the absolute threshold and parabolic interpolation.
     Monophonic and says so. Recovers a known period to within 0.5% and reports
     nothing rather than a number on noise. Not checked against any published
     implementation or any recorded voice.
 
-    Tempo and beat grid: done, as `auscult-cli tempo`. Spectral flux for onsets,
+    Tempo and beat grid: done, as `auscultate-cli tempo`. Spectral flux for onsets,
     autocorrelation weighted towards the middle of the requested range to
     break the octave ambiguity, then a least-squares refit of the grid onto
     the onsets -- integer-lag autocorrelation alone is accurate to a fraction
@@ -172,7 +172,7 @@ branch unnoticed.
     than anything that can be synthesised, so the false-negative risk on real
     material is unmeasured. §08 asks the owner to try it.
 12. **Forensics.** Done. Lossy-codec cutoff detection and true bit-depth
-    detection are in `auscult-cli provenance`, and the A/B null test is `auscult-cli
+    detection are in `auscultate-cli provenance`, and the A/B null test is `auscultate-cli
     null`: align, gain-match, subtract, and report the residual with a
     per-octave breakdown. An exact copy, a delayed copy and a scaled copy all
     null to the float floor, so anything that does not null is a real
@@ -209,11 +209,11 @@ branch unnoticed.
 | Confirming audio actually comes out | The owner running a build. Backends and tests are written here. |
 | True-peak filter conformance | BS.1770-4 Annex 2 Table 3, transcribed from the published standard rather than memory. |
 | Platform compliance targets | Checking against live platform documentation before they ship as presets. |
-| ~~Product name~~ | **Decided: Auscult**, published by Delta Creation Co. Trademark and domain checks are still outstanding and are the owner's — see below. |
+| ~~Product name~~ | **Decided: Auscultate**, published by Delta Creation Co. Trademark and domain checks are still outstanding and are the owner's — see below. |
 | Pricing, licence sign-off | A person. |
 | Code-signing certificate | ~~A person and about $10/month.~~ **Decided: no.** Ruled out by the no-spending constraint; see below. |
 
-## Decided: the product is called Auscult
+## Decided: the product is called Auscultate
 
 Chosen by the owner on 2026-09-19 and threaded through the application, the
 build targets, the packaging and these documents. Published by Delta Creation
@@ -227,7 +227,7 @@ weeks because nothing else uses it. *Auscultate* also happens to mean the
 thing this product does -- listening to something closely through an
 instrument -- so the name is not only distinctive but descriptive.
 
-Binaries are `auscult` for the application and `auscult-cli` for the headless
+Binaries are `auscultate` for the application and `auscultate-cli` for the headless
 driver.
 
 **Still outstanding, and the owner's to do, before anything ships publicly:**

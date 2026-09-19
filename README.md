@@ -1,4 +1,4 @@
-# Auscult
+# Auscultate
 
 **An analysis-first audio repair and mastering workstation for Windows.**
 
@@ -7,7 +7,7 @@
 > surface, and pairs a measurement engine that refuses to overstate what it
 > knows with on-device ML.
 >
-> *Auscult*: to auscultate is to listen to something closely with an
+> *Auscultate*: to auscultate is to listen to something closely with an
 > instrument, the way a doctor listens through a stethoscope. That is what this
 > is for — listening instrumentally rather than by ear.
 
@@ -17,14 +17,14 @@
 
 Every audio editor shows you a waveform and hides analysis in a side panel. That
 is backwards for the work people actually struggle with: rescuing a bad
-recording. Auscult inverts it — you *see* the noise, the hum, the click,
+recording. Auscultate inverts it — you *see* the noise, the hum, the click,
 the room, and you edit it directly where you see it. It is free to use, it runs
 entirely on your machine, and its measurements are accurate enough to deliver
 against a broadcast spec.
 
 ## Positioning
 
-|                     | Auscult | iZotope RX | Adobe Audition | Audacity | SpectraLayers |
+|                     | Auscultate | iZotope RX | Adobe Audition | Audacity | SpectraLayers |
 | ------------------- | -------------- | ---------- | -------------- | -------- | ------------- |
 | Price               | **Free → freemium** | $400–1200 | Subscription | Free | ~$300 |
 | Spectral editing    | **Core**       | Strong     | Moderate       | None     | Core          |
@@ -108,7 +108,7 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | Live processing preview: hear a setting while you drag it | ✅ Done in the engine — wait-free parameter hand-off, crossfaded changes, exact bypass, clean under ThreadSanitizer. The interface is not hooked to it yet |
 | Loudness over time, PLR, PSR, crest | ✅ Done — momentary and short-term contour driven from the same meter, asserted bit-equal to it; a window that has not filled reports nothing rather than a number |
 | Batch report export | ✅ Done — JSON per file, or CSV across a folder |
-| `auscult-cli`: headless batch driver | ✅ Done — twenty-five commands, tested end to end |
+| `auscultate-cli`: headless batch driver | ✅ Done — twenty-five commands, tested end to end |
 | Time-stretch and pitch-shift | ✅ Done — phase vocoder with identity phase locking |
 | Markers and regions in the interface | ✅ Done — add, name, navigate, saved in sessions |
 | Reverse, invert polarity, swap channels, sum to mono | ✅ Done — exact to the sample, and obeys the selection |
@@ -122,7 +122,7 @@ under ThreadSanitizer**, plus four end-to-end driver scripts that run the real
 binaries: one that edits and compares exported samples, one that renders the
 window and inspects the pixels, one that drives the EQ curve with synthesised
 pointer events and checks the drawing against the filter's own maths, and one
-that exercises every `auscult-cli` command.
+that exercises every `auscultate-cli` command.
 CI runs the same suite on MSVC 19 (Visual Studio 18), and the most recent run
 was green on every job -- both Windows configurations included -- and produced
 a packaged Windows build as an artifact.

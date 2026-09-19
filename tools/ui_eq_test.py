@@ -289,7 +289,7 @@ def numbers_from(stdout: str) -> dict[str, float]:
 
 def main() -> int:  # noqa: C901 - one long script of checks, in the order they build on each other
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("binary", type=Path, help="path to the auscult executable")
+    parser.add_argument("binary", type=Path, help="path to the auscultate executable")
     parser.add_argument("--keep", type=Path, help="write the screenshots into this directory")
     arguments = parser.parse_args()
 

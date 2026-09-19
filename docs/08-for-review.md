@@ -10,13 +10,13 @@ Ordered by how much it would unblock.
 
 ## 1. Run it, and tell me what is wrong with it
 
-**What to do.** Download `auscult-windows` from the latest green CI run's
+**What to do.** Download `auscultate-windows` from the latest green CI run's
 artefacts (Actions → the run → Artifacts at the bottom), unzip it anywhere, and
-run `auscult.exe`. Qt ships beside it, so there is nothing to install.
+run `auscultate.exe`. Qt ships beside it, so there is nothing to install.
 
 It is about 13.3 MB and it is built and tested by the same run that produces it:
 every CI job green -- both MSVC configurations, AddressSanitizer and
-ThreadSanitizer among them -- before the package is uploaded. `auscult-cli.exe` is
+ThreadSanitizer among them -- before the package is uploaded. `auscultate-cli.exe` is
 in the folder beside it: the headless driver, with twenty-four commands: analyse,
 bands, room, sweep, deconvolve, key, tempo, pitch-of, null, dereverb, provenance, convert,
 normalise, denoise, declick, declip, dehum, deess, compress, gate, channels,
@@ -54,18 +54,18 @@ Then open something real — a recording of your own, not a test tone — and tr
 | Save | File ▸ Save session, reopen it, check nothing was lost |
 
 None of the analysis added most recently has a place in the window yet, so it
-is all `auscult-cli` for now. That gap is the biggest one left in the interface and
+is all `auscultate-cli` for now. That gap is the biggest one left in the interface and
 it is next on my list. In the meantime, from the folder the package unzipped
 into:
 
 ```
-auscult-cli key      "track.wav"      what key it is in, and how sure
-auscult-cli tempo    "track.wav"      the tempo, and --json for every beat time
-auscult-cli pitch-of "vocal.wav"      the fundamental over time; --csv for the contour
-auscult-cli null     "before.wav" "after.wav"    what a processing chain actually changed
-auscult-cli room     "impulse.wav"    EDT, T20, T30, C50, C80, D50 from an impulse response
-auscult-cli sweep    "sweep.wav"      a sweep to play into a room, then:
-auscult-cli deconvolve "recording.wav" "impulse.wav" --seconds 5
+auscultate-cli key      "track.wav"      what key it is in, and how sure
+auscultate-cli tempo    "track.wav"      the tempo, and --json for every beat time
+auscultate-cli pitch-of "vocal.wav"      the fundamental over time; --csv for the contour
+auscultate-cli null     "before.wav" "after.wav"    what a processing chain actually changed
+auscultate-cli room     "impulse.wav"    EDT, T20, T30, C50, C80, D50 from an impulse response
+auscultate-cli sweep    "sweep.wav"      a sweep to play into a room, then:
+auscultate-cli deconvolve "recording.wav" "impulse.wav" --seconds 5
 ```
 
 `null` is the one I would try first, because it is the one with an answer you
@@ -105,7 +105,7 @@ that becomes exact.
 
 | Decision | Why it cannot wait forever | My recommendation |
 | --- | --- | --- |
-| **The name.** "Auscult" is a working title | It is in the window title, the executable, the session extension and the namespace | Decide before anyone outside sees it; renaming later costs a day and is never done cleanly |
+| **The name.** "Auscultate" is a working title | It is in the window title, the executable, the session extension and the namespace | Decide before anyone outside sees it; renaming later costs a day and is never done cleanly |
 | **What is free and what is paid** | The feature spec tags tiers, but those tags are guesses | Everything built so far should stay free. Charge for batch processing, plugin hosting, and measurement reporting — capability, not access |
 | **Whether we ever ship a Mac or Linux build** | The device layer already has ALSA, and nothing above it is Windows-specific | Cheap to keep the option open, so keep it open; do not announce it |
 | **Crash reporting** | Needs a privacy position before any code is written | Opt-in, on-device symbolisation, nothing sent without a prompt |
@@ -166,7 +166,7 @@ Not blocked, but a person's judgement would be better than mine.
   something spoken; the split frequency is the control to move first, and
   lower is what a bright voice wants.
 
-- **Whether `auscult-cli room` agrees with a meter you trust.** It takes an
+- **Whether `auscultate-cli room` agrees with a meter you trust.** It takes an
   impulse response and reports EDT, T20, T30, C50, C80, D50 and centre time.
   On synthetic decays it recovers the rate to within one per cent across a
   6:1 range, which says the arithmetic is right and says nothing about
@@ -180,10 +180,10 @@ Not blocked, but a person's judgement would be better than mine.
   A tool that always prints a number for T30 is not measuring more than this
   one, it is extrapolating through its own noise floor.
 
-- **Measuring a real room, which is the part I cannot do.** `auscult-cli sweep`
+- **Measuring a real room, which is the part I cannot do.** `auscultate-cli sweep`
   writes an exponential sine sweep; play it through a speaker, record it, and
-  `auscult-cli deconvolve` turns the recording back into an impulse response that
-  `auscult-cli room` will then measure. Everything here has been checked against
+  `auscultate-cli deconvolve` turns the recording back into an impulse response that
+  `auscultate-cli room` will then measure. Everything here has been checked against
   synthetic rooms: a three-tap response comes back with its taps on the right
   samples at the right levels with the right polarity, and a synthetic decay
   of 0.900 s reads 0.894 s through real files end to end.
@@ -200,7 +200,7 @@ Not blocked, but a person's judgement would be better than mine.
   the exact sweep that was played, and passing different ones gives a
   confident, wrong answer rather than an error.
 
-- **Whether `auscult-cli tempo` holds up on a real mix.** It is exact on
+- **Whether `auscultate-cli tempo` holds up on a real mix.** It is exact on
   synthetic material -- 128.00 BPM on a track built at 128, every beat within
   one hop of where it was played -- and it correctly refuses to give a number
   for a held chord.
@@ -213,7 +213,7 @@ Not blocked, but a person's judgement would be better than mine.
   the tool will say "no tempo" about a track that plainly has one. That is the
   failure to watch for, and it is a one-number fix if you find it.
 
-- **`auscult-cli dereverb` on a take made in a bad room.** This is the one most
+- **`auscultate-cli dereverb` on a take made in a bad room.** This is the one most
   likely to disappoint, and I would rather you knew why in advance than found
   out.
 
@@ -236,7 +236,7 @@ Not blocked, but a person's judgement would be better than mine.
   own tail, so too long a setting starts eating the material -- 0.21 dB off a
   held tone at 0.4 s, 2.29 dB at 1.5 s.
 
-- **`auscult-cli null` is the one I would reach for first.** Take a file, run it
+- **`auscultate-cli null` is the one I would reach for first.** Take a file, run it
   through anything -- this tool, another tool, a plugin chain, an export at a
   different setting -- and null the result against the original. It aligns
   them, matches their level and prints how far below the reference whatever is
@@ -252,7 +252,7 @@ Not blocked, but a person's judgement would be better than mine.
   louder, which looks like the biggest difference in the file and is the
   opposite of one.
 
-- **Whether `auscult-cli key` is right about music you know the key of.** This is
+- **Whether `auscultate-cli key` is right about music you know the key of.** This is
   the one on the list I am least able to check myself. It is right on every
   synthetic progression I can build -- all twenty-four keys, and it is not
   fooled by the relative minor, which is the classic confusion -- but
@@ -271,7 +271,7 @@ Not blocked, but a person's judgement would be better than mine.
   If the hit rate disappoints you, obtaining those tables is the first thing
   to try and it is a small change.
 
-- **Where the band display should live.** `auscult-cli bands` prints thirty-one
+- **Where the band display should live.** `auscultate-cli bands` prints thirty-one
   third-octaves, or ten octaves with --octave, and nothing in the window
   shows them. The spectrum panel already has the space and the axis, so bars
   over the curve is the obvious answer and is probably wrong -- two pictures
@@ -279,7 +279,7 @@ Not blocked, but a person's judgement would be better than mine.
   toggle are the other three, and which of them it is depends on how you
   would use it.
 
-- **Whether `auscult-cli provenance` is right about your files.** It reads what
+- **Whether `auscultate-cli provenance` is right about your files.** It reads what
   the audio says about its own history rather than what the header claims:
   how many bits a file really uses out of the depth it declares, which is
   exact, and whether something with a very steep filter took the top off the
