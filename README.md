@@ -104,13 +104,15 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | Reverse, invert polarity, swap channels, sum to mono | ✅ Done — exact to the sample, and obeys the selection |
 | Fades in five shapes | ✅ Done — linear, equal power, logarithmic, exponential, S-curve |
 | Spectrum reference for A/B tonal comparison | ✅ Done — freeze a curve, see later ones against it with the difference in dB |
-| A draggable EQ curve over the analyser | ⬜ Next |
+| A draggable EQ curve over the analyser | ✅ Done — drag for frequency and gain, wheel or shift-drag for Q; the drawn curve is checked against the filter's own transfer function, and applying it moves the audio by what the curve promised |
 | GPU shader renderer | ⬜ An optimisation, not a requirement — the CPU path fits in the frame budget |
 
-**660 tests passing on GCC 13, under ASan/UBSan with leak detection, and under
-ThreadSanitizer**, plus three end-to-end driver scripts that run the real
+**823 tests passing on GCC 13, under ASan/UBSan with leak detection, and
+under ThreadSanitizer**, plus four end-to-end driver scripts that run the real
 binaries: one that edits and compares exported samples, one that renders the
-window and inspects the pixels, and one that exercises every `sa-cli` command.
+window and inspects the pixels, one that drives the EQ curve with synthesised
+pointer events and checks the drawing against the filter's own maths, and one
+that exercises every `sa-cli` command.
 CI runs the same suite on MSVC 19 (Visual Studio 18), and the most recent run
 was green on every job -- both Windows configurations included -- and produced
 a packaged Windows build as an artifact.
