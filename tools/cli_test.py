@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import random
 import struct
 import subprocess
 import sys
@@ -372,6 +373,75 @@ def main() -> int:
         # the check is against the number rather than against "it reported
         # something".
         # Dither through convert, where the CLI can drop bits.
+        # Provenance: what the audio says about where it came from, as
+        # opposed to what its header claims.
+        print("provenance:")
+        rng = random.Random(11)
+        length = 1 << 16
+        noise = [rng.gauss(0.0, 0.15) for _ in range(length)]
+
+        def write_depth(path: Path, samples: list[float], width: int) -> None:
+            scale = 1 << (width * 8 - 1)
+            with wave.open(str(path), "wb") as handle:
+                handle.setnchannels(1)
+                handle.setsampwidth(width)
+                handle.setframerate(SAMPLE_RATE)
+                data = bytearray()
+                for value in samples:
+                    q = int(round(max(-1.0, min(1.0, value)) * scale))
+                    data += max(-scale, min(scale - 1, q)).to_bytes(width, "little", signed=True)
+                handle.writeframes(bytes(data))
+
+        full = workspace / "prov-full.wav"
+        padded = workspace / "prov-padded.wav"
+        write_depth(full, noise, 3)
+        # The same audio quantised to 16 bits and written as 24: the case this
+        # exists for, and one no header can reveal.
+        write_depth(padded, [round(v * 32768) / 32768 for v in noise], 3)
+
+        result = run("provenance", str(full), "--json")
+        check("provenance exits cleanly", result.returncode == 0, result.stderr)
+        if result.returncode == 0:
+            report = json.loads(result.stdout)
+            check("a full-depth file uses all its bits",
+                  report["effectiveBits"] == 24 and report["padded"] is False,
+                  f"{report['effectiveBits']} bits, padded={report['padded']}")
+            check("and has no encoder edge", report["steepCutoff"] is False,
+                  f"cutoff {report['cutoffHz']}")
+
+        result = run("provenance", str(padded), "--json")
+        if result.returncode == 0:
+            report = json.loads(result.stdout)
+            check("a padded file is reported as the depth it really uses",
+                  report["effectiveBits"] == 16 and report["padded"] is True,
+                  f"{report['effectiveBits']} bits, padded={report['padded']}")
+
+        # A band-limited file, built from partials that stop at 12 kHz, which
+        # is a brick wall by construction -- the same shape a lossy encoder
+        # leaves behind.
+        limited = workspace / "prov-limited.wav"
+        band = [0.0] * length
+        for k in range(20, int(12000 * length / SAMPLE_RATE), 29):
+            hz = k * SAMPLE_RATE / length
+            phase = rng.uniform(0.0, 2.0 * math.pi)
+            for i in range(length):
+                band[i] += math.sin(2.0 * math.pi * hz * i / SAMPLE_RATE + phase)
+        loudest = max(abs(v) for v in band) or 1.0
+        write_depth(limited, [0.5 * v / loudest for v in band], 3)
+
+        result = run("provenance", str(limited), "--json")
+        if result.returncode == 0:
+            report = json.loads(result.stdout)
+            check("a band-limited file is spotted", report["steepCutoff"] is True,
+                  f"cutoff {report['cutoffHz']}")
+            if report["cutoffHz"] is not None:
+                check("and the cutoff is reported near where it is",
+                      10000.0 < report["cutoffHz"] < 16000.0, f"{report['cutoffHz']} Hz")
+
+        check("provenance on a missing file fails",
+              run("provenance", str(workspace / "nope.wav")).returncode != 0)
+        check("provenance with no file fails", run("provenance").returncode != 0)
+
         print("dither:")
         quiet_path = workspace / "quiet-cli.wav"
         write_wav32(

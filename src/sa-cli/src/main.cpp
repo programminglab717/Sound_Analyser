@@ -11,6 +11,7 @@
 
 #include <sa/analysis/ComplianceTarget.h>
 #include <sa/analysis/LoudnessMeter.h>
+#include <sa/analysis/Provenance.h>
 #include <sa/analysis/SignalStatistics.h>
 #include <sa/analysis/StereoField.h>
 #include <sa/analysis/TruePeakMeter.h>
@@ -374,6 +375,18 @@ void usage() {
       Change its pitch without changing how long it lasts. Fractions are
       allowed, and 0.01 of a semitone is a cent.
 
+  provenance <file>... [--json]
+      What the audio says about where it came from, as opposed to what its
+      header claims. Reports the frequency above which there is nothing and
+      how sharply it stops -- a lossy encoder leaves an edge nothing acoustic
+      produces -- and how many bits the file actually uses out of the depth it
+      declares, which is exact rather than a guess.
+
+      It does not say "this is an MP3". A brick wall at 16 kHz is also what a
+      deliberate low-pass looks like, and what a 32 kHz source upsampled to 48
+      looks like. What it says is that something with a very steep filter
+      removed the top of the band, and leaves the conclusion to you.
+
   compress <in> <out> [--threshold <dB>] [--ratio <n>] [--attack <ms>]
            [--release <ms>] [--knee <dB>] [--makeup <dB>] [--no-link]
            [--format 16|24|float]
@@ -472,6 +485,106 @@ int analyse(const Options& options) {
             continue;
         }
         printMeasurement(path, source->info(), measurement, asJson);
+    }
+    return failures == 0 ? 0 : 1;
+}
+
+int provenance(const Options& options) {
+    if (options.positional.size() < 2) {
+        return fail("provenance needs at least one file");
+    }
+    const bool asJson = options.has("json");
+    int failures = 0;
+
+    for (std::size_t index = 1; index < options.positional.size(); ++index) {
+        const std::filesystem::path path = options.positional[index];
+        std::string error;
+        const auto source = open(path, error);
+        if (!source) {
+            ++failures;
+            std::fprintf(stderr, "sa-cli: %s\n", error.c_str());
+            continue;
+        }
+        const sa::io::AudioFileInfo& info = source->info();
+
+        // A fair sample rather than the whole file: what is being looked for is
+        // a property of the encode, which is the same everywhere in it. Two
+        // minutes is plenty and bounds the memory for a feature-length file.
+        constexpr sa::SampleCount kMostFrames = 48000 * 120;
+        const sa::SampleCount take = std::min(info.frameCount, kMostFrames);
+        sa::AudioBuffer audio{info.layout, take};
+        if (const auto read = source->read(0, audio.view()); !read) {
+            ++failures;
+            std::fprintf(stderr, "sa-cli: %s\n", std::string{read.error().what()}.c_str());
+            continue;
+        }
+
+        sa::analysis::ProvenanceSettings settings;
+        settings.declaredBits = 8 * sa::io::bytesPerSample(info.format);
+        if (info.format == sa::io::SampleFormat::Float32 ||
+            info.format == sa::io::SampleFormat::Float64) {
+            // A float file has no bit depth in the sense this measures, and
+            // reporting 32 would invite the comparison that makes it look
+            // padded.
+            settings.declaredBits = 0;
+        }
+
+        const auto found = sa::analysis::examineProvenance(audio.view(), info.sampleRate, settings);
+        if (!found) {
+            ++failures;
+            std::fprintf(stderr, "sa-cli: %s\n", std::string{found.error().what()}.c_str());
+            continue;
+        }
+        const sa::analysis::Provenance& result = found.value();
+
+        if (asJson) {
+            std::printf("{\n");
+            std::printf("  \"file\": \"%s\",\n", path.filename().string().c_str());
+            std::printf("  \"sampleRate\": %d,\n", static_cast<int>(info.sampleRate.hz()));
+            std::printf("  \"declaredBits\": %d,\n", result.declaredBits);
+            if (result.declaredBits > 0) {
+                std::printf("  \"effectiveBits\": %d,\n", result.effectiveBits);
+                std::printf("  \"padded\": %s,\n", result.isPadded ? "true" : "false");
+            } else {
+                std::printf("  \"effectiveBits\": null,\n");
+                std::printf("  \"padded\": null,\n");
+            }
+            if (result.hasSteepCutoff) {
+                std::printf("  \"cutoffHz\": %.0f,\n", result.cutoffHz);
+                std::printf("  \"cutoffDropDb\": %.1f,\n", result.cutoffDropDb);
+            } else {
+                std::printf("  \"cutoffHz\": null,\n");
+                std::printf("  \"cutoffDropDb\": null,\n");
+            }
+            std::printf("  \"steepCutoff\": %s\n", result.hasSteepCutoff ? "true" : "false");
+            std::printf("}\n");
+            continue;
+        }
+
+        std::printf("%s\n", path.filename().string().c_str());
+        if (!result.valid) {
+            std::printf("  too short to say anything\n");
+            continue;
+        }
+        if (result.declaredBits > 0) {
+            if (result.effectiveBits == 0) {
+                std::printf("  depth        %d-bit file, silent\n", result.declaredBits);
+            } else if (result.isPadded) {
+                std::printf("  depth        %d-bit file using %d bits -- padded\n",
+                            result.declaredBits, result.effectiveBits);
+            } else {
+                std::printf("  depth        %d-bit, all of it used\n", result.declaredBits);
+            }
+        } else {
+            std::printf("  depth        float, so not applicable\n");
+        }
+        if (result.hasSteepCutoff) {
+            std::printf("  band stops   %.0f Hz, falling %.0f dB across a quarter octave\n",
+                        result.cutoffHz, result.cutoffDropDb);
+            std::printf("  reading      something with a very steep filter took the top off\n");
+        } else {
+            std::printf("  band         runs to the top; no encoder edge\n");
+        }
     }
     return failures == 0 ? 0 : 1;
 }
@@ -1075,6 +1188,9 @@ int main(int argc, char** argv) {
     const std::string& command = options.positional.front();
     if (command == "analyse" || command == "analyze") {
         return analyse(options);
+    }
+    if (command == "provenance") {
+        return provenance(options);
     }
     if (command == "convert") {
         return convert(options);

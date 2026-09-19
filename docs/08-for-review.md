@@ -17,9 +17,9 @@ run `sound-analyser.exe`. Qt ships beside it, so there is nothing to install.
 It is about 12.6 MB and it is built and tested by the same run that produces it:
 every CI job green -- both MSVC configurations, AddressSanitizer and
 ThreadSanitizer among them -- before the package is uploaded. `sa-cli.exe` is
-in the folder beside it: the headless driver, with thirteen commands: analyse,
-convert, normalise, denoise, declick, declip, dehum, compress, gate, channels,
-render, stretch and pitch.
+in the folder beside it: the headless driver, with fourteen commands: analyse,
+provenance, convert, normalise, denoise, declick, declip, dehum, compress,
+gate, channels, render, stretch and pitch.
 
 Then open something real — a recording of your own, not a test tone — and try:
 
@@ -128,6 +128,16 @@ Not blocked, but a person's judgement would be better than mine.
   stretched to 130%, because a phase vocoder smears transients by construction
   and no number I can produce here says whether that is acceptable or
   embarrassing. Try it on something percussive and tell me.
+- **Whether `sa-cli provenance` is right about your files.** It reads what
+  the audio says about its own history rather than what the header claims:
+  how many bits a file really uses out of the depth it declares, which is
+  exact, and whether something with a very steep filter took the top off the
+  band, which is evidence rather than proof. Run it over a folder you know
+  the history of -- a few originals, a few things that have been through an
+  MP3, a few 16-bit masters delivered as 24 -- and tell me where it is wrong.
+  It is the one feature here I would most expect to be confidently wrong
+  about real material.
+
 - **Whether the noise-shaped dither is worth having.** It is a plain
   second-order shaper, not one of the published psychoacoustic curves, which
   I did not write down because writing a filter design from memory would be
