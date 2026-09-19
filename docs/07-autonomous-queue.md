@@ -65,16 +65,30 @@ branch unnoticed.
 
 ## Worth attempting, uncertain
 
-- **EBU/ITU conformance vectors.** Phase 2's exit criterion needs them and they
-  have never been run. Network works here, so fetching them may be possible —
-  if it is, this jumps to the top of the list, because it converts the metering
-  from "internally consistent" to "conformant" and that gap is currently the
-  biggest overstatement risk in the project.
+- **EBU/ITU conformance vectors.** ~~Worth attempting~~ — attempted, and the
+  answer is no from inside this container. Phase 2's exit criterion needs them
+  and they have never been run.
+
+  Tried on 2026-09-19. The agent proxy answers 403 to CONNECT for both
+  `tech.ebu.ch` and `www.itu.int`, so the publishers are unreachable; the denial
+  is policy rather than a transport failure, and retrying will not change it.
+  `github.com` *is* reachable, and third-party repositories do carry copies of
+  the EBU material — but pulling one into a closed-source product without
+  establishing what licence it is offered under is exactly the kind of decision
+  the standing rules say to stop on, and this project's licence gate exists
+  because that kind of thing is expensive to reverse.
+
+  **So this now needs a person**, and has moved to §Blocked. The route is for
+  the owner to obtain Tech 3341, Tech 3342 and BS.2217 from the EBU and the ITU
+  and drop them somewhere readable; the suite can then be run against them and
+  reported case by case. Until that happens, nothing in the project claims
+  conformance, which is the correct state rather than a gap to paper over.
 
 ## Blocked — needs someone or something not here
 
 | Item | Needs |
 | --- | --- |
+| EBU/ITU conformance vectors | The published test material. Both publishers are blocked by the network policy here; see above. |
 | GPU shader renderer | Real GPU across Intel/AMD/NVIDIA. No longer a Phase 0 risk — it is an optimisation. |
 | Confirming audio actually comes out | The owner running a build. Backends and tests are written here. |
 | True-peak filter conformance | BS.1770-4 Annex 2 Table 3, transcribed from the published standard rather than memory. |

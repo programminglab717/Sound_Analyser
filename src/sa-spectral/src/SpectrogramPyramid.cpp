@@ -1,3 +1,5 @@
+#include "FrameAnalysis.h"
+
 #include <sa/dsp/Stft.h>
 #include <sa/spectral/SpectrogramPyramid.h>
 
@@ -11,28 +13,6 @@ namespace sa::spectral {
 namespace {
 
 constexpr SampleCount kMinimumTopLevelFrames = 2;
-
-} // namespace
-
-namespace {
-
-/// Quantise one frame of complex spectra into the pyramid's 8-bit log scale.
-///
-/// Shared by both builds, because two copies of this is two chances for the
-/// streaming one to draw a slightly different picture from the one-shot one.
-void quantiseFrame(const std::complex<float>* spectra, int bins, float reference,
-                   const SpectrogramConfig& config, std::uint8_t* out) noexcept {
-    const float span = config.maximumDecibels - config.minimumDecibels;
-    for (int bin = 0; bin < bins; ++bin) {
-        const float magnitude = std::abs(spectra[bin]) / reference;
-        // Floor before the log so that true silence maps to the bottom of the
-        // range rather than to negative infinity.
-        const float decibels =
-            magnitude > 1e-12f ? 20.0f * std::log10(magnitude) : config.minimumDecibels;
-        const float normalised = (decibels - config.minimumDecibels) / span;
-        out[bin] = static_cast<std::uint8_t>(std::clamp(normalised, 0.0f, 1.0f) * 255.0f + 0.5f);
-    }
-}
 
 } // namespace
 
@@ -80,129 +60,66 @@ Result<SpectrogramPyramid> SpectrogramPyramid::buildStreaming(const io::AudioSou
                                                               int channel,
                                                               const SpectrogramConfig& config,
                                                               const JobMonitor& monitor) {
-    if (config.maximumDecibels <= config.minimumDecibels) {
-        return Error{ErrorCode::InvalidArgument, "maximumDecibels must exceed minimumDecibels"};
-    }
-    const io::AudioFileInfo& info = source.info();
-    if (channel < 0 || channel >= info.channelCount()) {
-        return Error{ErrorCode::OutOfRange, "channel index outside the source"};
-    }
+    return buildDecimated(source, channel, config, 0, monitor);
+}
 
-    auto stftResult = dsp::Stft::create(config.fftSize, config.hopSize, config.window);
-    if (!stftResult) {
-        return stftResult.error();
+Result<SpectrogramPyramid> SpectrogramPyramid::buildDecimated(const io::AudioSource& source,
+                                                              int channel,
+                                                              const SpectrogramConfig& config,
+                                                              int decimation,
+                                                              const JobMonitor& monitor) {
+    if (decimation < 0 || decimation > 24) {
+        return Error{ErrorCode::InvalidArgument, "decimation outside the supported range"};
     }
-    const dsp::Stft stft = std::move(stftResult).value();
+    auto made = detail::FrameAnalyser::create(source, channel, config);
+    if (!made) {
+        return made.error();
+    }
+    detail::FrameAnalyser& analyser = made.value();
 
     SpectrogramPyramid pyramid;
     pyramid.config_ = config;
-    pyramid.binCount_ = stft.binCount();
-    pyramid.sourceFrames_ = info.frameCount;
-    if (info.frameCount <= 0) {
+    pyramid.binCount_ = analyser.binCount();
+    pyramid.sourceFrames_ = source.info().frameCount;
+    if (pyramid.sourceFrames_ <= 0) {
         return pyramid;
     }
 
-    const SampleCount frames = stft.frameCount(info.frameCount);
-    const auto bins = static_cast<std::size_t>(stft.binCount());
+    const SampleCount fineFrames = analyser.frameCount();
+    const auto bins = static_cast<std::size_t>(analyser.binCount());
+    const SampleCount group = SampleCount{1} << decimation;
 
-    Level base;
-    base.hop = config.hopSize;
-    base.frameCount = frames;
-    base.magnitudes.assign(static_cast<std::size_t>(frames) * bins, std::uint8_t{0});
-
-    // The framing has to match analyse() exactly: it treats the signal as
-    // zero-padded at the front by fftSize - hopSize, so frame f begins at
-    // f * hop - padding. Getting this wrong by one hop puts the whole
-    // spectrogram out of step with the waveform above it.
-    const int padding = config.fftSize - config.hopSize;
-    const dsp::RealFft fft{config.fftSize};
-    std::vector<std::complex<float>> spectrum(bins);
-    std::vector<float> windowed(static_cast<std::size_t>(config.fftSize), 0.0f);
-    const auto reference = static_cast<float>(stft.window().coherentGain() * 0.5);
-
-    // Read in blocks and slide, rather than reading one window per frame.
+    // Level 0 of the result is the max-combine of every `group` STFT frames.
+    // At decimation 0 that is the STFT itself, which is what buildStreaming
+    // wants; above it, the fine frames are computed, folded in, and dropped, so
+    // a three-hour file costs the coarse result rather than the fine one.
     //
-    // Windows overlap by fftSize - hopSize, so a read per frame reads the file
-    // fftSize/hopSize times over -- four times at the display settings, and
-    // that dominated the time to open a long file. This keeps a buffer that
-    // always covers the window being analysed and refills it only when it runs
-    // out, so the file is read once.
-    constexpr SampleCount kReadBlock = 1 << 16;
-    const SampleCount capacity = kReadBlock + config.fftSize;
-    std::vector<float> buffer(static_cast<std::size_t>(capacity), 0.0f);
-    AudioBuffer readInto{info.layout, kReadBlock};
+    // Maximum rather than mean, for the reason every other combine in this file
+    // takes the maximum: a click one frame wide has to survive being zoomed
+    // out, and decimating by sampling would drop it entirely.
+    Level base;
+    base.hop = config.hopSize * group;
+    base.frameCount = (fineFrames + group - 1) / group;
+    base.magnitudes.assign(static_cast<std::size_t>(base.frameCount) * bins, std::uint8_t{0});
 
-    SampleIndex bufferStart = 0; // Sample index of buffer[0].
-    SampleCount bufferFill = 0;
-    SampleIndex readCursor = 0;
-
-    for (SampleCount frame = 0; frame < frames; ++frame) {
+    std::vector<std::uint8_t> frame(bins);
+    for (SampleCount fine = 0; fine < fineFrames; ++fine) {
         if (monitor.shouldCancel()) {
             return Error{ErrorCode::Cancelled, "cancelled"};
         }
-
-        // The framing has to match analyse() exactly: it treats the signal as
-        // zero-padded at the front by fftSize - hopSize, so frame f begins at
-        // f * hop - padding. Getting this wrong by one hop puts the whole
-        // spectrogram out of step with the waveform above it.
-        const SampleIndex windowStart = frame * config.hopSize - padding;
-        const SampleIndex windowEnd = windowStart + config.fftSize;
-
-        const SampleIndex wantFrom = std::max<SampleIndex>(0, windowStart);
-        const SampleIndex wantTo = std::min<SampleIndex>(info.frameCount, windowEnd);
-
-        // Refill whenever the window runs past what is buffered.
-        while (wantTo > bufferStart + bufferFill && readCursor < info.frameCount) {
-            // Keep whatever of the window is already here, drop the rest.
-            const SampleIndex keepFrom = std::max<SampleIndex>(bufferStart, wantFrom);
-            const SampleCount keep = std::max<SampleCount>(0, bufferStart + bufferFill - keepFrom);
-            if (keep > 0 && keepFrom != bufferStart) {
-                std::copy(buffer.begin() + static_cast<std::ptrdiff_t>(keepFrom - bufferStart),
-                          buffer.begin() +
-                              static_cast<std::ptrdiff_t>(keepFrom - bufferStart + keep),
-                          buffer.begin());
-            }
-            bufferStart = keep > 0 ? keepFrom : readCursor;
-            bufferFill = keep;
-
-            const SampleCount room = capacity - bufferFill;
-            const SampleCount want =
-                std::min<SampleCount>({room, kReadBlock, info.frameCount - readCursor});
-            if (want <= 0) {
-                break;
-            }
-            AudioBufferView view = readInto.view().subRange(0, want);
-            const auto read = source.read(readCursor, view);
-            if (!read) {
-                return read.error();
-            }
-            const SampleCount got = read.value();
-            if (got <= 0) {
-                break;
-            }
-            std::copy_n(view.channel(channel), got,
-                        buffer.begin() + static_cast<std::ptrdiff_t>(bufferFill));
-            bufferFill += got;
-            readCursor += got;
+        if (const Status status = analyser.analyse(fine, frame.data()); !status) {
+            return status.error();
+        }
+        std::uint8_t* destination =
+            base.magnitudes.data() + static_cast<std::size_t>(fine / group) * bins;
+        // Quantisation is monotonic in decibels, so the maximum of the stored
+        // bytes is the maximum of the magnitudes.
+        for (std::size_t bin = 0; bin < bins; ++bin) {
+            destination[bin] = std::max(destination[bin], frame[bin]);
         }
 
-        // Window it, zero outside the file, which is the padding analyse()
-        // applies implicitly.
-        for (int i = 0; i < config.fftSize; ++i) {
-            const SampleIndex index = windowStart + i;
-            const bool inside = index >= 0 && index < info.frameCount && index >= bufferStart &&
-                                index < bufferStart + bufferFill;
-            const float sample =
-                inside ? buffer[static_cast<std::size_t>(index - bufferStart)] : 0.0f;
-            windowed[static_cast<std::size_t>(i)] = sample * stft.window()[i];
-        }
-        fft.forward(windowed.data(), spectrum.data());
-
-        quantiseFrame(spectrum.data(), stft.binCount(), reference, config,
-                      base.magnitudes.data() + static_cast<std::size_t>(frame) * bins);
-
-        if ((frame & 0xFF) == 0) {
-            monitor.report(static_cast<double>(frame) / static_cast<double>(frames));
+        if ((fine & 0xFF) == 0) {
+            monitor.report(static_cast<double>(fine) / static_cast<double>(fineFrames));
         }
     }
 

@@ -62,6 +62,22 @@ public:
     buildStreaming(const io::AudioSource& source, int channel, const SpectrogramConfig& config = {},
                    const JobMonitor& monitor = {});
 
+    /// Build with level 0 already decimated: each level-0 frame is the maximum
+    /// of `2^decimation` consecutive STFT frames.
+    ///
+    /// The overview half of the tiled cache. The fine frames are computed and
+    /// folded in as they go rather than stored, so the cost is the coarse
+    /// result -- a three-hour file at decimation 6 is tens of megabytes where
+    /// the full pyramid would be gigabytes. Combining by maximum rather than
+    /// sampling is what keeps a one-frame click visible in the overview, which
+    /// is the whole reason the display can fall back to it.
+    ///
+    /// `decimation` 0 is exactly buildStreaming, which is how the two are kept
+    /// from drifting: buildStreaming calls this.
+    [[nodiscard]] static Result<SpectrogramPyramid>
+    buildDecimated(const io::AudioSource& source, int channel, const SpectrogramConfig& config,
+                   int decimation, const JobMonitor& monitor = {});
+
     [[nodiscard]] bool isEmpty() const noexcept { return levels_.empty(); }
 
     [[nodiscard]] int levelCount() const noexcept { return static_cast<int>(levels_.size()); }
