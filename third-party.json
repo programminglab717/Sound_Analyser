@@ -10,7 +10,9 @@
     "",
     "'cmakeNames' lists the names a dependency is found under in build files, because a package is rarely called the same thing twice.",
     "'systemPackages' exempts a find_package() that is a platform facility rather than a third-party library -- the compiler's threading runtime, the system's own OpenGL. Each needs a reason, so every exemption is written down rather than assumed.",
-    "'vendoredPath' points at the directory a dependency's source was copied into. The gate requires every directory under third_party/ to be claimed by one, so source cannot be vendored without being declared."
+    "'vendoredPath' points at the directory a dependency's source was copied into. The gate requires every directory under third_party/ to be claimed by one, so source cannot be vendored without being declared.",
+    "",
+    "'buildTools' is for programs that build the product without being part of it -- the installer compiler, not a library. They are checked against policy.allowedBuildToolLicences, which is a SEPARATE and deliberately different list: a licence that is fine for a tool we merely run can be quite wrong for a library we link. Nothing may be moved between the two lists without a written determination. Compilers, CMake and Python are not listed: they are the platform, and listing them would make the section noise. What earns an entry is a tool whose own code or data ends up in something we hand to a user."
   ],
   "policy": {
     "allowedLicences": [
@@ -30,6 +32,18 @@
     "dynamicLinkRequired": [
       "LGPL-2.1",
       "LGPL-3.0"
+    ],
+    "allowedBuildToolLicences": [
+      "MIT",
+      "BSD-2-Clause",
+      "BSD-3-Clause",
+      "Apache-2.0",
+      "BSL-1.0",
+      "Unlicense",
+      "public-domain",
+      "Zlib",
+      "CC0-1.0",
+      "MS-RL"
     ],
     "deniedLicences": [
       "GPL-2.0",
@@ -110,6 +124,17 @@
       "cmakeNames": [
         "Qt6"
       ]
+    }
+  ],
+  "buildTools": [
+    {
+      "name": "wix-toolset",
+      "version": "3.14 (pre-installed on the GitHub Actions windows-latest image)",
+      "licence": "MS-RL",
+      "url": "https://github.com/wixtoolset/wix3",
+      "licenceTextPath": "packaging/windows/licences/WiX-Toolset-MS-RL.txt",
+      "usedFor": "Compiles packaging/windows/auscultate.wxs into the Windows .msi installer.",
+      "notes": "Free in perpetuity, no cap, closed-source output permitted. It is a build tool: nothing of WiX is linked into auscultate.exe or auscultate-cli.exe, so nothing of WiX reaches the product's own binaries. The .msi is a different matter -- it embeds WiX's standard setup-dialog bitmaps and the WixCA custom-action library -- so the installer file does contain WiX code. MS-RL reciprocity is per file: section 3(A) requires source and a copy of the licence for any file containing WiX code, and expressly leaves files that are entirely our own work under any terms we choose. WiX's source is public and the licence text is vendored at licenceTextPath and installed with the product, which is also what section 3(D) asks for. Licence read from the repository's own LICENSE.TXT rather than taken on trust, the same way dr_libs was. Chosen over NSIS because the windows-latest runner image ships WiX and no longer ships NSIS; see the packaging section of docs/BUILDING.md."
     }
   ],
   "models": [],

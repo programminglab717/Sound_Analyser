@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Auscultate — Windows installer (WiX Toolset v3).
+
+  Built by the `windows-package` job in .github/workflows/ci.yml on top of the
+  same staged folder the portable zip is made from, so the installer and the zip
+  always contain the same files.
+
+  Two preprocessor variables are required, both supplied by candle:
+
+    ProductVersion  x.y.z, read out of the top-level CMakeLists.txt
+    LicenceRtf      absolute path to the EULA converted to RTF
+
+  The file list is NOT written here. tools/make_installer_wxs.py walks the
+  staged folder and emits the ComponentGroup "StagedFiles" as a second source
+  file, because what windeployqt puts in that folder changes with the Qt version
+  and a hand-written list would go stale silently — as a missing Qt plugin,
+  which is the kind of fault that survives every test we have and then fails on
+  a user's machine.
+
+  ===========================================================================
+  Per-user, not per-machine
+  ===========================================================================
+  This installs to %LOCALAPPDATA%\Programs\Auscultate and needs no elevation.
+  Three reasons, in order of weight:
+
+  1. The product ships unsigned and will stay unsigned (no budget for a
+     certificate, and no certificate authority issues them free). A per-machine
+     install needs elevation, and the UAC prompt for an unsigned package is the
+     red-bordered "unknown publisher" one. Per-user installs raise no prompt at
+     all, so the user sees SmartScreen once instead of SmartScreen plus a
+     scary-looking UAC dialog. That is the only friction we can remove for
+     nothing, so we remove it.
+  2. Qt is LGPL-3.0 and the user has the right to replace our Qt DLLs with
+     their own (ADR 0006). In %LOCALAPPDATA% they can do that with Explorer.
+     Under Program Files they would need an administrator. A licence obligation
+     that costs the user an admin password is one we have made harder to
+     exercise than it should be.
+  3. It works on a locked-down machine where the user is not an administrator,
+     which is the ordinary case in a studio or a university.
+
+  What we give up: the install is for one user, not everyone on the machine.
+  For a single-user audio editor that is the normal expectation, and anyone who
+  wants it elsewhere can pass INSTALLFOLDER on the msiexec command line.
+
+  ===========================================================================
+  Nothing here may defeat replacing the Qt DLLs
+  ===========================================================================
+  The MSI's cab is compressed, but Windows Installer expands it to ordinary
+  loose files on disk, so the DLLs stay individually replaceable. Two things
+  that would have broken that are deliberately avoided:
+
+  * The Start menu shortcut is a plain shortcut, NOT an advertised one. An
+    advertised shortcut is an entry point for Windows Installer resiliency:
+    launching it re-checks the feature's key paths and can reinstall files.
+    A user who had swapped in their own Qt6Core.dll could have had it silently
+    overwritten on next launch. A plain shortcut triggers none of that.
+  * Every component's key path is a registry value, never one of the shipped
+    DLLs, so a replaced or deleted DLL is never what Windows Installer looks at
+    when it decides whether the product is intact.
+
+  ===========================================================================
+  The installer's own third-party code
+  ===========================================================================
+  WiX is MS-RL. Nothing of WiX is linked into auscultate.exe — it is a build
+  tool — but the .msi it produces does embed WiX's standard dialog bitmaps and
+  its WixCA custom-action DLL. MS-RL reciprocity is per file and covers only
+  files that contain WiX code, so it reaches those streams and not our
+  executables. packaging/windows/licences/WiX-Toolset-MS-RL.txt travels with the
+  product to satisfy the retain-notices condition. See third-party.json.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+
+  <Product Id="*"
+           Name="Auscultate"
+           Language="1033"
+           Version="$(var.ProductVersion)"
+           Manufacturer="Delta Creation Co."
+           UpgradeCode="73B94798-A7DF-452C-A7DF-936586E9FF6A">
+
+    <!-- InstallScope="perUser" sets InstallPrivileges="limited" and leaves
+         ALLUSERS unset, which is what makes this a per-user install. -->
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perUser"
+             Manufacturer="Delta Creation Co."
+             Description="Auscultate — analysis-first audio repair and mastering"
+             Comments="Delta Creation Co. This package is not code-signed; see docs/INSTALLING.md." />
+
+    <!-- Installing 0.2.0 over 0.1.0 replaces it rather than leaving two entries
+         in Installed apps. AllowSameVersionUpgrades covers reinstalling the
+         same version, which is what a user retrying a failed install does. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of [ProductName] is already installed. Uninstall it first if you mean to go back." />
+
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- Publisher, and no Modify button: there is one feature, so Modify has
+         nothing to offer. Repair and Uninstall stay. -->
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <!-- %LOCALAPPDATA%\Programs is where per-user applications go on
+             current Windows; several Microsoft-shipped apps install there. -->
+        <Directory Id="ProgramsFolder" Name="Programs">
+          <Directory Id="INSTALLFOLDER" Name="Auscultate" />
+        </Directory>
+      </Directory>
+      <!-- The shortcut goes straight into the Start menu rather than into a
+           folder of its own: one application does not need a folder, and a
+           folder is one more thing an uninstall can leave behind. -->
+      <Directory Id="ProgramMenuFolder" />
+    </Directory>
+
+    <Component Id="ApplicationShortcut" Directory="ProgramMenuFolder" Guid="*">
+      <Shortcut Id="AuscultateStartMenuShortcut"
+                Name="Auscultate"
+                Description="Analysis-first audio repair and mastering"
+                Target="[INSTALLFOLDER]auscultate.exe"
+                WorkingDirectory="INSTALLFOLDER" />
+      <!-- A component that installs into the user profile must key off HKCU,
+           not off a file (ICE38). It also gives the auto-GUID something stable
+           to derive from. -->
+      <RegistryValue Root="HKCU"
+                     Key="Software\Delta Creation Co.\Auscultate Setup"
+                     Name="StartMenuShortcut"
+                     Type="integer"
+                     Value="1"
+                     KeyPath="yes" />
+    </Component>
+
+    <!-- The setup key is deliberately NOT "Software\Delta Creation Co.\Auscultate":
+         that is where QSettings keeps the user's window size and preferences,
+         because src/sa-ui/src/main.cpp sets the organisation to "Delta Creation
+         Co." and the application to "Auscultate". Writing the installer's own
+         bookkeeping there and then force-deleting the key on uninstall would
+         throw away the user's settings as a side effect. A separate key keeps
+         uninstall to what the installer created. -->
+    <Component Id="Registration" Directory="INSTALLFOLDER" Guid="*">
+      <RegistryKey Root="HKCU"
+                   Key="Software\Delta Creation Co.\Auscultate Setup"
+                   ForceDeleteOnUninstall="yes">
+        <RegistryValue Name="InstallPath" Type="string" Value="[INSTALLFOLDER]" KeyPath="yes" />
+        <RegistryValue Name="Version" Type="string" Value="$(var.ProductVersion)" />
+      </RegistryKey>
+      <!-- %LOCALAPPDATA%\Programs is shared with other per-user applications.
+           RemoveFolder removes a directory only when it is already empty, so
+           this takes our folder away and leaves anyone else's alone. -->
+      <RemoveFolder Id="RemoveProgramsFolder" Directory="ProgramsFolder" On="uninstall" />
+    </Component>
+
+    <Feature Id="MainApplication" Title="Auscultate" Level="1">
+      <ComponentGroupRef Id="StagedFiles" />
+      <ComponentRef Id="ApplicationShortcut" />
+      <ComponentRef Id="Registration" />
+    </Feature>
+
+    <!-- WixUI_Minimal is welcome-plus-licence, one Install button, done. The
+         licence text is docs/EULA.md converted to RTF at build time, so the
+         page cannot drift from the document under review. -->
+    <UIRef Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="$(var.LicenceRtf)" />
+
+  </Product>
+</Wix>

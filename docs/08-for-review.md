@@ -82,6 +82,63 @@ WASAPI backend compiles and its logic is tested, but it has never driven a sound
 card. If playback is silent, or crackles, or the playhead drifts from what you
 hear, that is the single most valuable thing you can tell me.
 
+## 1a. Install it, and then uninstall it
+
+**Why it needs you.** There is now a second artefact on every run,
+`auscultate-windows-installer`: an `.msi` that installs to
+`%LOCALAPPDATA%\Programs\Auscultate`, adds a Start menu entry and registers
+under Delta Creation Co. in Installed apps. **It has never been run.** There is
+no Windows here. CI builds it; nothing has installed it, launched it from the
+shortcut, or uninstalled it. `docs/INSTALLING.md` describes what it is meant to
+do — that document is a specification, not a report.
+
+**What to check, in this order.** Each of these is a separate claim and any of
+them can be false on its own:
+
+1. It installs **without a UAC prompt**. If Windows asks for an administrator,
+   the per-user scope is not taking effect and that needs to be fixed before
+   anyone else sees it.
+2. The licence page is **readable** — correctly laid out, scrollable, the §
+   and £ characters right. It is generated from `docs/EULA.md` at build time
+   and no rich edit control has ever displayed it.
+3. The **Start menu entry launches it**, and the window opens.
+4. **Uninstall leaves nothing.** `%LOCALAPPDATA%\Programs\Auscultate` should be
+   gone, the Start menu entry gone, and
+   `HKCU\Software\Delta Creation Co.\Auscultate Setup` gone. Your settings under
+   `...\Auscultate` and the cache in `%LOCALAPPDATA%\Auscultate` should still be
+   there: that is deliberate, and if you disagree with it say so.
+5. **Replace a Qt DLL** with a different build of the same version, then launch
+   from the shortcut. It should keep your DLL. The shortcut is deliberately not
+   an advertised one so that Windows Installer has no reason to put ours back,
+   but that reasoning has not been tested against the real thing.
+
+**What you will see first.** A SmartScreen box saying "Windows protected your
+PC". That is expected: the product is unsigned, deliberately, and will stay so
+while the no-purchases rule holds. `docs/INSTALLING.md` §"Windows will warn you"
+is written to be handed to a user as-is; tell me if it reads as excuses rather
+than as an explanation.
+
+**Still yours to decide.** Whether to try the community `winget` repository. It
+is free, needs no certificate, and would remove the browser download warning. I
+have not been through it and cannot from here, so it is named in the document as
+untried rather than recommended.
+
+**A change to the EULA, for whoever reviews it.** §4's third-party table has
+gained one row: the WiX Toolset, MS-RL, "part of the Windows installer file
+only", with a short paragraph explaining it. That is a statement of fact about
+what now ships, not a change of terms — the `.msi` embeds WiX's setup dialogs
+and a small library of its code, and §4 already says such components are
+governed by their own licences. It is flagged here because it is an edit to a
+document that is going to a solicitor, and they should know it was made and why.
+The EULA remains a draft and still says so, including on the installer's own
+licence page.
+
+**One thing that is not done.** Qt's LGPL-3.0 text does not yet ship beside the
+binaries. The component and its licence are named in §4 of the EULA, but the
+LGPL expects its own text to travel with the product. That gap predates the
+installer — the zip has it too — and it is a small job: vendor the text and add
+it to the `licences` folder both artefacts now carry.
+
 ## 2. Metering conformance vectors
 
 **Why it needs you.** The loudness meter is internally consistent and anchored

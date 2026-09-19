@@ -39,6 +39,14 @@ jobs:
       # round trips.
       - name: Check includes
         run: python3 tools/check_includes.py
+      # Same bargain as the include check above, for the installer: everything
+      # about the WiX sources that can be decided from the text is decided here
+      # in a second, rather than twenty minutes into a Windows job that had to
+      # compile and test the whole product before it got as far as candle. It is
+      # not Windows Installer validation and does not pretend to be; only
+      # light.exe and a real machine can say the package works.
+      - name: Check the installer sources
+        run: python3 tools/check_installer.py
 
   build:
     name: ${{ matrix.os }} / ${{ matrix.preset }}
@@ -284,6 +292,11 @@ jobs:
           Copy-Item "docs/EULA.md" "$stage/EULA.txt"
           Copy-Item "docs/PRIVACY.md" "$stage/PRIVACY.txt"
 
+          # WiX's own licence travels too: nothing of it links into the
+          # executables, but the .msi embeds its custom-action library, so the
+          # installer file contains WiX code and MS-RL 3(D) asks for its text.
+          Copy-Item "packaging/windows/licences/*.txt" "$stage/licences"
+
       # Qt is LGPL-3.0 and may only ship dynamically linked. windeployqt putting
       # the DLLs beside the executable is what makes that true in the artefact,
       # so their absence is a licence failure and not merely a broken build.
@@ -314,9 +327,130 @@ jobs:
           }
           Get-ChildItem $stage -Filter "Qt6*.dll" | ForEach-Object { Write-Host $_.Name }
 
+      # The portable artefact, uploaded before anything to do with the
+      # installer runs. Some users would rather unzip and run, and a broken
+      # installer step should not take that away from them.
       - name: Upload the application
         uses: actions/upload-artifact@v4
         with:
           name: auscultate-windows
           path: package/
+          if-no-files-found: error
+
+      # -- Installer ---------------------------------------------------------
+      #
+      # WiX rather than NSIS. Both are free forever with no cap, so the licence
+      # constraint does not separate them; what separates them is the runner.
+      # The windows-latest image (Windows Server 2025) ships WiX Toolset 3.14
+      # and adds its bin directory to PATH; it does not ship NSIS, which was
+      # last on the Windows Server 2022 image. NSIS would therefore mean a
+      # chocolatey install on every run: another network dependency in a job
+      # that already has two, and a version that drifts underneath us.
+      #
+      # The format matters as much as the tool. An MSI gets a real entry in
+      # Installed apps, and Windows Installer -- not a script we wrote -- is
+      # what removes the files, the registry values and the shortcut again. An
+      # uninstaller that leaves nothing behind is the hardest part of an
+      # installer to get right, and this is the option where we write the least
+      # of it ourselves.
+      - name: Locate the WiX toolset
+        shell: pwsh
+        run: |
+          $candle = (Get-Command candle.exe -ErrorAction SilentlyContinue).Source
+          if (-not $candle -and $env:WIX) {
+            $viaEnvironment = Join-Path $env:WIX "bin\candle.exe"
+            if (Test-Path $viaEnvironment) { $candle = $viaEnvironment }
+          }
+          if (-not $candle) {
+            $candle = Get-ChildItem "C:\Program Files*\WiX Toolset*\bin\candle.exe" `
+                        -ErrorAction SilentlyContinue |
+                      Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not $candle) {
+            throw "WiX was not found on this runner. The windows-latest image is documented as shipping WiX Toolset 3.14 with its bin directory on PATH; if that has changed, add an install step rather than removing this check."
+          }
+          # Print it for the same reason the Visual Studio step above prints:
+          # when this breaks, the failure should say what the runner had.
+          Write-Host "WiX: $candle ($((Get-Item $candle).VersionInfo.ProductVersion))"
+          "WIX_BIN=$(Split-Path $candle)" | Out-File $env:GITHUB_ENV -Append
+
+      - name: Prepare the installer inputs
+        shell: pwsh
+        run: |
+          python tools/make_installer_wxs.py --stage package/Auscultate `
+              --out installer/files.wxs --version-out installer/version.txt
+          python tools/make_eula_rtf.py docs/EULA.md installer/EULA.rtf
+
+      # The same claim the staged-folder check above makes, carried one step
+      # further: the file list the installer is built from names Qt as separate
+      # DLLs. light.exe refuses to build a package whose File elements point at
+      # files that are not there, so a green build after this check means those
+      # DLLs really are packed. Opening the finished .msi would be a stronger
+      # statement still; this is the strongest one available without running
+      # Windows Installer inside the job.
+      - name: Check the installer packages Qt as replaceable DLLs
+        shell: pwsh
+        run: |
+          foreach ($dll in @("Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll")) {
+            if (-not (Select-String -Path installer/files.wxs -SimpleMatch $dll -Quiet)) {
+              throw "$dll is not in the installer's file list: Qt must ship dynamically linked (ADR 0006)"
+            }
+          }
+
+      # No signing step, deliberately. The product ships unsigned: there is no
+      # budget for a code-signing certificate and no certificate authority
+      # issues one free. docs/INSTALLING.md says plainly what a user will see
+      # because of that. This is a decision, not an omission -- do not "fix" it
+      # by failing the build when no certificate is configured.
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $version = (Get-Content installer/version.txt -Raw).Trim()
+          $licence = (Resolve-Path installer/EULA.rtf).Path
+          New-Item -ItemType Directory -Force -Path installer\obj | Out-Null
+          & "$env:WIX_BIN\candle.exe" -nologo -arch x64 `
+              -dProductVersion=$version -dLicenceRtf=$licence `
+              -ext WixUIExtension `
+              -out installer\obj\ `
+              packaging\windows\auscultate.wxs installer\files.wxs
+          # Validation (the ICE suite) is left on. If it reports something, that
+          # is a fault in the authoring to be fixed, not a switch to turn off.
+          & "$env:WIX_BIN\light.exe" -nologo -ext WixUIExtension `
+              -out "installer\auscultate-$version-x64.msi" `
+              installer\obj\auscultate.wixobj installer\obj\files.wixobj
+
+      # An unsigned download is one a user cannot check by its signature, so
+      # give them the one thing they can check it by. This is also why the
+      # checksum is printed into the job summary: it comes from the build, not
+      # from the same page as the file.
+      - name: Publish the checksum
+        shell: pwsh
+        run: |
+          # -Filter is avoided here: its wildcards also match 8.3 short names,
+          # which is how "*.msi" ends up matching things that are not one.
+          $msi = Get-ChildItem installer -File |
+                 Where-Object Extension -eq ".msi" |
+                 Select-Object -First 1
+          if (-not $msi) { throw "candle and light reported success but produced no .msi" }
+          # Qt's three core DLLs alone are several megabytes compressed, so
+          # anything under a megabyte is an empty package rather than a small one.
+          if ($msi.Length -lt 1MB) {
+            throw "$($msi.Name) is only $($msi.Length) bytes: the payload is missing"
+          }
+          $hash = (Get-FileHash $msi.FullName -Algorithm SHA256).Hash.ToLower()
+          "$hash  $($msi.Name)" | Set-Content "$($msi.FullName).sha256"
+          "### Windows installer" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          "``$($msi.Name)`` - $([math]::Round($msi.Length / 1MB, 1)) MB" |
+              Out-File $env:GITHUB_STEP_SUMMARY -Append
+          "SHA-256 ``$hash``" | Out-File $env:GITHUB_STEP_SUMMARY -Append
+          "Unsigned: Windows will show SmartScreen. See docs/INSTALLING.md." |
+              Out-File $env:GITHUB_STEP_SUMMARY -Append
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: auscultate-windows-installer
+          path: |
+            installer/*.msi
+            installer/*.msi.sha256
           if-no-files-found: error

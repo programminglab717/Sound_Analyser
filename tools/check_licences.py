@@ -13,6 +13,11 @@ Checks performed:
      or unverified.
   3. LGPL dependencies are marked for dynamic linking. Static linking an LGPL
      library imposes relink obligations we cannot meet in a closed-source build.
+  3a. Build tools -- programs we run to produce the product rather than link
+     into it -- carry an allowlisted licence too, from a separate and narrower
+     list, and each one says where its licence text is kept. The installer
+     compiler is one of these: none of it is in auscultate.exe, but part of it
+     is in the .msi we hand to a user, and that is still something we ship.
   4. Anything CMake fetches, finds with find_package, vendors under
      third_party/, or vcpkg installs is
      actually declared in third-party.json, so a dependency cannot arrive
@@ -93,6 +98,63 @@ def check_entry(entry: dict, kind: str, policy: dict, found: Violations) -> None
         found.error(
             f"model '{name}' has no written weights-licence determination. "
             f"A model's code licence does not cover its weights."
+        )
+
+
+def check_build_tool(entry: dict, policy: dict, root: Path, found: Violations) -> None:
+    """A tool we run, not a library we link -- but still one we have to be free of debt to.
+
+    The allowlist is deliberately a different one. A licence can be perfectly
+    safe for a program we merely execute and quite wrong for a library we link
+    into a closed-source product, and collapsing the two lists into one would
+    lose exactly that distinction. Reciprocal licences live here and nowhere
+    else.
+
+    The denied list still applies in full: a build tool whose own code or data
+    ends up inside something we hand to a user is shipping, whatever we call it.
+    """
+    name = entry.get("name")
+    if not name:
+        found.error(f"build tool entry with no 'name': {entry!r}")
+        return
+
+    licence = entry.get("licence")
+    if not licence:
+        found.error(f"build tool '{name}' declares no licence")
+        return
+
+    if licence in policy.get("deniedLicences", []):
+        found.error(
+            f"build tool '{name}' uses DENIED licence '{licence}'. "
+            f"It cannot be part of a closed-source product's toolchain under ADR 0006."
+        )
+        return
+
+    if licence not in policy.get("allowedBuildToolLicences", []):
+        found.error(
+            f"build tool '{name}' uses unrecognised licence '{licence}'. "
+            f"Add it to policy.allowedBuildToolLicences only after a written "
+            f"determination, and never by moving it from the dependency list."
+        )
+        return
+
+    if not entry.get("notes"):
+        found.error(
+            f"build tool '{name}' has no 'notes' saying what of it, if anything, "
+            f"ends up in what we ship."
+        )
+
+    licence_text = entry.get("licenceTextPath")
+    if not licence_text:
+        found.error(
+            f"build tool '{name}' does not say where its licence text is kept "
+            f"('licenceTextPath'). Retaining the notice is a condition of most of "
+            f"the licences on this list."
+        )
+    elif not (root / licence_text).is_file():
+        found.error(
+            f"build tool '{name}' points at licence text '{licence_text}', which "
+            f"does not exist."
         )
 
 
@@ -227,10 +289,13 @@ def main() -> int:
 
     dependencies = manifest.get("dependencies", [])
     models = manifest.get("models", [])
+    build_tools = manifest.get("buildTools", [])
     for entry in dependencies:
         check_entry(entry, "dependency", policy, found)
     for entry in models:
         check_entry(entry, "model", policy, found)
+    for entry in build_tools:
+        check_build_tool(entry, policy, root, found)
 
     declared = declared_names(manifest)
     allowed_system = {
@@ -242,7 +307,10 @@ def main() -> int:
     scan_vendored(root, manifest, found)
     scan_vcpkg(root, declared, found)
 
-    print(f"licence gate: {len(dependencies)} dependencies, {len(models)} models checked")
+    print(
+        f"licence gate: {len(dependencies)} dependencies, {len(models)} models, "
+        f"{len(build_tools)} build tools checked"
+    )
 
     for warning in found.warnings:
         print(f"  warning: {warning}")

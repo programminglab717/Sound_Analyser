@@ -55,6 +55,10 @@ target_compile_features(sa-ui PUBLIC cxx_std_20)
 add_executable(auscultate src/main.cpp)
 target_link_libraries(auscultate PRIVATE sa-ui)
 
+sa_add_version_resource(auscultate
+    DESCRIPTION "Auscultate"
+    FILENAME    "auscultate.exe")
+
 # The view geometry and the EQ curve are deliberately windowless, so they are
 # tested the same way every other module is: by calling them. sa-warnings is
 # applied here although it is not applied to sa-ui, because nothing under

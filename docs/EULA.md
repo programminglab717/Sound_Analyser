@@ -53,6 +53,13 @@ licences. Those licences govern those components, not this Agreement.
 | dr_flac | Unlicense | Compiled in |
 | dr_mp3 | Unlicense | Compiled in |
 | nlohmann/json | MIT | Compiled in |
+| WiX Toolset | MS-RL | Part of the Windows installer file only |
+
+The WiX Toolset is the program that builds the Windows `.msi`. None of it is
+part of Auscultate itself, but the installer file contains its setup dialogs
+and a small library of its code, so its licence travels with that file. Its
+licence text is in the `licences` folder installed with the Software, and its
+source is public.
 
 Qt and ALSA are **dynamically linked and shipped as replaceable libraries**,
 as the LGPL requires. You may replace them with your own compatible versions:

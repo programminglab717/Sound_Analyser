@@ -74,6 +74,66 @@ fails if CMake or vcpkg pulls in anything the manifest does not declare.
 **Adding a dependency means adding it to `third-party.json` first.** CI runs this
 before anything else.
 
+## The Windows installer
+
+CI builds an `.msi` alongside the portable zip. Both come out of the same staged
+folder, so they always contain the same binaries.
+
+| Piece | What it is |
+| --- | --- |
+| `packaging/windows/auscultate.wxs` | Everything that is a decision: install location, shortcut, upgrade rules, licence page |
+| `packaging/windows/version.rc.in` | The version resource both executables carry. Configured by `sa_add_version_resource()` in the top-level `CMakeLists.txt` |
+| `tools/make_installer_wxs.py` | Walks the staged folder and writes the file list as a second WiX source |
+| `tools/make_eula_rtf.py` | Turns `docs/EULA.md` into the RTF the licence page shows |
+| `tools/check_installer.py` | Cross-checks all of the above, on any platform, in a second |
+
+### Why WiX, and why an MSI
+
+WiX Toolset 3.14 is pre-installed on the GitHub Actions `windows-latest` image
+with its `bin` directory on `PATH`. NSIS is not: it was last on the Windows
+Server 2022 image and did not follow to Server 2025. Both are free forever with
+no cap, so the licence rule does not choose between them; the runner does.
+
+An MSI also means Windows Installer — not a script we wrote — decides how to
+take the product away again. The uninstaller is the part of an installer that is
+hardest to get right and least likely to be tested, so the option where we write
+the least of it wins.
+
+WiX is MS-RL, and it is declared under `buildTools` in `third-party.json`. See
+that entry for what of it ends up in the `.msi` and what that obliges.
+
+### Building it by hand on Windows
+
+```powershell
+cmake --preset windows-release
+cmake --build --preset windows-release
+# stage as the CI job does: copy both exes into package\Auscultate, run
+# windeployqt against auscultate.exe, copy docs\EULA.md, docs\PRIVACY.md and
+# packaging\windows\licences in beside them
+python tools/make_installer_wxs.py --stage package/Auscultate `
+    --out installer/files.wxs --version-out installer/version.txt
+python tools/make_eula_rtf.py docs/EULA.md installer/EULA.rtf
+candle -arch x64 -dProductVersion=0.1.0 `
+       -dLicenceRtf=(Resolve-Path installer/EULA.rtf).Path `
+       -ext WixUIExtension -out installer\obj\ `
+       packaging\windows\auscultate.wxs installer\files.wxs
+light -ext WixUIExtension -out installer\auscultate-0.1.0-x64.msi `
+      installer\obj\auscultate.wixobj installer\obj\files.wixobj
+```
+
+`light` runs the Windows Installer validation suite (the ICE checks) as part of
+that last step. **If it reports something, fix the authoring.** Do not reach for
+`-sval` or `-sice:`; the two rules this package leans on hardest, ICE38 and
+ICE64, are the same two that keep the uninstall complete and keep a replaced Qt
+DLL from triggering a repair.
+
+### It ships unsigned
+
+There is no signing step and there is not going to be one until a certificate is
+affordable, which under the no-purchases rule means not at all. Do not add one,
+and do not make the build fail when no certificate is configured.
+`docs/INSTALLING.md` tells users plainly what they will see instead.
+
 ## Module layout
 
 ```

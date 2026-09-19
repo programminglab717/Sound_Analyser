@@ -133,6 +133,14 @@ CI runs the same suite on MSVC 19 (Visual Studio 18), and the most recent run
 was green on every job -- both Windows configurations included -- and produced
 a packaged Windows build as an artifact.
 
+Every run produces two Windows downloads from the same staged binaries: a
+portable zip to unpack and run, and a per-user `.msi` installer that adds a
+Start menu entry and uninstalls cleanly, published by Delta Creation Co. with
+its SHA-256. **Neither is code-signed**, so Windows shows a SmartScreen warning
+the first time; `docs/INSTALLING.md` says exactly what appears, what it means,
+and what to click. The installer itself has never been run on Windows by
+anyone -- CI builds it, and nothing has yet installed it.
+
 Some of what the tests check, because each one covers a whole chain rather
 than a unit:
 
