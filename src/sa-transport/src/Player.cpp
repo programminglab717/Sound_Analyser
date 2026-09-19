@@ -71,8 +71,8 @@ std::uint64_t Player::underruns() const noexcept {
     return underruns_.load(std::memory_order_relaxed);
 }
 
-Status Player::play(std::shared_ptr<const io::AudioSource> source, SampleIndex from,
-                    SampleIndex to) {
+Status Player::play(std::shared_ptr<const io::AudioSource> source, SampleIndex from, SampleIndex to,
+                    AudioProcessor* processor) {
     stop();
 
     if (!source) {
@@ -97,6 +97,9 @@ Status Player::play(std::shared_ptr<const io::AudioSource> source, SampleIndex f
     scratch_.assign(
         static_cast<std::size_t>(std::max(1, device_->bufferFrames())) * 2 * outputChannels, 0.0f);
     ring_->reset();
+
+    // Before the device is started, so the callback never sees it change.
+    processor_ = processor;
 
     running_.store(true, std::memory_order_release);
     worker_ = std::thread{[this, source, from, to] { runWorker(source, from, to); }};
@@ -131,6 +134,14 @@ Status Player::play(std::shared_ptr<const io::AudioSource> source, SampleIndex f
             std::fill_n(out + framesGot, frames - framesGot, 0.0f);
         }
 
+        // The whole block, including the silent tail of a short one. A
+        // processor carries filter state, and skipping the zeros would leave
+        // that state a block stale at the next one -- audible as a click
+        // exactly where the material resumes.
+        if (processor_ != nullptr) {
+            processor_->process(output);
+        }
+
         framesPlayed_.fetch_add(static_cast<std::int64_t>(framesGot), std::memory_order_relaxed);
 
         // A short block once the source has been fully queued is the end of the
@@ -159,6 +170,10 @@ void Player::stop() {
     if (worker_.joinable()) {
         worker_.join();
     }
+    // After the device has stopped, so the callback has run for the last time.
+    // Clearing it here is what lets a caller destroy its processor as soon as
+    // stop() returns.
+    processor_ = nullptr;
 }
 
 void Player::runWorker(std::shared_ptr<const io::AudioSource> source, SampleIndex from,

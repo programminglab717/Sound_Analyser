@@ -225,3 +225,99 @@ TEST_CASE("The audio callback allocates nothing", "[transport][player][rt]") {
 
     CHECK(after == before);
 }
+
+namespace {
+
+/// Records what it was handed, without allocating: the store is sized before
+/// playback starts and the audio thread only writes into it. Anything past the
+/// end is counted and dropped rather than grown, because growing is the one
+/// thing this must not do.
+class RecordingProcessor final : public AudioProcessor {
+public:
+    explicit RecordingProcessor(std::size_t capacityFrames, int channels)
+        : channels_(channels), store_(capacityFrames * static_cast<std::size_t>(channels), 0.0f) {}
+
+    void process(AudioBufferView block) noexcept override {
+        calls_.fetch_add(1, std::memory_order_relaxed);
+        const auto frames = static_cast<std::size_t>(block.frames());
+        for (std::size_t frame = 0; frame < frames; ++frame) {
+            const std::size_t at = written_ + frame;
+            if (at * static_cast<std::size_t>(channels_) + static_cast<std::size_t>(channels_) >
+                store_.size()) {
+                break;
+            }
+            for (int channel = 0; channel < block.channelCount(); ++channel) {
+                store_[at * static_cast<std::size_t>(channels_) +
+                       static_cast<std::size_t>(channel)] = block.channel(channel)[frame];
+            }
+        }
+        written_ += frames;
+        // Prove the block really is the device's buffer and not a copy of it:
+        // whatever is written here is what the device is handed.
+        for (int channel = 0; channel < block.channelCount(); ++channel) {
+            float* samples = block.channel(channel);
+            for (std::size_t frame = 0; frame < frames; ++frame) {
+                samples[frame] = -1.0f;
+            }
+        }
+    }
+
+    [[nodiscard]] std::size_t calls() const noexcept {
+        return calls_.load(std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] const std::vector<float>& recorded() const noexcept { return store_; }
+
+private:
+    int channels_;
+    std::vector<float> store_;
+    std::size_t written_ = 0;
+    std::atomic<std::size_t> calls_{0};
+};
+
+} // namespace
+
+TEST_CASE("A processor is handed the frames that are playing", "[transport][player][processor]") {
+    Player player = makePlayer(2, 256);
+    const auto source = std::make_shared<RampSource>(96000, 2);
+    RecordingProcessor processor{8192, 2};
+
+    REQUIRE(player.play(source, 0, 96000, &processor).ok());
+    REQUIRE(waitUntil([&] { return player.position() > 8192; }));
+    player.stop();
+
+    CHECK(processor.calls() > 0);
+
+    // RampSource puts the frame index in channel 0 and index + 1000000 in
+    // channel 1, so the recording says both which frames arrived and in what
+    // order. Checking the first four thousand is enough to catch a processor
+    // fed a copy, fed the interleaving scratch, or fed blocks out of order.
+    const std::vector<float>& got = processor.recorded();
+    for (std::size_t frame = 0; frame < 4000; ++frame) {
+        CHECK(got[frame * 2] == Approx(static_cast<float>(frame)));
+        CHECK(got[frame * 2 + 1] == Approx(static_cast<float>(frame) + 1000000.0f));
+    }
+}
+
+TEST_CASE("A processor does not make the audio callback allocate",
+          "[transport][player][processor][rt]") {
+    if (!rt::checksEnabled()) {
+        SUCCEED("SA_RT_SAFETY_CHECKS is off in this build");
+        return;
+    }
+
+    // The allocation check above this one covers playback with no processor,
+    // which would still pass if installing one allocated on every block. This
+    // is the same check with the processor in the path.
+    Player player = makePlayer(2, 256);
+    const auto source = std::make_shared<RampSource>(96000, 2);
+    RecordingProcessor processor{8192, 2};
+
+    const std::size_t before = rt::audioThreadAllocationCount();
+    REQUIRE(player.play(source, 0, 96000, &processor).ok());
+    REQUIRE(waitUntil([&] { return player.position() > 24000; }));
+    player.stop();
+    const std::size_t after = rt::audioThreadAllocationCount();
+
+    CHECK(after == before);
+}

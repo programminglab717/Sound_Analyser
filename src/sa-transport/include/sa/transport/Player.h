@@ -1,5 +1,6 @@
 #pragma once
 
+#include <sa/core/AudioProcessor.h>
 #include <sa/core/Result.h>
 #include <sa/core/Types.h>
 #include <sa/device/AudioDevice.h>
@@ -45,8 +46,15 @@ public:
     ///
     /// The source is read on the worker thread and held for the duration, so it
     /// must remain valid -- hence the shared_ptr rather than a reference.
+    /// `processor`, if given, runs inside the audio callback on each block just
+    /// before it reaches the device, and must stay alive until playback stops
+    /// -- see AudioProcessor. It is taken here rather than through a setter
+    /// because that is the lifetime it needs: stop() joins the worker and stops
+    /// the device, so once it returns the callback is not running. A processor
+    /// that has to be reconfigured while playing does that by publishing to
+    /// itself, not by being swapped.
     [[nodiscard]] Status play(std::shared_ptr<const io::AudioSource> source, SampleIndex from,
-                              SampleIndex to);
+                              SampleIndex to, AudioProcessor* processor = nullptr);
 
     /// Stop and join the worker. Idempotent.
     void stop();
@@ -75,6 +83,12 @@ private:
     /// borrow the output buffer for this: that is planar, so channel 0 holds
     /// one block of one channel, not one block of all of them.
     std::vector<float> scratch_;
+
+    /// Read by the callback only, and only while playing. Set in play() before
+    /// the device is started and cleared by stop() after it has stopped, both
+    /// on the calling thread, so it is never written while the callback could
+    /// read it and needs no atomic.
+    AudioProcessor* processor_ = nullptr;
 
     std::thread worker_;
     std::atomic<bool> running_{false};
