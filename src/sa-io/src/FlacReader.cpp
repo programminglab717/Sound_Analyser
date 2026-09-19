@@ -4,11 +4,14 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
+#include <cstdint>
 #include <dr_flac.h>
 #include <limits>
 #include <new>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace sa::io {
 
@@ -106,6 +109,110 @@ SampleCount countFramesByDecoding(drflac* handle) {
         }
     }
     return total;
+}
+
+/// Read a VORBIS_COMMENT block, if the stream carries one.
+///
+/// FLAC's metadata blocks sit between the signature and the first audio frame
+/// as a chain of four-byte headers -- one flag bit, seven bits of type, then a
+/// 24-bit length -- and the comment block is Vorbis's own, embedded whole and
+/// keeping Vorbis's little-endian lengths where the rest of FLAC is big-endian.
+///
+/// Every length here comes out of the file and is therefore attacker-controlled,
+/// so none is believed: the chain walk stops at the end of the source, the block
+/// is only read if the source really holds it, and both the block size and the
+/// number of comments are capped. A file whose metadata is malformed loses its
+/// metadata and keeps its audio, which is the right trade -- the alternative is
+/// refusing to open a playable recording over a mistyped tag.
+void readVorbisComment(const ByteSource& bytes, AudioFileMetadata& metadata) {
+    constexpr std::uint32_t kMaxCommentBlockBytes = 16u * 1024u * 1024u;
+    constexpr std::uint32_t kMaxComments = 4096;
+    constexpr int kMaxBlocks = 128;
+
+    std::uint64_t offset = 4; // past "fLaC"
+    for (int block = 0; block < kMaxBlocks; ++block) {
+        std::array<std::byte, 4> header{};
+        if (bytes.read(offset, header) != header.size()) {
+            return;
+        }
+        const auto flags = std::to_integer<std::uint8_t>(header[0]);
+        const auto type = static_cast<std::uint8_t>(flags & 0x7Fu);
+        const std::uint32_t length =
+            (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(header[1])) << 16) |
+            (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(header[2])) << 8) |
+            static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(header[3]));
+        const std::uint64_t bodyOffset = offset + 4;
+
+        if (type == 4 && length <= kMaxCommentBlockBytes && bytes.contains(bodyOffset, length)) {
+            std::vector<std::byte> body(static_cast<std::size_t>(length));
+            if (bytes.read(bodyOffset, body) == body.size()) {
+                std::size_t cursor = 0;
+                const auto take = [&body, &cursor](std::uint32_t count) -> std::string {
+                    if (static_cast<std::uint64_t>(count) > body.size() - cursor) {
+                        cursor = body.size();
+                        return {};
+                    }
+                    std::string text(reinterpret_cast<const char*>(body.data()) + cursor, count);
+                    cursor += count;
+                    return text;
+                };
+                const auto takeLength = [&body, &cursor]() -> std::uint32_t {
+                    if (body.size() - cursor < 4) {
+                        cursor = body.size();
+                        return 0;
+                    }
+                    std::uint32_t value = 0;
+                    for (int shift = 0; shift < 32; shift += 8) {
+                        value |=
+                            static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(body[cursor]))
+                            << shift;
+                        ++cursor;
+                    }
+                    return value;
+                };
+
+                static_cast<void>(take(takeLength())); // vendor string
+                const std::uint32_t count = std::min(takeLength(), kMaxComments);
+                for (std::uint32_t i = 0; i < count && cursor < body.size(); ++i) {
+                    const std::string entry = take(takeLength());
+                    const auto equals = entry.find('=');
+                    if (equals == std::string::npos) {
+                        continue;
+                    }
+                    std::string field = entry.substr(0, equals);
+                    // Vorbis field names are case-insensitive, and taggers
+                    // disagree about which case to write.
+                    std::transform(field.begin(), field.end(), field.begin(), [](char character) {
+                        return static_cast<char>(
+                            std::toupper(static_cast<unsigned char>(character)));
+                    });
+                    std::string value = entry.substr(equals + 1);
+
+                    if (field == "TITLE") {
+                        metadata.title = std::move(value);
+                    } else if (field == "ARTIST") {
+                        metadata.artist = std::move(value);
+                    } else if (field == "COMMENT" || field == "DESCRIPTION") {
+                        metadata.comment = std::move(value);
+                    } else if (field == "DATE") {
+                        metadata.date = std::move(value);
+                    } else if (field == "ENCODER") {
+                        metadata.software = std::move(value);
+                    }
+                }
+            }
+            return;
+        }
+
+        if ((flags & 0x80u) != 0) {
+            return; // that was the last metadata block
+        }
+        const std::uint64_t next = bodyOffset + length;
+        if (next <= offset || next >= bytes.size()) {
+            return;
+        }
+        offset = next;
+    }
 }
 
 } // namespace
@@ -211,6 +318,8 @@ Result<FlacReader> FlacReader::decode(std::shared_ptr<const ByteSource> source) 
         reader.info_.frameCount =
             static_cast<SampleCount>(std::min(flac.totalPCMFrameCount, kFrameCeiling));
     }
+
+    readVorbisComment(*decoder->cursor.source, reader.metadata_);
 
     reader.decoder_ = std::move(decoder);
     return reader;

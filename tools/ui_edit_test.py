@@ -1007,6 +1007,108 @@ def main() -> int:
         if refused == 2:
             print("  ok  unknown formats and dithers are refused")
 
+        # Saving what the window can open. Export offered only WAV, so a FLAC
+        # opened for a two-second trim came back five or six times the size --
+        # and the interesting question about the fix is not whether the file
+        # appears but whether it is the same audio, so each one is opened again
+        # through the window itself and written back out to compare.
+        print("\nexport containers:")
+        exact = workspace / "exact24.wav"
+        with wave.open(str(exact), "wb") as handle:
+            handle.setnchannels(2)
+            handle.setsampwidth(3)
+            handle.setframerate(SAMPLE_RATE)
+            payload = bytearray()
+            for i in range(2 * SAMPLE_RATE):
+                for channel, hz in ((0, 440.0), (1, 661.0)):
+                    # On exact codes, so that "the same file came back" can be
+                    # asserted as equality rather than as a tolerance.
+                    code = int(round((0.6 - 0.25 * channel) * 8388607
+                                     * math.sin(2.0 * math.pi * hz * i / SAMPLE_RATE)))
+                    payload += code.to_bytes(3, "little", signed=True)
+            handle.writeframes(bytes(payload))
+
+        def raw_payload(path: Path) -> bytes:
+            with wave.open(str(path), "rb") as handle:
+                return handle.readframes(handle.getnframes())
+
+        original = raw_payload(exact)
+
+        def export_through_window(source_file: Path, target: Path, verbs: str) -> bool:
+            completed = subprocess.run(
+                [str(arguments.binary), str(source_file), "--apply", verbs,
+                 "--export", str(target)],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            return completed.returncode == 0 and target.exists()
+
+        for extension, magic in ((".flac", b"fLaC"), (".aiff", b"FORM")):
+            exported = workspace / f"round{extension}"
+            if not export_through_window(exact, exported, "selectall,format:24"):
+                failures.append(f"export to {extension} failed")
+                continue
+            if exported.read_bytes()[:4] != magic:
+                failures.append(f"export to {extension} did not write a {magic.decode()} file")
+                continue
+
+            back = workspace / f"back-from{extension}.wav"
+            if not export_through_window(exported, back, "selectall,format:24"):
+                failures.append(f"the exported {extension} could not be opened again")
+                continue
+            if raw_payload(back) != original:
+                failures.append(f"a {extension} round trip through the window changed the audio")
+            else:
+                print(f"  ok  {extension} exports and reopens with the samples unchanged")
+
+        if (workspace / "round.flac").exists():
+            saving = 1.0 - (workspace / "round.flac").stat().st_size / exact.stat().st_size
+            if saving < 0.25:
+                failures.append(f"the FLAC export saved only {saving * 100:.0f}%")
+            else:
+                print(f"  ok  the FLAC export is {saving * 100:.0f}% smaller than the WAV")
+
+        # A float export setting cannot be honoured by a container that holds
+        # integers, so it narrows to 24 bits rather than failing -- the same
+        # rule sa-cli applies.
+        float_flac = workspace / "float.flac"
+        if not export_through_window(exact, float_flac, "selectall,format:float"):
+            failures.append("a float export setting to FLAC was refused")
+        else:
+            depth = ((int.from_bytes(float_flac.read_bytes()[18:26], "big") >> 36) & 0x1F) + 1
+            if depth != 24:
+                failures.append(f"a float export to FLAC wrote {depth} bits")
+            else:
+                print("  ok  a float export setting to FLAC writes 24 bits")
+
+        # And the dither setting still reaches a 16-bit export, whichever
+        # container it lands in: one rule about dropping bits, not two.
+        sixteen = {}
+        for label in ("none", "shaped"):
+            output = workspace / f"quiet-flac-{label}.flac"
+            decoded = workspace / f"quiet-flac-{label}.wav"
+            # dither:none on the way back out, or the second export adds a
+            # second layer of it and flatters the undithered case.
+            if export_through_window(quiet, output, f"selectall,dither:{label},format:16") and \
+                    export_through_window(output, decoded, "selectall,dither:none,format:16"):
+                sixteen[label] = load(decoded)
+            else:
+                failures.append(f"a 16-bit FLAC export with dither {label} failed")
+        if len(sixteen) == 2:
+            def worst_ratio(values: list[float]) -> float:
+                fundamental = goertzel(values, quiet_hz)
+                worst = max(goertzel(values, quiet_hz * k) for k in (3, 5, 7, 9))
+                return 20.0 * math.log10(max(worst, 1e-15) / max(fundamental, 1e-15))
+
+            improvement = worst_ratio(sixteen["none"]) - worst_ratio(sixteen["shaped"])
+            if improvement < 6.0:
+                failures.append(
+                    f"dither improved a 16-bit FLAC by only {improvement:.1f} dB"
+                )
+            else:
+                print(f"  ok  dither reaches a FLAC export too, {improvement:.1f} dB down")
+
         # The stereo field, through the window's own meters. The interesting
         # check is not that the numbers exist but that an edit moves them the
         # way it should: summing to mono must take the mono-sum penalty to

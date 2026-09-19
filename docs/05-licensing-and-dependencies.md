@@ -74,7 +74,7 @@ revenue cap.
 | **ASIO** | JUCE ASIO wrapper | **Skip for v1** | — | ASIO SDK is free but needs a signed Steinberg agreement. WASAPI exclusive reaches 3–10 ms, ample for an editor. Revisit only on user demand |
 | **Plugin hosting** | JUCE VST3 hosting | **CLAP** | **MIT** | Fully clean. VST3 needs a free signed Steinberg agreement — add later if users demand it |
 | **DSP building blocks** | `juce::dsp` | **Build in-house** | ours | Filters, dynamics, envelopes. Straightforward, well-documented DSP; ours forever |
-| **Audio file I/O** | JUCE formats | libsndfile (LGPL) + **dr_libs** (public domain) | LGPL / PD | dr_wav, dr_flac, dr_mp3 are single-header public domain |
+| **Audio file I/O** | JUCE formats | **dr_libs** (public domain) + our own readers and writers | PD / ours | dr_flac and dr_mp3 are single-header public domain. WAV and AIFF are parsed and written in-house; FLAC is decoded by dr_flac and encoded in-house — see §2.2 |
 | **Containers/codecs** | — | FFmpeg **LGPL build** | LGPL-2.1+ | Dynamic link, never `--enable-gpl` |
 | **FFT** | `juce::dsp::FFT` | **PFFFT** or **pocketfft** | BSD | Never FFTW (GPL) |
 | **Resampling** | — | **r8brain-free-src** | MIT | High quality |
@@ -110,6 +110,47 @@ is genuinely the better fit for the spectral canvas alone.
 > Avoid Qt's **GPL-only modules**: Qt Charts, Qt Data Visualization, Qt Virtual
 > Keyboard. We draw our own charts anyway. Also note Qt LTS releases are
 > commercial-only for a window — use current releases or build from source.
+
+### 2.2 FLAC encoding: libFLAC assessed, then written in-house
+
+The editor reads FLAC through **dr_flac** (Unlicense/MIT-0, vendored). Writing
+one needed a separate decision, because dr_libs has no encoder.
+
+**libFLAC passes the policy.** The Xiph reference library — `libFLAC` and
+`libFLAC++`, `src/libFLAC/` in the xiph/flac repository — is **BSD-3-Clause**,
+which is on the allowlist and is free in perpetuity for closed-source
+distribution with no revenue, seat or unit cap. It is not the whole repository:
+the `flac` and `metaflac` command-line tools, the test suite and the build
+plumbing are **GPL-2.0-or-later**, so vendoring would have to be surgical, and a
+mistake there is a GPL obligation rather than a build error. There is no patent
+position to take; the format is unencumbered and Xiph grants its patents
+explicitly.
+
+**We wrote the encoder instead, and the reason is size rather than licence.**
+libFLAC is roughly forty C source files and its own build system. Next to
+`third_party/dr_libs`, which is two single headers decoding three formats, it
+would be the largest third-party surface in the tree by an order of magnitude —
+for an encoder whose format is fully documented and whose correctness is
+checkable exactly. A FLAC is lossless, so a round trip has a pass/fail answer
+and no judgement in it: encode, decode with an unrelated decoder, compare the
+samples bit for bit. That is the test `sa-io` runs, against dr_flac.
+
+This is the same reasoning that produced our own WAV and AIFF parsers, our own
+FFT and our own resampler, and it is deliberately **not** the reasoning applied
+to FLAC *decoding*: decoding is a hostile-input problem and a hand-rolled
+entropy decoder is a worse attack surface than a decade-fuzzed one. Encoding has
+no such surface — the input is a buffer this program produced.
+
+**What it costs.** Compression, by a measurable and small amount. The encoder
+does constant, verbatim, the four fixed polynomial predictors and a
+Levinson-Durbin LPC fit per block, with wasted-bit detection, stereo
+decorrelation and a partitioned-Rice search; what it skips is the exhaustive
+searching a reference encoder does at its highest settings. Measured against
+libFLAC at libsndfile's default level, across tones, harmonic material, pink
+noise, white noise and material 60 dB down, at both 16 and 24 bits, the files
+come out between 0.97x and 1.12x its size. If that ever matters more than the
+dependency does, libFLAC remains available on these terms and this section is
+the determination it would be adopted under.
 
 ---
 

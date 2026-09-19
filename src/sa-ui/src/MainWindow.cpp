@@ -13,7 +13,9 @@
 #include <sa/engine/Consolidate.h>
 #include <sa/engine/Edits.h>
 #include <sa/engine/SessionFile.h>
+#include <sa/io/AiffWriter.h>
 #include <sa/io/AudioFile.h>
+#include <sa/io/FlacWriter.h>
 #include <sa/io/WavWriter.h>
 #include <sa/spectral/SpectralEdit.h>
 #include <sa/ui/FieldDialog.h>
@@ -26,6 +28,7 @@
 #include <QCloseEvent>
 #include <QElapsedTimer>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QInputDialog>
@@ -1302,19 +1305,54 @@ bool MainWindow::openSession(const std::filesystem::path& path) {
     return true;
 }
 
+namespace {
+
+/// The containers an export can be written as, in the order the dialog offers
+/// them.
+///
+/// WAV first because it is what everything reads, FLAC second because it is the
+/// reason this list has more than one entry: opening a FLAC, trimming two
+/// seconds off it and saving it back used to return it five times the size.
+QString exportFilters() {
+    return MainWindow::tr("WAV audio (*.wav);;FLAC audio (*.flac);;AIFF audio (*.aiff)");
+}
+
+/// Take the extension from the filter the user chose, when they gave none.
+///
+/// The save dialog hands back exactly what was typed. On Windows the platform
+/// dialog fills the extension in from the selected file type; the Qt dialog
+/// does not, so someone who picks FLAC and types a bare name gets a bare name,
+/// and a bare name is written as WAV. This is what stops the filter being
+/// decoration.
+QString withSuffixFromFilter(const QString& path, const QString& filter) {
+    if (!QFileInfo{path}.suffix().isEmpty()) {
+        return path;
+    }
+    const int opening = filter.indexOf(QLatin1String("(*."));
+    const int closing = opening < 0 ? -1 : filter.indexOf(QLatin1Char(')'), opening);
+    if (closing < 0) {
+        return path;
+    }
+    return path + filter.mid(opening + 2, closing - opening - 2);
+}
+
+} // namespace
+
 void MainWindow::chooseExport() {
+    QString filter;
     const QString path =
-        QFileDialog::getSaveFileName(this, tr("Export"), {}, tr("WAV audio (*.wav)"));
+        QFileDialog::getSaveFileName(this, tr("Export"), {}, exportFilters(), &filter);
     if (!path.isEmpty()) {
-        exportTo(path.toStdString(), false);
+        exportTo(withSuffixFromFilter(path, filter).toStdString(), false);
     }
 }
 
 void MainWindow::chooseExportSelection() {
+    QString filter;
     const QString path =
-        QFileDialog::getSaveFileName(this, tr("Export selection"), {}, tr("WAV audio (*.wav)"));
+        QFileDialog::getSaveFileName(this, tr("Export selection"), {}, exportFilters(), &filter);
     if (!path.isEmpty()) {
-        exportTo(path.toStdString(), true);
+        exportTo(withSuffixFromFilter(path, filter).toStdString(), true);
     }
 }
 
@@ -3503,15 +3541,74 @@ bool MainWindow::exportTo(const std::filesystem::path& path, bool selectionOnly)
         return false;
     }
 
-    io::WavOptions options;
-    options.format = preferences_.exportFormat;
-    auto writer =
-        io::WavWriter::create(stream, document_.sampleRate(), document_.layout(), options);
-    if (!writer) {
-        status_->setText(tr("Could not start the export: %1")
-                             .arg(QString::fromStdString(std::string{writer.error().what()})));
-        return false;
+    // Which container is written comes from the name, and only from the name.
+    // That is the opposite of an open, which sniffs the content and never
+    // trusts an extension -- but on the way out there is nothing to sniff, and
+    // what the user typed into the save dialog is the whole of what they said.
+    //
+    // FLAC holds 16- or 24-bit integers and AIFF here is integer PCM, so a
+    // float export to either becomes 24-bit rather than being refused. That is
+    // the same narrowing sa-cli makes, and the dither decision below is taken
+    // on the depth that results rather than on the one that was asked for, so
+    // there is one rule in this program about when bits are dithered on their
+    // way down and not two.
+    const QString suffix = QString::fromStdString(path.extension().string()).toLower();
+    const bool wantsFlac = suffix == QLatin1String(".flac");
+    const bool wantsAiff = suffix == QLatin1String(".aiff") || suffix == QLatin1String(".aif") ||
+                           suffix == QLatin1String(".aifc");
+
+    io::SampleFormat format = preferences_.exportFormat;
+    if (wantsFlac && format != io::SampleFormat::PcmInt16) {
+        format = io::SampleFormat::PcmInt24;
+    } else if (wantsAiff && format != io::SampleFormat::PcmInt16 &&
+               format != io::SampleFormat::PcmInt32) {
+        format = io::SampleFormat::PcmInt24;
     }
+
+    const auto cannotStart = [this](const Error& error) {
+        status_->setText(tr("Could not start the export: %1")
+                             .arg(QString::fromStdString(std::string{error.what()})));
+        return false;
+    };
+
+    std::optional<io::WavWriter> wav;
+    std::optional<io::AiffWriter> aiff;
+    std::optional<io::FlacWriter> flac;
+
+    if (wantsFlac) {
+        io::FlacOptions options;
+        options.format = format;
+        auto writer =
+            io::FlacWriter::create(stream, document_.sampleRate(), document_.layout(), options);
+        if (!writer) {
+            return cannotStart(writer.error());
+        }
+        flac.emplace(std::move(writer.value()));
+    } else if (wantsAiff) {
+        io::AiffOptions options;
+        options.format = format;
+        auto writer =
+            io::AiffWriter::create(stream, document_.sampleRate(), document_.layout(), options);
+        if (!writer) {
+            return cannotStart(writer.error());
+        }
+        aiff.emplace(std::move(writer.value()));
+    } else {
+        io::WavOptions options;
+        options.format = format;
+        auto writer =
+            io::WavWriter::create(stream, document_.sampleRate(), document_.layout(), options);
+        if (!writer) {
+            return cannotStart(writer.error());
+        }
+        wav.emplace(std::move(writer.value()));
+    }
+
+    const auto writeBlock = [&](ConstAudioBufferView frames) {
+        return wav    ? wav->write(frames).ok()
+               : aiff ? aiff->write(frames).ok()
+                      : flac->write(frames).ok();
+    };
 
     // Sixteen bits only, and that is a deliberate limit rather than an
     // oversight. The setting is a standing policy, applied to every export
@@ -3533,7 +3630,9 @@ bool MainWindow::exportTo(const std::filesystem::path& path, bool selectionOnly)
     // carries its error across the join and restarting it at every block would
     // put a discontinuity in the noise floor every 65536 samples.
     std::optional<dsp::Ditherer> ditherer;
-    const int exportBits = preferences_.exportFormat == io::SampleFormat::PcmInt16 ? 16 : 0;
+    // The narrowed format, not the requested one, so a float document going
+    // into a FLAC is judged on the 24 bits it will actually occupy.
+    const int exportBits = format == io::SampleFormat::PcmInt16 ? 16 : 0;
     if (exportBits > 0 && preferences_.dither != dsp::DitherType::None) {
         dsp::DitherSettings settings;
         settings.type = preferences_.dither;
@@ -3559,14 +3658,17 @@ bool MainWindow::exportTo(const std::filesystem::path& path, bool selectionOnly)
         if (ditherer) {
             ditherer->process(filled);
         }
-        if (!writer.value().write(filled)) {
+        if (!writeBlock(filled)) {
             status_->setText(tr("The export failed partway through"));
             return false;
         }
         written += read.value();
     }
 
-    if (!writer.value().finish()) {
+    const bool finished = wav    ? wav->finish().ok()
+                          : aiff ? aiff->finish().ok()
+                                 : flac->finish().ok();
+    if (!finished) {
         status_->setText(tr("Could not finish %1").arg(QString::fromStdString(path.string())));
         return false;
     }
