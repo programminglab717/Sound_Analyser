@@ -33,6 +33,25 @@ def write_wav(path: Path, samples: list[float], rate: int = SAMPLE_RATE) -> None
         )
 
 
+def write_wav32(path: Path, samples: list[float]) -> None:
+    """A 32-bit source, for tests about what happens when bits are dropped.
+
+    write_wav above makes 16-bit files, which is fine for almost everything and
+    useless here: a 16-bit source is already quantised, so converting it to
+    16 bits has nothing left to dither and the test would measure the source's
+    own distortion twice.
+    """
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(4)
+        handle.setframerate(SAMPLE_RATE)
+        handle.writeframes(
+            b"".join(
+                struct.pack("<i", int(max(-1.0, min(1.0, s)) * 2147483647)) for s in samples
+            )
+        )
+
+
 def read_wav(path: Path) -> tuple[list[float], int]:
     with wave.open(str(path), "rb") as handle:
         frames, channels, width, rate = (
@@ -349,6 +368,101 @@ def main() -> int:
         # rather than the operation.
         # Dynamics, on a file that is loud then quiet, so the distance
         # between the two halves is the one number that says what happened.
+        # The stereo field. Four cases with arithmetically known answers, so
+        # the check is against the number rather than against "it reported
+        # something".
+        # Dither through convert, where the CLI can drop bits.
+        print("dither:")
+        quiet_path = workspace / "quiet-cli.wav"
+        write_wav32(
+            quiet_path,
+            [0.0008 * math.sin(2.0 * math.pi * 997.0 * i / SAMPLE_RATE)
+             for i in range(2 * SAMPLE_RATE)],
+        )
+
+        def goertzel(values: list[float], hz: float) -> float:
+            angle = 2.0 * math.pi * hz / SAMPLE_RATE
+            coefficient = 2.0 * math.cos(angle)
+            s1 = s2 = 0.0
+            for value in values:
+                s0 = value + coefficient * s1 - s2
+                s2, s1 = s1, s0
+            return 2.0 * math.hypot(s1 - s2 * math.cos(angle), s2 * math.sin(angle)) / len(values)
+
+        result = run("convert", str(quiet_path), str(workspace / "d-none.wav"), "--format", "16")
+        check("convert without dither exits cleanly", result.returncode == 0, result.stderr)
+        result = run("convert", str(quiet_path), str(workspace / "d-tpdf.wav"),
+                     "--format", "16", "--dither", "tpdf")
+        check("convert with dither exits cleanly", result.returncode == 0, result.stderr)
+
+        if (workspace / "d-none.wav").exists() and (workspace / "d-tpdf.wav").exists():
+            def worst_ratio(path: Path) -> float:
+                values, _ = read_wav(path)
+                fundamental = goertzel(values, 997.0)
+                worst = max(goertzel(values, 997.0 * k) for k in (3, 5, 7, 9))
+                return 20.0 * math.log10(max(worst, 1e-15) / max(fundamental, 1e-15))
+
+            plain = worst_ratio(workspace / "d-none.wav")
+            dithered = worst_ratio(workspace / "d-tpdf.wav")
+            check("dither takes the quantisation distortion down",
+                  plain - dithered > 6.0, f"{plain:.1f} -> {dithered:.1f} dB")
+
+        check("an unknown dither is refused",
+              run("convert", str(quiet_path), str(workspace / "x.wav"),
+                  "--format", "16", "--dither", "gaussian").returncode != 0)
+        check("dither on a float output is accepted and ignored",
+              run("convert", str(quiet_path), str(workspace / "x.wav"),
+                  "--format", "float", "--dither", "tpdf").returncode == 0)
+
+        print("stereo field:")
+        cases = {
+            # Both channels identical: mono in all but name.
+            "identical": (lambda v: v, 1.0, 0.0, 0.0),
+            # Inverted: cancels completely when summed.
+            "opposed": (lambda v: -v, -1.0, 0.0, None),
+            # Right at half amplitude: still perfectly in phase, but 6 dB left.
+            "tilted": (lambda v: 0.5 * v, 1.0, -6.0206, -0.4624),
+        }
+        for name, (right_of, correlation, balance, mono_loss) in cases.items():
+            probe = workspace / f"stereo-{name}.wav"
+            left = [0.5 * math.sin(2.0 * math.pi * 440.0 * i / SAMPLE_RATE)
+                    for i in range(SAMPLE_RATE)]
+            write_stereo(probe, left, [right_of(v) for v in left])
+
+            result = run("analyse", str(probe), "--json")
+            check(f"{name} analyses", result.returncode == 0, result.stderr)
+            if result.returncode != 0:
+                continue
+            try:
+                measured = json.loads(result.stdout)
+            except json.JSONDecodeError as problem:
+                failures.append(f"{name}: the JSON did not parse: {problem}")
+                continue
+
+            check(f"{name} correlation is {correlation:+.2f}",
+                  abs(measured["stereoCorrelation"] - correlation) < 0.01,
+                  f"{measured['stereoCorrelation']}")
+            check(f"{name} balance is {balance:.1f} dB",
+                  abs(measured["stereoBalanceDb"] - balance) < 0.05,
+                  f"{measured['stereoBalanceDb']}")
+            if mono_loss is None:
+                # Total cancellation reads at the floor, not as a small number.
+                check(f"{name} cancels in mono", measured["monoLossDb"] < -100.0,
+                      f"{measured['monoLossDb']}")
+            else:
+                check(f"{name} loses {mono_loss:.2f} dB in mono",
+                      abs(measured["monoLossDb"] - mono_loss) < 0.05,
+                      f"{measured['monoLossDb']}")
+
+        # A mono file has no stereo field, and says so rather than reporting
+        # zeroes that would read as measurements.
+        result = run("analyse", str(source), "--json")
+        if result.returncode == 0:
+            measured = json.loads(result.stdout)
+            check("a mono file reports no stereo field",
+                  measured["stereoCorrelation"] is None and measured["monoLossDb"] is None,
+                  f"{measured.get('stereoCorrelation')}, {measured.get('monoLossDb')}")
+
         print("dynamics:")
         steps = workspace / "loud-then-quiet.wav"
         write_wav(

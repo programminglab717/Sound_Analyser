@@ -247,6 +247,37 @@ void MainWindow::buildMenus() {
     file->addAction(tr("&Export…"), QKeySequence::SaveAs, this, &MainWindow::chooseExport);
     exportSelectionAction_ =
         file->addAction(tr("Export &selection…"), this, &MainWindow::chooseExportSelection);
+
+    // What an export is written as. A submenu rather than a dialog on every
+    // export, because it is a delivery decision made once for a job and then
+    // left alone, and a prompt on each save would be in the way every time.
+    QMenu* formats = file->addMenu(tr("Export &format"));
+    auto* formatGroup = new QActionGroup{this};
+    const auto addFormat = [&](const QString& label, io::SampleFormat format) {
+        QAction* action = formats->addAction(label, this, [this, format] {
+            exportFormat_ = format;
+            refreshActions();
+        });
+        action->setCheckable(true);
+        action->setChecked(format == exportFormat_);
+        formatGroup->addAction(action);
+    };
+    addFormat(tr("&16-bit"), io::SampleFormat::PcmInt16);
+    addFormat(tr("&24-bit"), io::SampleFormat::PcmInt24);
+    addFormat(tr("&32-bit float"), io::SampleFormat::Float32);
+
+    QMenu* dithers = file->addMenu(tr("&Dither"));
+    auto* ditherGroup = new QActionGroup{this};
+    const auto addDither = [&](const QString& label, dsp::DitherType type) {
+        QAction* action = dithers->addAction(label, this, [this, type] { ditherType_ = type; });
+        action->setCheckable(true);
+        action->setChecked(type == ditherType_);
+        ditherGroup->addAction(action);
+    };
+    addDither(tr("&None"), dsp::DitherType::None);
+    addDither(tr("&Triangular"), dsp::DitherType::Tpdf);
+    addDither(tr("Triangular, noise-&shaped"), dsp::DitherType::TpdfNoiseShaped);
+
     file->addSeparator();
     file->addAction(tr("&Quit"), QKeySequence::Quit, qApp, &QApplication::quit);
 
@@ -2500,6 +2531,35 @@ bool MainWindow::applyOperation(const QString& name) {
             });
     }
 
+    // Export settings, so a batch run can ask for a 16-bit delivery master
+    // with the dither it wants rather than only ever getting the default.
+    if (name.startsWith("format:")) {
+        const QString wanted = name.mid(7);
+        if (wanted == QLatin1String{"16"}) {
+            exportFormat_ = io::SampleFormat::PcmInt16;
+        } else if (wanted == QLatin1String{"24"}) {
+            exportFormat_ = io::SampleFormat::PcmInt24;
+        } else if (wanted == QLatin1String{"float"}) {
+            exportFormat_ = io::SampleFormat::Float32;
+        } else {
+            return false;
+        }
+        return true;
+    }
+    if (name.startsWith("dither:")) {
+        const QString wanted = name.mid(7);
+        if (wanted == QLatin1String{"none"}) {
+            ditherType_ = dsp::DitherType::None;
+        } else if (wanted == QLatin1String{"tpdf"}) {
+            ditherType_ = dsp::DitherType::Tpdf;
+        } else if (wanted == QLatin1String{"shaped"}) {
+            ditherType_ = dsp::DitherType::TpdfNoiseShaped;
+        } else {
+            return false;
+        }
+        return true;
+    }
+
     if (name == "reference") {
         captureSpectrumReference();
         return spectrum_ != nullptr && spectrum_->hasReference();
@@ -2558,11 +2618,44 @@ bool MainWindow::exportTo(const std::filesystem::path& path, bool selectionOnly)
         return false;
     }
 
-    auto writer = io::WavWriter::create(stream, document_.sampleRate(), document_.layout());
+    io::WavOptions options;
+    options.format = exportFormat_;
+    auto writer =
+        io::WavWriter::create(stream, document_.sampleRate(), document_.layout(), options);
     if (!writer) {
         status_->setText(tr("Could not start the export: %1")
                              .arg(QString::fromStdString(std::string{writer.error().what()})));
         return false;
+    }
+
+    // Sixteen bits only, and that is a deliberate limit rather than an
+    // oversight. The setting is a standing policy, applied to every export
+    // without being asked for again, so what it costs when it does nothing
+    // matters: dithering a 24-bit export means opening a 24-bit file and
+    // exporting it gives back a different file, which breaks the bit-identical
+    // round trip this project checks for in several places and relies on in
+    // several more. The noise it would remove sits 144 dB down. That is not a
+    // close trade.
+    //
+    // A float export drops nothing at all, so adding noise to one would be
+    // vandalism whatever the setting says.
+    //
+    // sa-cli's --dither is different on purpose: there it is typed out per
+    // invocation rather than standing, so an explicit request at 24 bits is
+    // honoured.
+    //
+    // One ditherer for the whole export, not one per block, because a shaper
+    // carries its error across the join and restarting it at every block would
+    // put a discontinuity in the noise floor every 65536 samples.
+    std::optional<dsp::Ditherer> ditherer;
+    const int exportBits = exportFormat_ == io::SampleFormat::PcmInt16 ? 16 : 0;
+    if (exportBits > 0 && ditherType_ != dsp::DitherType::None) {
+        dsp::DitherSettings settings;
+        settings.type = ditherType_;
+        settings.bits = exportBits;
+        if (auto made = dsp::Ditherer::create(settings, document_.layout().count())) {
+            ditherer.emplace(std::move(made).value());
+        }
     }
 
     // Block at a time, so exporting a long document costs one block of memory
@@ -2577,7 +2670,11 @@ bool MainWindow::exportTo(const std::filesystem::path& path, bool selectionOnly)
         if (!read || read.value() <= 0) {
             break;
         }
-        if (!writer.value().write(view.subRange(0, read.value()))) {
+        AudioBufferView filled = view.subRange(0, read.value());
+        if (ditherer) {
+            ditherer->process(filled);
+        }
+        if (!writer.value().write(filled)) {
             status_->setText(tr("The export failed partway through"));
             return false;
         }
@@ -2643,6 +2740,15 @@ bool MainWindow::printAnalysis() const {
     line("crest_factor_db", result->statistics.crestFactorDb);
     line("dc_offset", result->statistics.dcOffset);
     line("peak_to_loudness_lu", result->statistics.peakToLoudnessRatioDb);
+    // Only when there is one. A mono file printing stereo_valid=0 and four
+    // zeroes invites a test to compare against the zeroes.
+    std::printf("stereo_valid=%d\n", result->stereo.valid ? 1 : 0);
+    if (result->stereo.valid) {
+        line("stereo_correlation", result->stereo.correlation);
+        line("stereo_width_db", result->stereo.widthDb);
+        line("stereo_balance_db", result->stereo.balanceDb);
+        line("stereo_mono_loss_db", result->stereo.monoLossDb);
+    }
     std::printf("gated_blocks=%lld\n", static_cast<long long>(result->loudness.gatedBlockCount));
     std::printf("frames=%lld\n", static_cast<long long>(result->statistics.frames));
 

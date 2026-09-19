@@ -12,11 +12,13 @@
 #include <sa/analysis/ComplianceTarget.h>
 #include <sa/analysis/LoudnessMeter.h>
 #include <sa/analysis/SignalStatistics.h>
+#include <sa/analysis/StereoField.h>
 #include <sa/analysis/TruePeakMeter.h>
 #include <sa/dsp/ChannelOps.h>
 #include <sa/dsp/Declick.h>
 #include <sa/dsp/Declip.h>
 #include <sa/dsp/Dehum.h>
+#include <sa/dsp/Dither.h>
 #include <sa/dsp/OfflineDynamics.h>
 #include <sa/dsp/Resampler.h>
 #include <sa/dsp/TimeStretch.h>
@@ -179,6 +181,8 @@ struct Measurement {
     sa::analysis::LoudnessMeasurement loudness;
     double truePeakDbtp = sa::analysis::kDecibelFloor;
     sa::analysis::SignalStatistics statistics;
+    /// Invalid for anything that is not a stereo pair.
+    sa::analysis::StereoField stereo;
 
     /// Whether the true peak above is the exact reconstruction or the streaming
     /// meter's estimate. A compliance report that does not say which is one
@@ -197,6 +201,9 @@ struct Measurement {
         error = "could not create the meters for this layout";
         return false;
     }
+    // Optional: only a stereo pair has a stereo field, and mono is ordinary
+    // material rather than a failure to measure.
+    auto stereo = sa::analysis::StereoFieldMeter::create(info.channelCount());
 
     sa::AudioBuffer block{info.layout, kBlock};
     sa::SampleIndex cursor = 0;
@@ -210,11 +217,17 @@ struct Measurement {
         loudness.value().process(filled);
         peaks.value().process(filled);
         statistics.value().process(filled);
+        if (stereo) {
+            stereo.value().process(filled);
+        }
         cursor += read.value();
     }
 
     out.loudness = loudness.value().measurement();
     out.truePeakDbtp = peaks.value().truePeakDbtp();
+    if (stereo) {
+        out.stereo = stereo.value().field();
+    }
 
     // Exact where the file fits. The streaming meter is an interpolator and
     // interpolators droop: ours reads up to 0.44 dB low on bright transients,
@@ -265,7 +278,21 @@ void printMeasurement(const std::filesystem::path& path, const sa::io::AudioFile
         std::printf("  \"samplePeakDbfs\": %.3f,\n", measurement.statistics.samplePeakDbfs);
         std::printf("  \"rmsDbfs\": %.3f,\n", measurement.statistics.rmsDbfs);
         std::printf("  \"crestFactorDb\": %.3f,\n", measurement.statistics.crestFactorDb);
-        std::printf("  \"dcOffset\": %.6f\n", measurement.statistics.dcOffset);
+        std::printf("  \"dcOffset\": %.6f,\n", measurement.statistics.dcOffset);
+        // Null rather than zeroes when there is no stereo pair, for the same
+        // reason the ungated loudness is null: a consumer must not be handed a
+        // number that looks like a measurement and is not one.
+        if (measurement.stereo.valid) {
+            std::printf("  \"stereoCorrelation\": %.4f,\n", measurement.stereo.correlation);
+            std::printf("  \"stereoWidthDb\": %.3f,\n", measurement.stereo.widthDb);
+            std::printf("  \"stereoBalanceDb\": %.3f,\n", measurement.stereo.balanceDb);
+            std::printf("  \"monoLossDb\": %.3f\n", measurement.stereo.monoLossDb);
+        } else {
+            std::printf("  \"stereoCorrelation\": null,\n");
+            std::printf("  \"stereoWidthDb\": null,\n");
+            std::printf("  \"stereoBalanceDb\": null,\n");
+            std::printf("  \"monoLossDb\": null\n");
+        }
         std::printf("}\n");
         return;
     }
@@ -287,6 +314,15 @@ void printMeasurement(const std::filesystem::path& path, const sa::io::AudioFile
     std::printf("  rms          %8.2f dBFS\n", measurement.statistics.rmsDbfs);
     std::printf("  crest        %8.2f dB\n", measurement.statistics.crestFactorDb);
     std::printf("  dc offset    %8.5f\n", measurement.statistics.dcOffset);
+    if (measurement.stereo.valid) {
+        std::printf("  correlation  %8.2f\n", measurement.stereo.correlation);
+        std::printf("  width        %8.2f dB\n", measurement.stereo.widthDb);
+        std::printf("  balance      %8.2f dB %s\n", std::abs(measurement.stereo.balanceDb),
+                    std::abs(measurement.stereo.balanceDb) < 0.005
+                        ? "(centred)"
+                        : (measurement.stereo.balanceDb > 0.0 ? "right" : "left"));
+        std::printf("  mono sum     %8.2f dB\n", measurement.stereo.monoLossDb);
+    }
 }
 
 void usage() {
@@ -295,9 +331,15 @@ void usage() {
   analyse <file>... [--json]
       Measure loudness, peaks and statistics.
 
-  convert <in> <out> [--rate <hz>] [--format 16|24|float]
+  convert <in> <out> [--rate <hz>] [--format 16|24|float] [--dither none|tpdf|shaped]
       Convert sample rate and format. Resampling is the Kaiser-windowed-sinc
       converter: 141 dB stopband at best quality.
+
+      --dither applies before the bits are dropped, and only where they are:
+      asking for it on a float output writes the float file untouched. It
+      defaults to none here, unlike the window, because a file passing through
+      this tool is usually on its way somewhere else and dither belongs at the
+      end of a chain rather than at every step of one.
 
   normalise <in> <out> --target <name> [--format 16|24|float]
       Measure, apply the gain that meets the target without breaching its true
@@ -360,6 +402,53 @@ stdout on failure, so it composes in a script.
 )");
 }
 
+/// Dither a buffer for the format it is about to be written as, if the user
+/// asked for any and the format actually drops bits.
+///
+/// --dither defaults to none rather than to triangular, which is the opposite
+/// of the window. The reason is that this tool's job is often to convert or
+/// repair a file that is going on to something else, and adding noise at every
+/// step of a chain is how a file ends up with four layers of it. The window
+/// exports a delivery master; this writes an intermediate unless told
+/// otherwise.
+[[nodiscard]] bool ditherFor(sa::AudioBufferView audio, sa::io::SampleFormat format,
+                             const Options& options, std::string& error) {
+    const auto named = options.value("dither");
+    if (!named) {
+        return true;
+    }
+    sa::dsp::DitherSettings settings;
+    if (*named == "none") {
+        return true;
+    }
+    if (*named == "tpdf") {
+        settings.type = sa::dsp::DitherType::Tpdf;
+    } else if (*named == "shaped") {
+        settings.type = sa::dsp::DitherType::TpdfNoiseShaped;
+    } else {
+        error = "unknown dither '" + *named + "'; try none, tpdf or shaped";
+        return false;
+    }
+
+    settings.bits = format == sa::io::SampleFormat::PcmInt16
+                        ? 16
+                        : (format == sa::io::SampleFormat::PcmInt24 ? 24 : 0);
+    if (settings.bits == 0) {
+        // Not an error. Asking for dither on a float export is a reasonable
+        // thing to type, and the right response is to write the float file
+        // rather than to refuse it or to add noise to it.
+        return true;
+    }
+
+    auto ditherer = sa::dsp::Ditherer::create(settings, audio.channelCount());
+    if (!ditherer) {
+        error = std::string{ditherer.error().what()};
+        return false;
+    }
+    ditherer.value().process(audio);
+    return true;
+}
+
 int analyse(const Options& options) {
     if (options.positional.size() < 2) {
         return fail("analyse needs at least one file");
@@ -402,7 +491,20 @@ int convert(const Options& options) {
     const auto format = formatFrom(options, info.format);
 
     if (std::abs(wanted - info.sampleRate.hz()) < 0.5) {
-        return write(*source, options.positional[2], format, error) ? 0 : fail(error);
+        if (!options.value("dither")) {
+            // Nothing to dither, so stream it straight through rather than
+            // pulling the whole file into memory to change nothing.
+            return write(*source, options.positional[2], format, error) ? 0 : fail(error);
+        }
+        sa::AudioBuffer same{info.layout, info.frameCount};
+        if (const auto read = source->read(0, same.view()); !read) {
+            return fail(std::string{read.error().what()});
+        }
+        if (!ditherFor(same.view(), format, options, error)) {
+            return fail(error);
+        }
+        const sa::engine::BufferSource dithered{std::move(same), info.sampleRate};
+        return write(dithered, options.positional[2], format, error) ? 0 : fail(error);
     }
 
     // Resample into memory, then write. Streaming straight through would be
@@ -464,6 +566,9 @@ int convert(const Options& options) {
         }
     }
 
+    if (!ditherFor(output.view(), format, options, error)) {
+        return fail(error);
+    }
     const sa::engine::BufferSource converted{std::move(output), sa::SampleRate{wanted}};
     return write(converted, options.positional[2], format, error) ? 0 : fail(error);
 }

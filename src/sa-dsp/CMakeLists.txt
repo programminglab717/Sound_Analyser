@@ -4,6 +4,7 @@ add_library(sa-dsp STATIC
     src/Dynamics.cpp
     src/EnvelopeFollower.cpp
     src/Declick.cpp
+    src/Dither.cpp
     src/Declip.cpp
     src/Dehum.cpp
     src/Fft.cpp
@@ -31,6 +32,7 @@ if(SA_BUILD_TESTS)
         tests/ChannelOpsTests.cpp
         tests/DynamicsTests.cpp
         tests/DeclickTests.cpp
+        tests/DitherTests.cpp
         tests/DeclipTests.cpp
         tests/DehumTests.cpp
         tests/FftTests.cpp

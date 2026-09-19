@@ -84,6 +84,8 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | De-humming: finding a mains harmonic series and subtracting it | ✅ Done |
 | Mastering: filters, true-peak limiting, normalisation | ✅ Done |
 | Compressor and noise gate | ✅ Done — stereo-linked, with a run-up so a selection does not open uncompressed |
+| Stereo field: correlation, width, balance, mono-sum loss | ✅ Done — in the panel, the analysis output and the batch driver |
+| Export depth and dither | ✅ Done — 16/24/float, triangular and noise-shaped, measured at 12–14 dB less distortion |
 | `sa-cli`: headless batch driver | ✅ Done — thirteen commands, tested end to end |
 | Time-stretch and pitch-shift | ✅ Done — phase vocoder with identity phase locking |
 | Markers and regions in the interface | ✅ Done — add, name, navigate, saved in sessions |

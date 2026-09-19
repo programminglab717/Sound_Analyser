@@ -30,6 +30,7 @@ Then open something real — a recording of your own, not a test tone — and tr
 | Select | Drag in the waveform for a time span; drag in the spectrogram for a time *and frequency* box |
 | Play | Space |
 | Measure | The panel on the right; it follows the selection |
+| Check it sums | The STEREO block in the panel. Correlation near +1 is safe, 0 is wide, negative is trouble; "mono sum" is how many dB the programme loses when something plays it in mono, and anything much past -3 is cancellation rather than arithmetic |
 | Read the spectrum | The curve under the meters, also following the selection. The filled shape is the average, the line above it is the loudest any moment got. Hover for a frequency and a level |
 | Fix the level | Process ▸ Normalise to target, after picking a target in the panel |
 | Filter | Process ▸ Filter, or Ctrl+F. High-pass at 80 Hz is the one to try first on anything with rumble in it |
@@ -46,6 +47,7 @@ Then open something real — a recording of your own, not a test tone — and tr
 | Flip it about | Process ▸ Reverse, Invert polarity, Swap channels, Sum to mono. Each one obeys the selection, so they work on a passage as well as the whole file |
 | Fade | Process ▸ Fade in or Fade out over a selection. Process ▸ Fade shape picks the curve: linear unless you change it, and equal power is the one that does not leave a hole when two fades meet |
 | Compare | Select a passage you like, Ctrl+R to keep its spectrum, then select another. The dashed line is the one you kept, and hovering gives the difference in dB. It survives opening a different file, so you can chase a reference record |
+| Deliver | File ▸ Export format picks 16-bit, 24-bit or float, and File ▸ Dither says what to do about the bits a 16-bit export drops. Triangular is on by default and is the right answer almost always. A 24-bit or float export is never dithered, so a file exported untouched comes back byte for byte |
 | Save | File ▸ Save session, reopen it, check nothing was lost |
 
 **What I need back.** Not a bug list — impressions. Where did you expect
@@ -126,6 +128,19 @@ Not blocked, but a person's judgement would be better than mine.
   stretched to 130%, because a phase vocoder smears transients by construction
   and no number I can produce here says whether that is acceptable or
   embarrassing. Try it on something percussive and tell me.
+- **Whether the noise-shaped dither is worth having.** It is a plain
+  second-order shaper, not one of the published psychoacoustic curves, which
+  I did not write down because writing a filter design from memory would be
+  worse than saying so. It measurably beats flat triangular on distortion
+  (13.9 dB against 12.0), and whether the hiss it puts in the top octave is
+  a fair price is a listening question, not a measuring one.
+
+- **Whether the stereo meters say enough.** Four numbers, no goniometer and
+  no per-band correlation, so a mix whose bass alone is out of phase reads
+  as merely "wide" rather than as the specific fault it is. Per-band
+  correlation is the obvious next step and I have not built it, because I do
+  not know whether the four numbers already tell you what you need.
+
 - **Whether the compressor and gate defaults are close to useful.** -20 dB
   at 4:1 with 10 and 100 ms, and a gate opening at -40 dB with 80 dB of
   depth. Those are textbook starting points rather than anything tuned on

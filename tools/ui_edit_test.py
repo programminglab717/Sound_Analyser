@@ -88,6 +88,21 @@ def write_stereo_wav(path: Path) -> None:
         handle.writeframes(bytes(samples))
 
 
+def write_stereo(path: Path, left: list[float], right: list[float]) -> None:
+    """A stereo WAV from two given channels, for cases that need a specific pair."""
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(2)
+        handle.setsampwidth(2)
+        handle.setframerate(SAMPLE_RATE)
+        handle.writeframes(
+            b"".join(
+                struct.pack("<hh", int(max(-1.0, min(1.0, a)) * 32767),
+                            int(max(-1.0, min(1.0, b)) * 32767))
+                for a, b in zip(left, right)
+            )
+        )
+
+
 def load_channels(path: Path) -> list[list[float]]:
     """Every channel of a WAV as floats in [-1, 1], one list per channel."""
     with wave.open(str(path), "rb") as handle:
@@ -848,6 +863,226 @@ def main() -> int:
                     failures.append(f"markers: a reopened session has {reopened}")
                 else:
                     print("  ok  a saved session reopens with its markers")
+
+        # Export format and dither. A very quiet tone, because that is where
+        # rounding to 16 bits does its damage: the error is a few codes either
+        # way whatever the signal, so at -60 dBFS it is a large fraction of it
+        # and lands as harmonic distortion rather than as hiss.
+        print("\nexport format and dither:")
+        quiet = workspace / "quiet.wav"
+        quiet_hz = 997.0
+        with wave.open(str(quiet), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(4)
+            handle.setframerate(SAMPLE_RATE)
+            handle.writeframes(
+                b"".join(
+                    struct.pack(
+                        "<i",
+                        int(0.0008 * math.sin(2.0 * math.pi * quiet_hz * i / SAMPLE_RATE)
+                            * 2147483647),
+                    )
+                    for i in range(2 * SAMPLE_RATE)
+                )
+            )
+
+        def goertzel(values: list[float], hz: float) -> float:
+            """Amplitude at one frequency. Cheaper and clearer than an FFT here."""
+            angle = 2.0 * math.pi * hz / SAMPLE_RATE
+            coefficient = 2.0 * math.cos(angle)
+            s1 = s2 = 0.0
+            for value in values:
+                s0 = value + coefficient * s1 - s2
+                s2, s1 = s1, s0
+            real = s1 - s2 * math.cos(angle)
+            imaginary = s2 * math.sin(angle)
+            return 2.0 * math.hypot(real, imaginary) / len(values)
+
+        def export_bits(path: Path) -> int:
+            with wave.open(str(path), "rb") as handle:
+                return handle.getsampwidth() * 8
+
+        distortion: dict[str, float] = {}
+        for label, verbs in (
+            ("none", "dither:none,format:16"),
+            ("tpdf", "dither:tpdf,format:16"),
+            ("shaped", "dither:shaped,format:16"),
+        ):
+            output = workspace / f"quiet-{label}.wav"
+            completed = subprocess.run(
+                [str(arguments.binary), str(quiet), "--apply", f"selectall,{verbs}",
+                 "--export", str(output)],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            if completed.returncode != 0 or not output.exists():
+                failures.append(f"dither {label}: exited {completed.returncode}")
+                continue
+            if export_bits(output) != 16:
+                failures.append(f"format:16 wrote {export_bits(output)} bits")
+                continue
+            values = load(output)
+            fundamental = goertzel(values, quiet_hz)
+            worst = max(goertzel(values, quiet_hz * k) for k in (3, 5, 7, 9))
+            distortion[label] = 20.0 * math.log10(max(worst, 1e-15) / max(fundamental, 1e-15))
+
+        if len(distortion) == 3:
+            print("  ok  format:16 writes a 16-bit file")
+            # Dither must push the distortion products well down. Measured at
+            # about 12 dB for triangular and 14 with shaping; 6 is the bar, so
+            # the check fails on a broken ditherer rather than on a tuning
+            # change.
+            for label in ("tpdf", "shaped"):
+                improvement = distortion["none"] - distortion[label]
+                if improvement < 6.0:
+                    failures.append(
+                        f"dither {label} improved distortion by only {improvement:.1f} dB "
+                        f"({distortion['none']:.1f} -> {distortion[label]:.1f} dB)"
+                    )
+                else:
+                    print(f"  ok  {label} dither takes the distortion down {improvement:.1f} dB")
+
+        # A float export drops no bits, so dither must leave it exactly alone.
+        floats = {}
+        for label in ("none", "shaped"):
+            output = workspace / f"quiet-float-{label}.wav"
+            completed = subprocess.run(
+                [str(arguments.binary), str(quiet), "--apply", f"selectall,dither:{label},format:float",
+                 "--export", str(output)],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            if completed.returncode != 0 or not output.exists():
+                failures.append(f"float export with dither {label}: exited {completed.returncode}")
+                continue
+            floats[label] = output.read_bytes()
+        if len(floats) == 2:
+            if floats["none"] != floats["shaped"]:
+                failures.append("dither changed a float export, which drops no bits")
+            else:
+                print("  ok  a float export is untouched by dither")
+
+        # A 24-bit export is untouched whatever the dither setting says, and
+        # this check exists because the opposite shipped for an hour. Dither
+        # defaulted on at every depth, so opening a file and exporting it gave
+        # back a different file -- which quietly broke the bit-identical round
+        # trip that the declicker and the de-hummer are checked against, and
+        # showed up as those two failing rather than as anything about dither.
+        depth24 = {}
+        for label in ("none", "shaped"):
+            output = workspace / f"quiet-24-{label}.wav"
+            completed = subprocess.run(
+                [str(arguments.binary), str(quiet), "--apply",
+                 f"selectall,dither:{label},format:24", "--export", str(output)],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            if completed.returncode != 0 or not output.exists():
+                failures.append(f"24-bit export with dither {label}: exited {completed.returncode}")
+                continue
+            depth24[label] = output.read_bytes()
+        if len(depth24) == 2:
+            if depth24["none"] != depth24["shaped"]:
+                failures.append("the dither setting changed a 24-bit export")
+            else:
+                print("  ok  a 24-bit export is the same whatever the dither setting")
+
+        # An unknown setting is refused rather than silently ignored.
+        refused = 0
+        for verb in ("format:12", "dither:gaussian"):
+            bad = subprocess.run(
+                [str(arguments.binary), str(quiet), "--apply", f"selectall,{verb}",
+                 "--export", str(workspace / "nope.wav")],
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            if bad.returncode == 0:
+                failures.append(f"{verb} was accepted")
+            else:
+                refused += 1
+        if refused == 2:
+            print("  ok  unknown formats and dithers are refused")
+
+        # The stereo field, through the window's own meters. The interesting
+        # check is not that the numbers exist but that an edit moves them the
+        # way it should: summing to mono must take the mono-sum penalty to
+        # exactly nothing, because after it there is nothing left to cancel.
+        print("\nstereo field:")
+        opposed = workspace / "opposed.wav"
+        left = [0.5 * math.sin(2.0 * math.pi * 440.0 * i / SAMPLE_RATE) for i in range(SAMPLE_RATE)]
+        write_stereo(opposed, left, [-v for v in left])
+
+        def analysis_of(path: Path, operations: str | None) -> dict[str, float]:
+            command = [str(arguments.binary), str(path)]
+            if operations:
+                command += ["--apply", operations]
+            command += ["--print-analysis"]
+            done = subprocess.run(command, capture_output=True, text=True, timeout=300)
+            if done.returncode != 0:
+                failures.append(f"stereo analysis '{operations}': exited {done.returncode}")
+                return {}
+            out: dict[str, float] = {}
+            for line in done.stdout.splitlines():
+                key, _, value = line.partition("=")
+                try:
+                    out[key] = float(value)
+                except ValueError:
+                    pass
+            return out
+
+        before = analysis_of(opposed, None)
+        if before.get("stereo_valid") != 1.0:
+            failures.append("stereo: a stereo file reported no stereo field")
+        elif abs(before.get("stereo_correlation", 0.0) + 1.0) > 0.01:
+            failures.append(f"stereo: correlation {before.get('stereo_correlation')}, wanted -1")
+        elif before.get("stereo_mono_loss_db", 0.0) > -100.0:
+            failures.append(
+                f"stereo: an opposed pair reported {before.get('stereo_mono_loss_db')} dB mono loss"
+            )
+        else:
+            print("  ok  an opposed pair reads -1.00 correlation and cancels in mono")
+
+        # Two unrelated tones for the mono check, not the opposed pair above.
+        # Summing an opposed pair gives silence, which genuinely has no stereo
+        # field -- the meter says so, correctly, and the check would be reading
+        # that as a failure to measure. Unrelated tones sum to something.
+        unrelated = workspace / "unrelated.wav"
+        write_stereo(
+            unrelated,
+            [0.4 * math.sin(2.0 * math.pi * 440.0 * i / SAMPLE_RATE) for i in range(SAMPLE_RATE)],
+            [0.4 * math.sin(2.0 * math.pi * 623.0 * i / SAMPLE_RATE) for i in range(SAMPLE_RATE)],
+        )
+        wide = analysis_of(unrelated, None)
+        summed = analysis_of(unrelated, "selectall,mono")
+        if not wide or not summed:
+            pass
+        elif abs(wide.get("stereo_correlation", 9.0)) > 0.05:
+            failures.append(f"stereo: unrelated tones correlate at {wide.get('stereo_correlation')}")
+        elif abs(wide.get("stereo_mono_loss_db", 0.0) + 3.01) > 0.1:
+            failures.append(f"stereo: unrelated tones lose {wide.get('stereo_mono_loss_db')} dB")
+        elif abs(summed.get("stereo_correlation", 0.0) - 1.0) > 0.01:
+            failures.append(f"stereo: after mono, correlation {summed.get('stereo_correlation')}")
+        elif abs(summed.get("stereo_mono_loss_db", -99.0)) > 0.01:
+            failures.append(f"stereo: after mono, loss {summed.get('stereo_mono_loss_db')} dB")
+        else:
+            print("  ok  unrelated tones read 0.00 correlation and lose 3 dB summed")
+            print("  ok  summing to mono takes the correlation to +1 and the penalty to zero")
+
+        # And a mono file says it has no stereo field rather than inventing one.
+        done = subprocess.run(
+            [str(arguments.binary), str(source), "--print-analysis"],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if "stereo_valid=0" not in done.stdout:
+            failures.append("stereo: a mono file did not report stereo_valid=0")
+        else:
+            print("  ok  a mono file reports no stereo field")
 
         # Dynamics. A loud half and a quiet half, so what each processor did
         # to the distance between them is one number: a compressor closes the

@@ -2,6 +2,7 @@
 
 #include <sa/core/Cancellation.h>
 #include <sa/dsp/ChannelOps.h>
+#include <sa/dsp/Dither.h>
 #include <sa/dsp/OfflineDynamics.h>
 #include <sa/engine/Clip.h>
 #include <sa/engine/Document.h>
@@ -301,6 +302,16 @@ private:
     /// people mean by a fade, and equal power is for crossfades, where two of
     /// them have to sum to a constant.
     engine::FadeShape fadeShape_ = engine::FadeShape::Linear;
+
+    /// What an export is written as, and what is done about the bits it drops.
+    ///
+    /// 24-bit by default because it is the safe delivery depth and the one
+    /// that needs nothing done to it. The dither setting is a standing policy
+    /// and applies only to a 16-bit export, where it is the difference between
+    /// a noise floor and a distortion floor; see exportTo for why it stops
+    /// there.
+    io::SampleFormat exportFormat_ = io::SampleFormat::PcmInt24;
+    dsp::DitherType ditherType_ = dsp::DitherType::Tpdf;
     QAction* attenuateAction_ = nullptr;
     QAction* healAction_ = nullptr;
     QAction* denoiseAction_ = nullptr;
