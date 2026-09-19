@@ -121,9 +121,14 @@ inline constexpr double kKeylessContrast = 0.15;
 /// resting on a single decimal place.
 inline constexpr double kKeyRefusedBelow = 0.20;
 
-/// At or above this, a key is shown plainly; between the two it is shown with
-/// the reason to doubt it. Halfway between a chroma that fits nothing and the
-/// 0.7 and upwards that well-behaved tonal material reaches.
+/// At or above this a key is shown plainly; between the two it is shown with
+/// the reason to doubt it.
+///
+/// Tonal music has a contrast near one, so its strength is very nearly its
+/// fit, and half is the point at which a correlation stops being a lean and
+/// starts being a match. It is the softest of the thresholds here and the one
+/// least worth arguing over: either side of it the key is still named, and all
+/// that changes is whether the panel stands behind it.
 inline constexpr double kKeyFirmAt = 0.50;
 
 /// Beyond this much detuning the key is worth less, and says so.
@@ -135,10 +140,10 @@ inline constexpr double kTuningFarCents = 25.0;
 
 /// Below this the tempo is shown with a warning rather than plainly.
 ///
-/// trackTempo() refuses outright below 0.15, so this is not a second refusal --
-/// it is the band above the refusal, where the period explains something about
-/// the record but not much, and where looking at the grid against the
-/// transients is the only way to settle it.
+/// Not a second refusal -- trackTempo() has already made the only one there
+/// is. This is the band above it, where the period explains something about
+/// the record but not much, and where laying the grid over the transients is
+/// the only thing that settles it. So the caveat says to do that.
 inline constexpr double kTempoDoubtfulBelow = 0.35;
 
 /// Below this fraction of voiced frames the contour is mostly gaps, and a

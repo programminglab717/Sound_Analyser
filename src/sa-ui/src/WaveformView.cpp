@@ -225,9 +225,11 @@ void WaveformView::paintContour(QPainter& painter, const QRect& plot) {
                          Qt::AlignRight | Qt::AlignVCenter, QString::fromStdString(tick.label));
     }
 
-    // Deliberately not antialiased. The contour's height is the reading, so a
-    // sustained note has to land on exactly the row its frequency maps to
-    // rather than being spread over the two either side of it.
+    // Deliberately not antialiased, and said rather than left to the painter's
+    // default. The contour's height is the reading, so a sustained note has to
+    // land on exactly the row its frequency maps to rather than being spread
+    // over the two either side of it.
+    painter.setRenderHint(QPainter::Antialiasing, false);
     painter.setPen(QPen{kContour, 1.0});
     for (const std::vector<ContourPoint>& run :
          pitchRuns(contour_, contourStart_, rate_, timePlot(), axis)) {
