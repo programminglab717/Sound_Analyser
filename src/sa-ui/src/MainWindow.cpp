@@ -135,17 +135,25 @@ MainWindow::MainWindow() {
     // numbers and the picture are answers to the same question, and a reader
     // who has to move a window to see both will stop looking at one of them.
     meters_ = new LoudnessPanel{this};
+    analysis_ = new AnalysisPanel{this};
     spectrum_ = new EqCurveView{this};
 
     // The spectrum goes under the meters rather than beside the views: it
     // answers the same kind of question the numbers do -- what is this passage
     // made of -- and unlike the two views above it does not have to line up
     // with the time axis.
+    //
+    // The musical answers go between them for the same reason. They are
+    // numbers about this passage, they belong beside the other numbers about
+    // it, and they were reachable only from the command line until now -- which
+    // for a product that calls itself an analyser was the wrong way round.
     auto* side = new QSplitter{Qt::Vertical, this};
     side->addWidget(meters_);
+    side->addWidget(analysis_);
     side->addWidget(spectrum_);
     side->setStretchFactor(0, 3);
     side->setStretchFactor(1, 2);
+    side->setStretchFactor(2, 2);
     auto* row = new QWidget{this};
     auto* across = new QHBoxLayout{row};
     across->setContentsMargins(0, 0, 0, 0);
@@ -172,6 +180,12 @@ MainWindow::MainWindow() {
     // The EQ menu entries follow the curve, so that "apply" cannot be pressed
     // on a curve that would do nothing.
     connect(spectrum_, &EqCurveView::bandsChanged, this, &MainWindow::refreshActions);
+
+    // The beat grid, the contour and the bands are drawn from the panel's
+    // result, so they are put on screen when that result lands and at no other
+    // time. A view updated from anywhere else could draw a grid belonging to a
+    // measurement that has since been superseded.
+    connect(analysis_, &AnalysisPanel::analysisFinished, this, &MainWindow::showMusicalAnalysis);
 
     status_ = new QLabel{tr("Open an audio file to begin"), this};
     readout_ = new QLabel{this};
@@ -422,6 +436,37 @@ void MainWindow::buildMenus() {
     repair->addAction(tr("Select all &frequencies"), this,
                       [this] { selectFrequencyBand(0.0, document_.sampleRate().hz() * 0.5); });
 
+    // A menu of its own rather than four entries under View, because these are
+    // not ways of looking at the same picture: each one runs an analysis, and
+    // two of them cost real time on a long file.
+    QMenu* analyse = menuBar()->addMenu(tr("&Analyse"));
+    const auto addToggle = [&](const QString& label, const QKeySequence& shortcut, bool& wanted) {
+        QAction* action = analyse->addAction(label, shortcut, this, [this, &wanted] {
+            wanted = !wanted;
+            refreshActions();
+            // Now rather than behind the timer: this is a menu press, so the
+            // drag the timer exists to sit out is already over.
+            reanalyseNow();
+        });
+        action->setCheckable(true);
+        action->setChecked(wanted);
+        return action;
+    };
+
+    beatGridAction_ = addToggle(tr("&Beat grid over the waveform"),
+                                QKeySequence{Qt::CTRL | Qt::SHIFT | Qt::Key_B}, showBeatGrid_);
+    pitchContourAction_ =
+        addToggle(tr("&Pitch contour over the waveform"),
+                  QKeySequence{Qt::CTRL | Qt::SHIFT | Qt::Key_P}, showPitchContour_);
+    octaveBandsAction_ =
+        addToggle(tr("Third-&octave bands on the spectrum"),
+                  QKeySequence{Qt::CTRL | Qt::SHIFT | Qt::Key_T}, showOctaveBands_);
+    analyse->addSeparator();
+    // Named for what it assumes rather than for what it reports. Run on music
+    // it produces a refusal and not a reverberation time, and the entry should
+    // say so before it is pressed rather than after.
+    roomAction_ = addToggle(tr("Measure as an &impulse response"), QKeySequence{}, measureRoom_);
+
     QMenu* view = menuBar()->addMenu(tr("&View"));
     view->addAction(tr("Zoom to &fit"), QKeySequence{Qt::Key_F}, this,
                     [this] { waveform_->showAll(); });
@@ -540,7 +585,66 @@ void MainWindow::reanalyseNow() {
         analysisTimer_->stop();
     }
     remeasure();
+    remeasureMusical();
     respectrum();
+}
+
+void MainWindow::remeasureMusical() {
+    if (analysis_ == nullptr) {
+        return;
+    }
+    if (!documentSource_ || document_.duration() <= 0) {
+        analysis_->clear();
+        waveform_->clearOverlays();
+        spectrum_->setOctaveBands({});
+        return;
+    }
+
+    AnalysisPanel::Request request;
+    request.pitch = showPitchContour_;
+    request.room = measureRoom_;
+
+    const TimeSelection selected = selection();
+    if (selected.isEmpty()) {
+        analysis_->analyse(documentSource_, 0, document_.duration(), tr("whole document"), request);
+    } else {
+        analysis_->analyse(documentSource_, selected.start, selected.length(), tr("selection"),
+                           request);
+    }
+}
+
+void MainWindow::showMusicalAnalysis() {
+    const MusicalAnalysis* result = analysis_ == nullptr ? nullptr : analysis_->latest();
+    if (result == nullptr) {
+        waveform_->clearOverlays();
+        spectrum_->setOctaveBands({});
+        return;
+    }
+
+    // The grid is drawn only where there is a tempo to draw. A refused tempo
+    // leaves the waveform bare, which is the same answer the panel gives in
+    // words, and is not the same picture as a grid nobody can see.
+    if (showBeatGrid_ && result->hasBeats()) {
+        waveform_->setBeatGrid(result->tempo.beatSeconds, result->start,
+                               result->tempo.confidence < kTempoDoubtfulBelow);
+    } else {
+        waveform_->setBeatGrid({}, result->start, false);
+    }
+
+    if (showPitchContour_ && result->pitchRequested) {
+        const analysis::PitchSettings settings;
+        waveform_->setPitchContour(result->pitch, result->start, settings.minHz, settings.maxHz);
+    } else {
+        waveform_->setPitchContour({}, result->start, 0.0, 0.0);
+    }
+
+    // Where the analysis stopped short of what was asked about, so that a grid
+    // ending part-way along the file reads as a bound and not as a failure.
+    waveform_->setAnalysedEnd(result->analysedFrames < result->requestedFrames
+                                  ? result->start + result->analysedFrames
+                                  : -1);
+
+    spectrum_->setOctaveBands(showOctaveBands_ ? result->bands : std::vector<analysis::Band>{});
 }
 
 void MainWindow::respectrum() {
@@ -1046,6 +1150,15 @@ void MainWindow::refreshActions() {
         applyEqAction_->setEnabled(document && !spectrum_->curve().isFlat());
         resetEqAction_->setEnabled(spectrum_->curve().bandCount() > 0);
         showEqAction_->setChecked(spectrum_->isEqVisible());
+    }
+
+    // The ticks follow the flags rather than the other way round, so that a
+    // batch verb and a menu press leave the menu saying the same thing.
+    if (beatGridAction_ != nullptr) {
+        beatGridAction_->setChecked(showBeatGrid_);
+        pitchContourAction_->setChecked(showPitchContour_);
+        octaveBandsAction_->setChecked(showOctaveBands_);
+        roomAction_->setChecked(measureRoom_);
     }
 }
 
@@ -2777,6 +2890,33 @@ bool MainWindow::applyOperation(const QString& name) {
         return true;
     }
 
+    // The analysis overlays, driven without a menu. Each one sets the flag the
+    // menu sets and then re-runs, so a script and a user reach the same state
+    // by the same path.
+    if (name == "beatgrid" || name == "nobeatgrid" || name == "pitchcontour" ||
+        name == "nopitchcontour" || name == "bands" || name == "nobands" || name == "room" ||
+        name == "noroom") {
+        const bool wanted = !name.startsWith(QLatin1String{"no"});
+        const QString which = wanted ? name : name.mid(2);
+        if (which == QLatin1String{"beatgrid"}) {
+            showBeatGrid_ = wanted;
+        } else if (which == QLatin1String{"pitchcontour"}) {
+            showPitchContour_ = wanted;
+        } else if (which == QLatin1String{"bands"}) {
+            showOctaveBands_ = wanted;
+        } else {
+            measureRoom_ = wanted;
+        }
+        refreshActions();
+        reanalyseNow();
+        // The analysis runs on a worker, so a verb after this one would
+        // otherwise act on the previous answer.
+        return waitForAnalysis();
+    }
+    if (name == "analysisprint") {
+        return waitForAnalysis() && printMusicalAnalysis();
+    }
+
     // The EQ curve, driven without a mouse. eqadd and eqdrag speak in hertz
     // and decibels and are turned into pixels inside the view, so a script
     // stays readable while the gesture still goes through the hit-testing and
@@ -3033,6 +3173,77 @@ bool MainWindow::printAnalysis() const {
     return true;
 }
 
+bool MainWindow::printMusicalAnalysis() const {
+    const MusicalAnalysis* result = analysis_ == nullptr ? nullptr : analysis_->latest();
+    if (result == nullptr) {
+        return false;
+    }
+    const auto line = [](const char* key, double value) { std::printf("%s=%.6f\n", key, value); };
+    const auto text = [](const char* key, const std::string& value) {
+        std::printf("%s=%s\n", key, value.c_str());
+    };
+
+    std::printf("analysed_frames=%lld\nrequested_frames=%lld\n",
+                static_cast<long long>(result->analysedFrames),
+                static_cast<long long>(result->requestedFrames));
+    text("coverage_note", coverageNote(*result));
+
+    // The reading before the raw fields, because the reading is the claim the
+    // window is making and the fields are only what it made it from.
+    const Reading key = keyReading(result->key, result->keyError);
+    text("key_shown", key.value);
+    text("key_caveat", key.caveat);
+    std::printf("key_certainty=%d\n", static_cast<int>(key.certainty));
+    line("key_strength", result->key.strength);
+    line("key_fit", result->key.fit);
+    line("key_contrast", result->key.contrast);
+    line("key_tuning_cents", result->key.tuningOffsetCents);
+    text("key_runner_up", runnerUpReading(result->key));
+
+    const Reading tempo = tempoReading(result->tempo, result->tempoError);
+    text("tempo_shown", tempo.value);
+    text("tempo_caveat", tempo.caveat);
+    std::printf("tempo_certainty=%d\ntempo_valid=%d\n", static_cast<int>(tempo.certainty),
+                result->tempo.valid ? 1 : 0);
+    line("tempo_bpm", result->tempo.bpm);
+    line("tempo_confidence", result->tempo.confidence);
+    line("tempo_first_beat", result->tempo.firstBeatSeconds);
+    std::printf("tempo_beats=%lld\n", static_cast<long long>(result->tempo.beatSeconds.size()));
+
+    const Reading pitch = pitchReading(result->pitch, result->pitchRequested, result->pitchError);
+    text("pitch_shown", pitch.value);
+    text("pitch_caveat", pitch.caveat);
+    std::printf("pitch_certainty=%d\npitch_requested=%d\npitch_frames=%lld\n",
+                static_cast<int>(pitch.certainty), result->pitchRequested ? 1 : 0,
+                static_cast<long long>(result->pitch.size()));
+    std::printf("pitch_hop=%lld\n", static_cast<long long>(result->pitchHop));
+
+    const Reading room = roomReading(result->room, result->roomRequested, result->roomError);
+    text("room_shown", room.value);
+    text("room_caveat", room.caveat);
+    std::printf("room_certainty=%d\nroom_valid=%d\n", static_cast<int>(room.certainty),
+                result->room.valid ? 1 : 0);
+    // Through roomSeconds, so that what a test reads is exactly what the panel
+    // shows -- "--" included.
+    text("room_edt", roomSeconds(result->room.valid && result->room.hasEarlyDecay,
+                                 result->room.earlyDecaySeconds));
+    text("room_t20",
+         roomSeconds(result->room.valid && result->room.hasT20, result->room.t20Seconds));
+    text("room_t30",
+         roomSeconds(result->room.valid && result->room.hasT30, result->room.t30Seconds));
+    line("room_usable_range_db", result->room.usableRangeDb);
+
+    std::printf("bands=%lld\n", static_cast<long long>(result->bands.size()));
+    for (std::size_t i = 0; i < result->bands.size(); ++i) {
+        const analysis::Band& band = result->bands[i];
+        std::printf("band_%zu=%.1f,%.4f\n", i, band.centreHz, band.levelDb);
+    }
+    std::printf("bands_drawn=%d\nbeat_grid_drawn=%d\ncontour_drawn=%d\n", showOctaveBands_ ? 1 : 0,
+                showBeatGrid_ ? 1 : 0, showPitchContour_ ? 1 : 0);
+    std::fflush(stdout);
+    return true;
+}
+
 bool MainWindow::waitForAnalysis(int timeoutMs) {
     // The analysis is deferred behind a timer so that dragging a selection does
     // not restart it on every mouse move. A batch run has no drag: force
@@ -3044,10 +3255,13 @@ bool MainWindow::waitForAnalysis(int timeoutMs) {
 
     QElapsedTimer clock;
     clock.start();
-    while (meters_->busy() || spectrogramBusy_) {
+    while (meters_->busy() || spectrogramBusy_ || (analysis_ != nullptr && analysis_->busy())) {
         if (clock.elapsed() > timeoutMs) {
-            std::fprintf(stderr, "sound-analyser: gave up waiting for %s after %d ms\n",
-                         spectrogramBusy_ ? "the spectrogram" : "the meters", timeoutMs);
+            const char* waitingFor = spectrogramBusy_  ? "the spectrogram"
+                                     : meters_->busy() ? "the meters"
+                                                       : "the musical analysis";
+            std::fprintf(stderr, "sound-analyser: gave up waiting for %s after %d ms\n", waitingFor,
+                         timeoutMs);
             return false;
         }
         // Wait for work rather than spinning: the worker posts its result as a
@@ -3073,6 +3287,14 @@ bool MainWindow::saveSpectrumImage(const std::filesystem::path& path) {
     QApplication::processEvents();
     const QPixmap shot = spectrum_->grab(
         QRect{kGutterWidth, 0, spectrum_->width() - kGutterWidth, spectrum_->height()});
+    QApplication::processEvents();
+    return shot.save(QString::fromStdString(path.string()), "PNG");
+}
+
+bool MainWindow::saveWaveformImage(const std::filesystem::path& path) {
+    QApplication::processEvents();
+    const QPixmap shot = waveform_->grab(
+        QRect{kGutterWidth, 0, waveform_->width() - kGutterWidth, waveform_->height()});
     QApplication::processEvents();
     return shot.save(QString::fromStdString(path.string()), "PNG");
 }

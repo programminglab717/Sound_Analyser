@@ -12,6 +12,7 @@
 #include <sa/spectral/Denoise.h>
 #include <sa/spectral/SpectrogramTiles.h>
 #include <sa/transport/Player.h>
+#include <sa/ui/AnalysisPanel.h>
 #include <sa/ui/Colourmap.h>
 #include <sa/ui/EqCurveView.h>
 #include <sa/ui/LoudnessPanel.h>
@@ -105,6 +106,14 @@ public:
     /// EQ, and only the numbers say which one.
     [[nodiscard]] bool printEqBands() const;
 
+    /// The key, the tempo, the contour and the room figures as key=value
+    /// lines, together with the text the panel decided to show for each.
+    ///
+    /// The text as well as the numbers, because the text is where the
+    /// judgement is: a driver that only saw `key_strength=0.11` could not tell
+    /// a panel that refused to name a key from one that named it anyway.
+    [[nodiscard]] bool printMusicalAnalysis() const;
+
     [[nodiscard]] bool saveScreenshot(const std::filesystem::path& path);
 
     /// Render just the spectrogram's plotting area, with no gutter and no
@@ -117,6 +126,11 @@ public:
     /// the point is that a test can say what the pixels should be rather than
     /// only that the program did not crash.
     [[nodiscard]] bool saveSpectrumImage(const std::filesystem::path& path);
+
+    /// The waveform's plotting area alone, for the same reason: the beat grid
+    /// and the pitch contour are drawn there, and where they fall is the whole
+    /// claim being made about them.
+    [[nodiscard]] bool saveWaveformImage(const std::filesystem::path& path);
 
 private slots:
     void chooseFile();
@@ -136,6 +150,13 @@ private:
     /// Re-measure whatever the panel should be showing: the selection when
     /// there is one, the whole document otherwise.
     void remeasure();
+    /// Re-run the key, the tempo, the bands and whichever of the contour and
+    /// the room figures have been asked for.
+    void remeasureMusical();
+
+    /// Put a finished musical analysis into the views that draw it.
+    void showMusicalAnalysis();
+
     /// Re-measure and redraw the spectrum, after a short pause.
     ///
     /// Deferred rather than immediate because the selection changes on every
@@ -322,6 +343,7 @@ private:
 
     TimeRuler* ruler_ = nullptr;
     LoudnessPanel* meters_ = nullptr;
+    AnalysisPanel* analysis_ = nullptr;
     EqCurveView* spectrum_ = nullptr;
     QTimer* analysisTimer_ = nullptr;
     WaveformView* waveform_ = nullptr;
@@ -361,6 +383,24 @@ private:
     QAction* showEqAction_ = nullptr;
     QAction* applyEqAction_ = nullptr;
     QAction* resetEqAction_ = nullptr;
+
+    /// The four analysis overlays, and whether each is wanted.
+    ///
+    /// The beat grid starts on because it is the evidence for a number the
+    /// panel is already showing, and a tempo without it has to be taken on
+    /// trust. The other three start off: bands are a second reading of the
+    /// spectrum and would crowd it unasked, a contour is expensive and means
+    /// one note at a time, and room acoustics are an answer about an impulse
+    /// response and nonsense about anything else -- so the user says which of
+    /// those three they meant.
+    QAction* beatGridAction_ = nullptr;
+    QAction* pitchContourAction_ = nullptr;
+    QAction* octaveBandsAction_ = nullptr;
+    QAction* roomAction_ = nullptr;
+    bool showBeatGrid_ = true;
+    bool showPitchContour_ = false;
+    bool showOctaveBands_ = false;
+    bool measureRoom_ = false;
 
     QAction* playAction_ = nullptr;
     QTimer* playheadTimer_ = nullptr;

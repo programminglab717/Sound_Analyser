@@ -44,6 +44,13 @@ public:
     void showAll();
     void zoomToSelection();
 
+    /// The plot area and its time mapping, as a value.
+    ///
+    /// Public for the same reason SpectrumView::plot() is: anything drawn over
+    /// this view has to land on the axis the view itself used, and handing out
+    /// the mapping is cheaper than every caller being trusted to rebuild it.
+    [[nodiscard]] TimePlot timePlot() const noexcept;
+
 signals:
     void viewRangeChanged(SampleIndex start, SampleCount length);
     void selectionChanged(SampleIndex start, SampleIndex end);

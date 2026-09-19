@@ -31,23 +31,16 @@ QRect TimeAxisView::plotRect() const noexcept {
     return QRect{kGutterWidth, 0, plotWidth(), height()};
 }
 
+TimePlot TimeAxisView::timePlot() const noexcept {
+    return TimePlot{kGutterWidth, plotWidth(), viewStart_, viewLength_};
+}
+
 SampleIndex TimeAxisView::sampleAtX(int x) const noexcept {
-    const int plot = plotWidth();
-    if (plot <= 0 || viewLength_ <= 0) {
-        return viewStart_;
-    }
-    const double fraction = std::clamp(static_cast<double>(x - kGutterWidth) / plot, 0.0, 1.0);
-    return viewStart_ + static_cast<SampleIndex>(static_cast<double>(viewLength_) * fraction);
+    return timePlot().sampleAtX(x);
 }
 
 int TimeAxisView::xForSample(SampleIndex sample) const noexcept {
-    const int plot = plotWidth();
-    if (plot <= 0 || viewLength_ <= 0) {
-        return kGutterWidth;
-    }
-    const double fraction =
-        static_cast<double>(sample - viewStart_) / static_cast<double>(viewLength_);
-    return kGutterWidth + static_cast<int>(std::lround(fraction * plot));
+    return timePlot().xAtSample(sample);
 }
 
 void TimeAxisView::setTimeline(SampleRate rate, SampleCount totalFrames) {

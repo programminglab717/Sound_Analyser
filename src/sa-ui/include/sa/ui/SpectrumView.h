@@ -1,5 +1,6 @@
 #pragma once
 
+#include <sa/analysis/OctaveBands.h>
 #include <sa/core/Types.h>
 #include <sa/ui/ViewGeometry.h>
 
@@ -69,6 +70,24 @@ public:
 
     [[nodiscard]] bool hasReference() const noexcept { return !reference_.empty(); }
 
+    /// Lay octave or third-octave bands over the curves.
+    ///
+    /// The oldest way of describing a spectrum and the one people talk in: a
+    /// thirty-one band display is the language of room correction and of every
+    /// conversation containing the phrase "too much at 200". It goes on this
+    /// panel rather than on one of its own because it is the same measurement
+    /// of the same passage on the same two axes, and reading a bar chart
+    /// against the curve it came from is the point of having both.
+    ///
+    /// Bars are drawn to the band edges that were actually integrated, so on
+    /// the panel's logarithmic axis they come out evenly wide -- which is what
+    /// makes the chart readable where the FFT curve slopes.
+    ///
+    /// Passing an empty vector takes them away.
+    void setOctaveBands(std::vector<analysis::Band> bands);
+
+    [[nodiscard]] bool hasOctaveBands() const noexcept { return !octaveBands_.empty(); }
+
     /// A line shown instead of the curves: "measuring", "nothing selected", a
     /// failure. Empty means draw the curves.
     void setNote(QString note);
@@ -106,6 +125,7 @@ private:
     std::vector<float> reference_;
     SampleRate referenceRate_{48000.0};
     int referenceFftSize_ = 0;
+    std::vector<analysis::Band> octaveBands_;
     QString note_;
     int cursorX_ = -1;
 };

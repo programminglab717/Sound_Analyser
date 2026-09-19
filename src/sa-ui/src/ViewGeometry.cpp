@@ -47,6 +47,33 @@ double fractionAtFrequency(FrequencyScale scale, double hz, double nyquistHz) no
     return std::log(hz / low) / std::log(nyquistHz / low);
 }
 
+int TimePlot::xAtSample(SampleIndex sample) const noexcept {
+    if (width <= 0 || viewLength <= 0) {
+        return left;
+    }
+    const double fraction =
+        static_cast<double>(sample - viewStart) / static_cast<double>(viewLength);
+    return left + static_cast<int>(std::lround(fraction * width));
+}
+
+SampleIndex TimePlot::sampleAtX(int x) const noexcept {
+    if (width <= 0 || viewLength <= 0) {
+        return viewStart;
+    }
+    const double fraction =
+        std::clamp(static_cast<double>(x - left) / static_cast<double>(width), 0.0, 1.0);
+    return viewStart + static_cast<SampleIndex>(static_cast<double>(viewLength) * fraction);
+}
+
+int TimePlot::xAtSeconds(double seconds, SampleRate rate) const noexcept {
+    if (!rate.isValid()) {
+        return left;
+    }
+    // Through secondsToSamples rather than its own arithmetic, so that there is
+    // one rule in the project for which sample an instant belongs to.
+    return xAtSample(secondsToSamples(seconds, rate));
+}
+
 double SpectrumPlot::frequencyAtX(int x) const noexcept {
     const double fraction =
         width > 1 ? static_cast<double>(x - left) / static_cast<double>(width) : 0.0;

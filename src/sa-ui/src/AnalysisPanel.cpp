@@ -1,0 +1,476 @@
+#include <sa/ui/AnalysisPanel.h>
+
+#include <QGridLayout>
+#include <QLabel>
+#include <algorithm>
+#include <cmath>
+#include <utility>
+
+namespace sa::ui {
+
+namespace {
+
+/// The same three colours the metering panel judges with, so that "this is
+/// doubtful" looks the same wherever the window says it.
+constexpr QColor kFirm{0xc8, 0xcc, 0xd8};
+constexpr QColor kDoubtful{0xff, 0x9f, 0x43};
+constexpr QColor kAbsent{0x8a, 0x8f, 0xa0};
+
+/// Read up to `frames` frames into `into`, stopping early if the request has
+/// been superseded. Returns how many were read.
+///
+/// Block by block rather than in one call so that cancellation has somewhere to
+/// land: the analysis that follows is not cancellable, so the read is the only
+/// part of a long run that can be given up on.
+[[nodiscard]] SampleCount readBlocks(const io::AudioSource& source, SampleIndex start,
+                                     AudioBufferView into, const CancellationToken& cancellation) {
+    constexpr SampleCount kBlockFrames = 65536;
+    SampleCount done = 0;
+    while (done < into.frames()) {
+        if (cancellation.isCancelled()) {
+            return done;
+        }
+        const SampleCount want = std::min<SampleCount>(kBlockFrames, into.frames() - done);
+        const auto read = source.read(start + done, into.subRange(done, want));
+        if (!read || read.value() <= 0) {
+            break;
+        }
+        done += read.value();
+    }
+    return done;
+}
+
+/// A hop that gives a contour a few points per pixel of a wide window without
+/// tracking a two-minute passage at the default 5.3 ms.
+///
+/// The default hop is right for a phrase and wasteful for a passage: at 48 kHz
+/// it is 22,500 frames a minute, every one of them a transform, and a display
+/// two thousand columns wide cannot show more than a fraction of them. So the
+/// hop grows with the length, in powers of two, and stops at eight times the
+/// default -- past which the contour starts to miss notes rather than merely
+/// draw them with fewer points.
+///
+/// The hop is reported alongside the contour, because it is the time resolution
+/// of everything drawn from it.
+[[nodiscard]] SampleCount pitchHopFor(SampleCount frames, SampleCount base) {
+    constexpr SampleCount kComfortableFrames = 1 << 21; // About 44 s at 48 kHz.
+    SampleCount hop = base;
+    while (hop < base * 8 && frames > kComfortableFrames * (hop / base)) {
+        hop *= 2;
+    }
+    return hop;
+}
+
+/// Run every stage the request asks for over `audio`, filling `out`.
+///
+/// Each stage's failure is recorded and the rest still run. A file with no key
+/// in it still has a tempo, and a panel that threw away four answers because
+/// the fifth could not be computed would be worse than the command line it is
+/// replacing.
+void analyseBuffer(const AudioBuffer& audio, SampleRate rate, AnalysisPanel::Request request,
+                   const CancellationToken& cancellation, MusicalAnalysis& out) {
+    const auto keyFrames = std::min<SampleCount>(
+        audio.frames(), static_cast<SampleCount>(AnalysisPanel::kKeySeconds * rate.hz()));
+    out.keyFrames = keyFrames;
+
+    if (auto estimate = analysis::detectKey(audio.constView().subRange(0, keyFrames), rate);
+        estimate) {
+        out.key = std::move(estimate).value();
+    } else {
+        out.keyError = std::string{estimate.error().what()};
+    }
+    if (cancellation.isCancelled()) {
+        return;
+    }
+
+    if (auto grid = analysis::trackTempo(audio.constView(), rate); grid) {
+        out.tempo = std::move(grid).value();
+    } else {
+        out.tempoError = std::string{grid.error().what()};
+    }
+    if (cancellation.isCancelled()) {
+        return;
+    }
+
+    if (auto bands = analysis::measureBands(audio.constView(), rate); bands) {
+        out.bands = std::move(bands).value();
+    } else {
+        out.bandError = std::string{bands.error().what()};
+    }
+    if (cancellation.isCancelled()) {
+        return;
+    }
+
+    if (request.pitch) {
+        out.pitchRequested = true;
+        analysis::PitchSettings settings;
+        settings.hop = pitchHopFor(audio.frames(), settings.hop);
+        out.pitchHop = settings.hop;
+        if (auto contour = analysis::trackPitch(audio.constView(), rate, settings); contour) {
+            out.pitch = std::move(contour).value();
+        } else {
+            out.pitchError = std::string{contour.error().what()};
+        }
+    }
+    if (cancellation.isCancelled()) {
+        return;
+    }
+
+    if (request.room) {
+        out.roomRequested = true;
+        if (auto room = analysis::measureRoomAcoustics(audio.constView(), rate); room) {
+            out.room = std::move(room).value();
+        } else {
+            out.roomError = std::string{room.error().what()};
+        }
+    }
+}
+
+} // namespace
+
+AnalysisPanel::AnalysisPanel(QWidget* parent)
+    : QWidget(parent), session_(std::make_shared<Session>()) {
+    session_->panel = this;
+    buildLayout();
+    clear();
+}
+
+void AnalysisPanel::stopWorker() {
+    cancellation_.cancel();
+    if (worker_.joinable()) {
+        worker_.join();
+    }
+    cancellation_.reset();
+}
+
+AnalysisPanel::~AnalysisPanel() {
+    session_->generation.fetch_add(1);
+    stopWorker();
+    const std::lock_guard<std::mutex> lock{session_->mutex};
+    session_->panel = nullptr;
+}
+
+void AnalysisPanel::buildLayout() {
+    setMinimumWidth(226);
+    setMaximumWidth(300);
+
+    auto* grid = new QGridLayout{this};
+    grid->setContentsMargins(12, 10, 12, 10);
+    grid->setHorizontalSpacing(10);
+    grid->setVerticalSpacing(3);
+
+    int row = 0;
+    heading_ = new QLabel{this};
+    heading_->setStyleSheet("color: #6d7382;");
+    grid->addWidget(heading_, row++, 0, 1, 2);
+
+    coverage_ = new QLabel{this};
+    coverage_->setWordWrap(true);
+    coverage_->setStyleSheet("color: #6d7382;");
+    grid->addWidget(coverage_, row++, 0, 1, 2);
+
+    const auto addRow = [&](const QString& name, QLabel*& value) {
+        auto* label = new QLabel{name, this};
+        label->setStyleSheet("color: #8a8fa0;");
+        value = new QLabel{this};
+        value->setStyleSheet(QStringLiteral("color: %1;").arg(kFirm.name()));
+        value->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        grid->addWidget(label, row, 0);
+        grid->addWidget(value, row, 1);
+        ++row;
+        return label;
+    };
+
+    // A caveat is a sentence, not a figure, so it takes the width of the panel
+    // under the row it belongs to rather than being squeezed into the value
+    // column beside it.
+    const auto addCaveatRow = [&](QLabel*& caveat) {
+        caveat = new QLabel{this};
+        caveat->setWordWrap(true);
+        caveat->setStyleSheet(QStringLiteral("color: %1;").arg(kDoubtful.name()));
+        grid->addWidget(caveat, row++, 0, 1, 2);
+        return caveat;
+    };
+
+    const auto addSeparator = [&](const QString& title) {
+        auto* label = new QLabel{title, this};
+        label->setStyleSheet("color: #5a6070; margin-top: 8px;");
+        grid->addWidget(label, row++, 0, 1, 2);
+        return label;
+    };
+
+    addSeparator(tr("KEY"));
+    addRow(tr("Key"), key_);
+    addCaveatRow(keyCaveat_);
+    addRow(tr("Runner-up"), runnerUp_);
+    addRow(tr("Tuning"), tuning_);
+
+    addSeparator(tr("TEMPO"));
+    addRow(tr("Tempo"), tempo_);
+    addCaveatRow(tempoCaveat_);
+    addRow(tr("Confidence"), tempoConfidence_);
+    addRow(tr("First beat"), firstBeat_);
+    addRow(tr("Beats"), beatCount_);
+
+    pitchWidgets_ = {addSeparator(tr("PITCH")),  addRow(tr("Median"), pitch_),  pitch_,
+                     addCaveatRow(pitchCaveat_), addRow(tr("Voiced"), voiced_), voiced_};
+    // The standing limit rather than a caveat about this result: it is true of
+    // every contour this tracker draws, and PitchTrack.h says it plainly.
+    auto* monophonic = new QLabel{tr("one note at a time; on polyphony this follows one of them "
+                                     "and does not say which"),
+                                  this};
+    monophonic->setWordWrap(true);
+    monophonic->setStyleSheet("color: #6d7382;");
+    grid->addWidget(monophonic, row++, 0, 1, 2);
+    pitchWidgets_.push_back(monophonic);
+
+    roomWidgets_ = {addSeparator(tr("ROOM")),
+                    addRow(tr("EDT"), earlyDecay_),
+                    earlyDecay_,
+                    addRow(tr("T20"), t20_),
+                    t20_,
+                    addRow(tr("T30"), t30_),
+                    t30_,
+                    addRow(tr("C50"), clarity50_),
+                    clarity50_,
+                    addRow(tr("C80"), clarity80_),
+                    clarity80_,
+                    addRow(tr("D50"), definition50_),
+                    definition50_,
+                    addRow(tr("Centre time"), centreTime_),
+                    centreTime_,
+                    addRow(tr("Usable decay"), usableRange_),
+                    usableRange_,
+                    addCaveatRow(roomCaveat_)};
+
+    grid->setRowStretch(row, 1);
+    grid->setColumnStretch(1, 1);
+}
+
+void AnalysisPanel::clear() {
+    hasLatest_ = false;
+    busy_ = false;
+    latest_ = MusicalAnalysis{};
+    heading_->setText(tr("nothing loaded"));
+    coverage_->clear();
+    for (QLabel* label : {key_, runnerUp_, tuning_, tempo_, tempoConfidence_, firstBeat_,
+                          beatCount_, pitch_, voiced_}) {
+        label->setText(QStringLiteral("--"));
+        label->setStyleSheet(QStringLiteral("color: %1;").arg(kAbsent.name()));
+    }
+    for (QLabel* label : {keyCaveat_, tempoCaveat_, pitchCaveat_, roomCaveat_}) {
+        label->clear();
+        label->setVisible(false);
+    }
+    for (QWidget* widget : pitchWidgets_) {
+        widget->setVisible(false);
+    }
+    for (QWidget* widget : roomWidgets_) {
+        widget->setVisible(false);
+    }
+}
+
+void AnalysisPanel::setRow(QLabel* value, QLabel* caveat, const Reading& reading) {
+    const QColor colour = reading.certainty == Certainty::Firm       ? kFirm
+                          : reading.certainty == Certainty::Doubtful ? kDoubtful
+                                                                     : kAbsent;
+    value->setText(QString::fromStdString(reading.value));
+    value->setStyleSheet(QStringLiteral("color: %1;").arg(colour.name()));
+
+    if (caveat == nullptr) {
+        return;
+    }
+    caveat->setText(QString::fromStdString(reading.caveat));
+    // An absent answer's caveat is the only thing there is to read, so it is
+    // shown in the neutral colour -- the amber is for a number that is on
+    // screen and should not be trusted, which is a different warning.
+    caveat->setStyleSheet(
+        QStringLiteral("color: %1;")
+            .arg(reading.certainty == Certainty::Doubtful ? kDoubtful.name() : kAbsent.name()));
+    caveat->setVisible(!reading.caveat.empty());
+}
+
+void AnalysisPanel::deliver(const MusicalAnalysis& result, const QString& what) {
+    busy_ = false;
+    show(result, what);
+    emit analysisFinished();
+}
+
+void AnalysisPanel::analyse(std::shared_ptr<const io::AudioSource> source, SampleIndex start,
+                            SampleCount length, const QString& what, Request request) {
+    const std::uint64_t mine = session_->generation.fetch_add(1) + 1;
+    stopWorker();
+
+    if (!source || length <= 0) {
+        clear();
+        emit analysisFinished();
+        return;
+    }
+
+    busy_ = true;
+    heading_->setText(tr("analysing %1…").arg(what));
+
+    worker_ = std::thread{[source = std::move(source), start, length, what, request, mine,
+                           session = session_, cancellation = &cancellation_] {
+        const io::AudioFileInfo& info = source->info();
+        MusicalAnalysis result;
+        result.rate = info.sampleRate;
+        result.start = start;
+        result.requestedFrames = length;
+
+        const auto wanted = std::min<SampleCount>(
+            length, static_cast<SampleCount>(kMostSeconds * info.sampleRate.hz()));
+        if (wanted > 0) {
+            AudioBuffer audio{info.layout, wanted};
+            const SampleCount read = readBlocks(*source, start, audio.view(), *cancellation);
+            result.analysedFrames = read;
+            if (read > 0 && !cancellation->isCancelled()) {
+                AudioBuffer trimmed{info.layout, read};
+                // A copy rather than a view, because every analysis below takes
+                // the buffer's own frame count and a short read would otherwise
+                // have them analysing the silence after it.
+                for (int channel = 0; channel < info.channelCount(); ++channel) {
+                    std::copy_n(audio.channel(channel), read, trimmed.channel(channel));
+                }
+                analyseBuffer(trimmed, info.sampleRate, request, *cancellation, result);
+            }
+        }
+
+        if (session->generation.load() != mine) {
+            return;
+        }
+        const std::lock_guard<std::mutex> lock{session->mutex};
+        if (session->panel == nullptr || session->generation.load() != mine) {
+            return;
+        }
+        AnalysisPanel* panel = session->panel;
+        QMetaObject::invokeMethod(
+            panel,
+            [panel, result, what, mine, session] {
+                // Back on the main thread, and checked again because a newer
+                // request may have been made while this one was queued.
+                if (session->generation.load() != mine) {
+                    return;
+                }
+                panel->deliver(result, what);
+            },
+            Qt::QueuedConnection);
+    }};
+}
+
+void AnalysisPanel::show(const MusicalAnalysis& result, const QString& what) {
+    latest_ = result;
+    hasLatest_ = true;
+
+    heading_->setText(what);
+    const std::string coverage = coverageNote(result);
+    coverage_->setText(coverage.empty() ? QString{}
+                                        : tr("read the %1").arg(QString::fromStdString(coverage)));
+    coverage_->setVisible(!coverage.empty());
+
+    showKey(result);
+    showTempo(result);
+    showPitch(result);
+    showRoom(result);
+}
+
+void AnalysisPanel::showKey(const MusicalAnalysis& result) {
+    const Reading reading = keyReading(result.key, result.keyError);
+    setRow(key_, keyCaveat_, reading);
+
+    // The runner-up and the tuning are shown only when a key was named. Beside
+    // "no key" they would be two more figures about an answer that does not
+    // exist, which is the opposite of what the refusal is for.
+    const bool named = reading.certainty != Certainty::None;
+    runnerUp_->setText(named ? QString::fromStdString(runnerUpReading(result.key))
+                             : QStringLiteral("--"));
+    tuning_->setText(named ? QString::fromStdString(tuningReading(result.key))
+                           : QStringLiteral("--"));
+    for (QLabel* label : {runnerUp_, tuning_}) {
+        label->setStyleSheet(
+            QStringLiteral("color: %1;").arg(named ? kFirm.name() : kAbsent.name()));
+    }
+}
+
+void AnalysisPanel::showTempo(const MusicalAnalysis& result) {
+    const Reading reading = tempoReading(result.tempo, result.tempoError);
+    setRow(tempo_, tempoCaveat_, reading);
+
+    const bool found = result.tempo.valid;
+    // The confidence is shown either way. Where a tempo was refused it is the
+    // evidence for the refusal, which TempoTrack.h is explicit about -- except
+    // where it is a zero that was never measured, and then there is nothing to
+    // report.
+    tempoConfidence_->setText(found || result.tempo.confidence > 0.0
+                                  ? QStringLiteral("%1").arg(result.tempo.confidence, 0, 'f', 2)
+                                  : QStringLiteral("--"));
+    firstBeat_->setText(found ? QStringLiteral("%1 s").arg(result.tempo.firstBeatSeconds, 0, 'f', 3)
+                              : QStringLiteral("--"));
+    beatCount_->setText(found ? QString::number(result.tempo.beatSeconds.size())
+                              : QStringLiteral("--"));
+    for (QLabel* label : {tempoConfidence_, firstBeat_, beatCount_}) {
+        label->setStyleSheet(
+            QStringLiteral("color: %1;").arg(found ? kFirm.name() : kAbsent.name()));
+    }
+}
+
+void AnalysisPanel::showPitch(const MusicalAnalysis& result) {
+    for (QWidget* widget : pitchWidgets_) {
+        widget->setVisible(result.pitchRequested);
+    }
+    if (!result.pitchRequested) {
+        return;
+    }
+
+    const Reading reading = pitchReading(result.pitch, result.pitchRequested, result.pitchError);
+    setRow(pitch_, pitchCaveat_, reading);
+
+    std::size_t voiced = 0;
+    for (const analysis::PitchPoint& point : result.pitch) {
+        if (point.voiced) {
+            ++voiced;
+        }
+    }
+    voiced_->setText(result.pitch.empty()
+                         ? QStringLiteral("--")
+                         : tr("%1 of %2 frames").arg(voiced).arg(result.pitch.size()));
+    voiced_->setStyleSheet(
+        QStringLiteral("color: %1;").arg(result.pitch.empty() ? kAbsent.name() : kFirm.name()));
+}
+
+void AnalysisPanel::showRoom(const MusicalAnalysis& result) {
+    for (QWidget* widget : roomWidgets_) {
+        widget->setVisible(result.roomRequested);
+    }
+    if (!result.roomRequested) {
+        return;
+    }
+
+    const Reading reading = roomReading(result.room, result.roomRequested, result.roomError);
+    setRow(usableRange_, roomCaveat_, reading);
+
+    const analysis::RoomAcoustics& room = result.room;
+    // Every figure goes through roomSeconds, which prints "--" for one the
+    // decay had no range for. A zero here would read as a very dead room.
+    earlyDecay_->setText(QString::fromStdString(
+        roomSeconds(room.valid && room.hasEarlyDecay, room.earlyDecaySeconds)));
+    t20_->setText(QString::fromStdString(roomSeconds(room.valid && room.hasT20, room.t20Seconds)));
+    t30_->setText(QString::fromStdString(roomSeconds(room.valid && room.hasT30, room.t30Seconds)));
+    clarity50_->setText(room.valid ? QStringLiteral("%1 dB").arg(room.clarity50Db, 0, 'f', 2)
+                                   : QStringLiteral("--"));
+    clarity80_->setText(room.valid ? QStringLiteral("%1 dB").arg(room.clarity80Db, 0, 'f', 2)
+                                   : QStringLiteral("--"));
+    definition50_->setText(room.valid ? QStringLiteral("%1").arg(room.definition50, 0, 'f', 3)
+                                      : QStringLiteral("--"));
+    centreTime_->setText(room.valid ? QStringLiteral("%1 s").arg(room.centreTimeSeconds, 0, 'f', 4)
+                                    : QStringLiteral("--"));
+
+    for (QLabel* label :
+         {earlyDecay_, t20_, t30_, clarity50_, clarity80_, definition50_, centreTime_}) {
+        const bool measured = label->text() != QStringLiteral("--");
+        label->setStyleSheet(
+            QStringLiteral("color: %1;").arg(measured ? kFirm.name() : kAbsent.name()));
+    }
+}
+
+} // namespace sa::ui

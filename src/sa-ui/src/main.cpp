@@ -42,6 +42,8 @@ int main(int argc, char** argv) {
                             "Render the spectrogram plot alone to <png> and exit.", "png"};
     QCommandLineOption curve{"screenshot-spectrum",
                              "Render the spectrum panel alone to <png> and exit.", "png"};
+    QCommandLineOption wave{"screenshot-waveform",
+                            "Render the waveform plot alone to <png> and exit.", "png"};
     QCommandLineOption select{"select",
                               "Select <from>-<to> in seconds before --apply runs. For anything "
                               "with more than one step, put select: inside --apply instead: Qt "
@@ -52,17 +54,21 @@ int main(int argc, char** argv) {
         "apply",
         "Comma-separated operations, applied in order: select:<from>-<to> (seconds), gain:<dB>, "
         "normalise, fadein, fadeout, flatten, cut, copy, paste, delete, silence, trim, undo, "
-        "redo, selectall, deselect.",
+        "redo, selectall, deselect, beatgrid, nobeatgrid, pitchcontour, nopitchcontour, bands, "
+        "nobands, room, noroom, analysisprint.",
         "ops"};
     QCommandLineOption exportTo{"export", "Write the edited document to <wav>.", "wav"};
     QCommandLineOption printAnalysis{"print-analysis",
                                      "Print the measured loudness and peaks on stdout."};
+    QCommandLineOption printMusical{"print-musical",
+                                    "Print the key, tempo, contour and room figures on stdout, "
+                                    "with the text the panel decided to show for each."};
     QCommandLineOption saveSession{"save-session", "Save the arrangement to <file>.", "file"};
     QCommandLineOption play{"play",
                             "Play the selection to its end and report where the transport got "
                             "to. Runs in real time."};
-    for (const QCommandLineOption& option :
-         {screenshot, plot, curve, select, apply, exportTo, printAnalysis, play, saveSession}) {
+    for (const QCommandLineOption& option : {screenshot, plot, curve, wave, select, apply, exportTo,
+                                             printAnalysis, printMusical, play, saveSession}) {
         parser.addOption(option);
     }
     parser.process(app);
@@ -81,9 +87,9 @@ int main(int argc, char** argv) {
     }
 
     const bool batch = parser.isSet(screenshot) || parser.isSet(plot) || parser.isSet(curve) ||
-                       parser.isSet(exportTo) || parser.isSet(apply) ||
-                       parser.isSet(printAnalysis) || parser.isSet(play) ||
-                       parser.isSet(saveSession);
+                       parser.isSet(wave) || parser.isSet(exportTo) || parser.isSet(apply) ||
+                       parser.isSet(printAnalysis) || parser.isSet(printMusical) ||
+                       parser.isSet(play) || parser.isSet(saveSession);
     if (!batch) {
         window.show();
         return QApplication::exec();
@@ -128,6 +134,10 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "no measurement to print\n");
         return 1;
     }
+    if (parser.isSet(printMusical) && !window.printMusicalAnalysis()) {
+        std::fprintf(stderr, "no musical analysis to print\n");
+        return 1;
+    }
     if (parser.isSet(saveSession) && !window.saveSession(parser.value(saveSession).toStdString())) {
         std::fprintf(stderr, "could not save the session\n");
         return 1;
@@ -147,6 +157,10 @@ int main(int argc, char** argv) {
     }
     if (parser.isSet(curve) && !window.saveSpectrumImage(parser.value(curve).toStdString())) {
         std::fprintf(stderr, "spectrum screenshot failed\n");
+        return 1;
+    }
+    if (parser.isSet(wave) && !window.saveWaveformImage(parser.value(wave).toStdString())) {
+        std::fprintf(stderr, "waveform screenshot failed\n");
         return 1;
     }
     return 0;
