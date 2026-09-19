@@ -167,7 +167,8 @@ void applyReferenceAllPasses(AudioBufferView audio, const std::vector<double>& c
 
 } // namespace
 
-TEST_CASE("Bypassed bands sum back to the input through one all-pass per crossover") {
+TEST_CASE("Bypassed bands sum back to the input through one all-pass per crossover",
+          "[dsp][multiband]") {
     // The property the whole design rests on, stated as what it really is. The
     // output is not the input: it is the input through the all-pass each
     // crossover sums to, one per crossover, and that chain is built here from a
@@ -217,7 +218,7 @@ TEST_CASE("Bypassed bands sum back to the input through one all-pass per crossov
     }
 }
 
-TEST_CASE("The bands recombine at every sample rate, not just at 48 kHz") {
+TEST_CASE("The bands recombine at every sample rate, not just at 48 kHz", "[dsp][multiband]") {
     // The one thing in the design that a rate could break. Every cutoff is
     // pre-warped before the bilinear transform, and the warping depends on the
     // rate, so a crossover at 200 Hz is a different set of coefficients at
@@ -245,7 +246,7 @@ TEST_CASE("The bands recombine at every sample rate, not just at 48 kHz") {
     }
 }
 
-TEST_CASE("Bypassed bands recombine flat in magnitude") {
+TEST_CASE("Bypassed bands recombine flat in magnitude", "[dsp][multiband]") {
     // The same property measured the other way, as a response rather than as a
     // residual: an impulse in, the summed bands out, and the magnitude of the
     // transform of that is what a signal passing through unprocessed is
@@ -291,7 +292,8 @@ TEST_CASE("Bypassed bands recombine flat in magnitude") {
     REQUIRE(worstDb < 1e-5);
 }
 
-TEST_CASE("A tone inside one band is compressed by that band's settings and no other's") {
+TEST_CASE("A tone inside one band is compressed by that band's settings and no other's",
+          "[dsp][multiband]") {
     // Crossovers at 50 Hz and 10 kHz, and a tone at their geometric centre. An
     // LR4 half's magnitude is 1/(1+(f/fc)^4) below the crossover and
     // (f/fc)^4/(1+(f/fc)^4) above it, so at 707.107 Hz -- 14.142 times 50 and
@@ -353,7 +355,8 @@ TEST_CASE("A tone inside one band is compressed by that band's settings and no o
     REQUIRE(before - after == Approx(result.value().gainReductionDb[1]).margin(0.02));
 }
 
-TEST_CASE("Raising one band's threshold moves that band and leaves the others where they were") {
+TEST_CASE("Raising one band's threshold moves that band and leaves the others where they were",
+          "[dsp][multiband]") {
     // Two tones, one in the bottom band and one in the top, each sitting
     // exactly on an FFT bin so that a rectangular window reads its amplitude
     // with nothing to leak. Crossovers at 300 and 2000 Hz put the 29.3 Hz tone
@@ -414,7 +417,7 @@ TEST_CASE("Raising one band's threshold moves that band and leaves the others wh
     REQUIRE(compressedReport.gainReductionDb[2] > 1.0);
 }
 
-TEST_CASE("Solo takes the bands it names and drops the rest") {
+TEST_CASE("Solo takes the bands it names and drops the rest", "[dsp][multiband]") {
     // Soloing decides what is heard, not what each band does, so the three
     // solo-one-band runs must add up to the run with nothing soloed --
     // exactly, because the bands are summed in the same order in both and
@@ -468,7 +471,8 @@ TEST_CASE("Solo takes the bands it names and drops the rest") {
     REQUIRE(identical(rebuilt, whole));
 }
 
-TEST_CASE("Bypass takes a band's compressor out and leaves the band itself in") {
+TEST_CASE("Bypass takes a band's compressor out and leaves the band itself in",
+          "[dsp][multiband]") {
     const AudioBuffer source = noise(48000, 1, 0.5, 4242u);
 
     CompressorSettings crushing;
@@ -509,7 +513,8 @@ TEST_CASE("Bypass takes a band's compressor out and leaves the band itself in") 
     REQUIRE_FALSE(identical(active, bypassed));
 }
 
-TEST_CASE("A signal that never crosses a threshold comes out as though bypassed") {
+TEST_CASE("A signal that never crosses a threshold comes out as though bypassed",
+          "[dsp][multiband]") {
     // -40 dBFS against a -10 dB threshold with a 6 dB knee, whose lower edge is
     // at -13: nothing reaches the bend. The gain computer then returns 0 dB,
     // decibelsToGain(0) is exactly 1, and multiplying a float by exactly 1
@@ -545,7 +550,7 @@ TEST_CASE("A signal that never crosses a threshold comes out as though bypassed"
     REQUIRE(identical(quiet, untouched));
 }
 
-TEST_CASE("Makeup gain lifts its own band and nothing else") {
+TEST_CASE("Makeup gain lifts its own band and nothing else", "[dsp][multiband]") {
     // The band's gain, not the mix's: two bands, makeup on one of them, and the
     // other band's tone must sit where it was.
     constexpr int kSize = 16384;
@@ -577,7 +582,7 @@ TEST_CASE("Makeup gain lifts its own band and nothing else") {
             Approx(0.0).margin(0.01));
 }
 
-TEST_CASE("A stereo pair is split and compressed without the image moving") {
+TEST_CASE("A stereo pair is split and compressed without the image moving", "[dsp][multiband]") {
     // The linked compressor already has its own tests; what is checked here is
     // that a band of a linked pair is still one band -- that both channels come
     // out with the same gain applied, so nothing has been split per channel
@@ -617,7 +622,8 @@ TEST_CASE("A stereo pair is split and compressed without the image moving") {
     REQUIRE(left - right == Approx(decibels(2.0)).margin(0.01));
 }
 
-TEST_CASE("A crossover list that is not strictly increasing is refused, not repaired") {
+TEST_CASE("A crossover list that is not strictly increasing is refused, not repaired",
+          "[dsp][multiband]") {
     AudioBuffer audio = noise(4800, 1, 0.5, 1u);
 
     const auto refuse = [&](const std::vector<double>& crossovers) {
@@ -642,7 +648,7 @@ TEST_CASE("A crossover list that is not strictly increasing is refused, not repa
     refuse({}); // No split at all.
 }
 
-TEST_CASE("A band count that does not match the crossover count is refused") {
+TEST_CASE("A band count that does not match the crossover count is refused", "[dsp][multiband]") {
     AudioBuffer audio = noise(4800, 1, 0.5, 1u);
 
     MultibandSettings settings;
@@ -661,7 +667,8 @@ TEST_CASE("A band count that does not match the crossover count is refused") {
     REQUIRE(compressMultiband(audio.view(), kRate, settings));
 }
 
-TEST_CASE("An order that is not a multiple of four is refused rather than rounded") {
+TEST_CASE("An order that is not a multiple of four is refused rather than rounded",
+          "[dsp][multiband]") {
     AudioBuffer audio = noise(4800, 1, 0.5, 1u);
 
     const auto attempt = [&](int order) {
@@ -687,7 +694,8 @@ TEST_CASE("An order that is not a multiple of four is refused rather than rounde
     REQUIRE(attempt(kMaxCrossoverOrder));
 }
 
-TEST_CASE("Bad compressor settings are refused even on a band that is bypassed") {
+TEST_CASE("Bad compressor settings are refused even on a band that is bypassed",
+          "[dsp][multiband]") {
     AudioBuffer audio = noise(4800, 1, 0.5, 1u);
 
     MultibandSettings settings;
@@ -702,7 +710,8 @@ TEST_CASE("Bad compressor settings are refused even on a band that is bypassed")
     REQUIRE_FALSE(compressMultiband(audio.view(), kRate, settings));
 }
 
-TEST_CASE("A run-up past the end is refused, and an over-long blend is clamped") {
+TEST_CASE("A run-up past the end is refused, and an over-long blend is clamped",
+          "[dsp][multiband]") {
     AudioBuffer audio = noise(4800, 1, 0.5, 1u);
 
     MultibandSettings settings;
@@ -730,7 +739,7 @@ TEST_CASE("A run-up past the end is refused, and an over-long blend is clamped")
     }
 }
 
-TEST_CASE("An unusable sample rate is refused") {
+TEST_CASE("An unusable sample rate is refused", "[dsp][multiband]") {
     AudioBuffer audio = noise(4800, 1, 0.5, 1u);
     MultibandSettings settings;
     settings.crossoverHz = {1000.0};
@@ -740,7 +749,7 @@ TEST_CASE("An unusable sample rate is refused") {
     REQUIRE_FALSE(compressMultiband(audio.view(), SampleRate{-48000.0}, settings));
 }
 
-TEST_CASE("An empty buffer reports a figure per band and does nothing") {
+TEST_CASE("An empty buffer reports a figure per band and does nothing", "[dsp][multiband]") {
     AudioBuffer audio{ChannelLayout::stereo(), 0};
     MultibandSettings settings;
     const Result<MultibandResult> result = compressMultiband(audio.view(), kRate, settings);
@@ -751,7 +760,8 @@ TEST_CASE("An empty buffer reports a figure per band and does nothing") {
     }
 }
 
-TEST_CASE("A run-up leaves the compressor already working at the first sample kept") {
+TEST_CASE("A run-up leaves the compressor already working at the first sample kept",
+          "[dsp][multiband]") {
     // The reason OfflineDynamics has a run-up, checked through the band split:
     // without one the passage opens with whatever the uncompressed band was
     // doing, for the length of the attack.
@@ -797,7 +807,8 @@ TEST_CASE("A run-up leaves the compressor already working at the first sample ke
     REQUIRE(coldDb > warmedDb + 6.0);
 }
 
-TEST_CASE("The edges of a multiband selection are blended, so the sum does not step") {
+TEST_CASE("The edges of a multiband selection are blended, so the sum does not step",
+          "[dsp][multiband]") {
     // Applied per band with one curve, which by linearity is the same signal as
     // blending the sum, so the seam is measured on the sum.
     //
@@ -862,7 +873,7 @@ TEST_CASE("The edges of a multiband selection are blended, so the sum does not s
     REQUIRE(seamStep(kBlend) < 1.2 * natural);
 }
 
-TEST_CASE("The reported reduction is what the band's level actually did") {
+TEST_CASE("The reported reduction is what the band's level actually did", "[dsp][multiband]") {
     // Measured against the band, not against the mix: a tone alone in the
     // middle band, its RMS before and after, and the figure the processor
     // reported for that band.
