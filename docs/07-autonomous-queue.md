@@ -75,12 +75,32 @@ branch unnoticed.
     than the standard's. Meeting the tolerance masks needs a real filter bank
     and the published masks to check it against, and neither exists here.
 
-    Not started: **impulse response capture**. Deconvolving a swept sine is
-    pure computation and testable without hardware -- generate a sweep,
-    convolve with a known response, deconvolve, compare -- so it belongs in
-    this queue rather than in Blocked. Playing the sweep and recording the
-    room does not.
+    Done since: **impulse response capture**. `sa-cli sweep` writes an
+    exponential sine sweep and `sa-cli deconvolve` turns a recording of it
+    back into an impulse response, which `sa-cli room` then measures. Proved
+    against synthetic material only: a sweep convolved with its own inverse is
+    an impulse 53 dB above its own skirt; a three-tap room comes back with the
+    taps on the right samples at the right levels and polarities; a 0.900 s
+    decay reads 0.894 s through real files end to end; and third-harmonic
+    distortion lands at T*ln(3)/ln(f2/f1) before the linear response, to the
+    sample, at the level a cubic predicts.
+
+    Not proved: any of it against a loudspeaker, a microphone or a room. That
+    needs the owner, and §08 tells them what to watch.
 11. **Content analysis.** Pitch and F0 contour, tempo and beat grid, key.
+
+    Key: done, as `sa-cli key`. A chromagram folded onto twelve pitch classes,
+    correlated against twenty-four profiles, with the correlation scaled by how
+    shaped the chroma is -- a bare correlation reads 0.65 on material that uses
+    all twelve notes evenly, which is why `strength` is not one. Right on all
+    twenty-four keys of a synthetic four-chord progression, and not fooled by
+    the relative minor. Not checked against real music; §08 asks the owner for
+    a hit rate.
+
+    The profiles are derived from theory and stated in the source, not the
+    published probe-tone tables. Those would probably do better and are a
+    small change once someone has the actual numbers to hand, which is not the
+    same as recalling them.
 12. **Forensics.** Half done. Lossy-codec cutoff detection and true bit-depth
     detection are in `sa-cli provenance`; the **A/B null test** is not started.
 

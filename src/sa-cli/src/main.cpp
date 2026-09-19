@@ -10,12 +10,14 @@
 /// and this project's rule is that a dependency has to earn its place.
 
 #include <sa/analysis/ComplianceTarget.h>
+#include <sa/analysis/KeyDetect.h>
 #include <sa/analysis/LoudnessMeter.h>
 #include <sa/analysis/OctaveBands.h>
 #include <sa/analysis/Provenance.h>
 #include <sa/analysis/RoomAcoustics.h>
 #include <sa/analysis/SignalStatistics.h>
 #include <sa/analysis/StereoField.h>
+#include <sa/analysis/SweepMeasurement.h>
 #include <sa/analysis/TruePeakMeter.h>
 #include <sa/dsp/ChannelOps.h>
 #include <sa/dsp/Declick.h>
@@ -452,6 +454,35 @@ void usage() {
       specifies -- nothing here claims to meet its tolerance masks, and a
       certified measurement needs a bank this does not have.
 
+  key <file> [--channel <n>] [--json]
+      Work out what key the music is in. Folds the spectrum onto the twelve
+      pitch classes and compares the result against each of the twenty-four
+      keys. Reads the first minute.
+
+      Reports a strength, which is low both when the music does not fit a key
+      and when it uses all twelve notes evenly -- a correlation alone cannot
+      tell those apart from a confident answer, so it is not what is printed.
+      Also reports the tuning offset from A = 440: far from zero and the
+      answer is worth less, because the fold assumes equal temperament.
+
+  sweep <out> [--rate <hz>] [--start <hz>] [--end <hz>] [--seconds <s>]
+        [--level <dBFS>] [--fade <s>] [--format 16|24|float]
+      Write an exponential sine sweep to play into a room or through a
+      loudspeaker. Defaults are 20 Hz to 20 kHz over five seconds at -6 dBFS,
+      written as float so the excitation carries no quantisation noise of its
+      own. Exponential rather than linear so that a loudspeaker's harmonic
+      distortion separates out later rather than smearing through the answer.
+
+  deconvolve <recording> <out> [--start <hz>] [--end <hz>] [--seconds <s>]
+        [--level <dBFS>] [--fade <s>] [--keep <s>] [--channel <n>]
+        [--format 16|24|float]
+      Turn a recording of that sweep back into an impulse response. The sweep
+      flags must match what `sweep` was given: the deconvolution is only valid
+      against the sweep that was actually played. --keep bounds the length
+      kept, which is worth setting a little above the reverberation. Prints
+      how far the peak stands above the end of the window, which is the number
+      that says whether the measurement was loud enough to trust.
+
   room <impulse.wav> [--bands | --thirds] [--json]
       Reverberation and clarity from an impulse response: EDT, T20, T30, C50,
       C80, D50 and centre time, per the definitions in ISO 3382.
@@ -832,6 +863,187 @@ int room(const Options& options) {
     if (asJson) {
         std::printf("  ]\n}\n");
     }
+    return 0;
+}
+
+int key(const Options& options) {
+    if (options.positional.size() != 2) {
+        return fail("key needs one file");
+    }
+    std::string error;
+    const auto source = open(options.positional[1], error);
+    if (!source) {
+        return fail(error);
+    }
+    const sa::io::AudioFileInfo& info = source->info();
+
+    // A minute is plenty to decide a key and bounds what a long file costs.
+    // Taken from the start rather than the middle: an intro is part of the
+    // piece, and picking a window by some rule about where the "real" music is
+    // would be a guess dressed as an analysis.
+    const auto wanted = static_cast<sa::SampleCount>(
+        std::min<double>(static_cast<double>(info.frameCount), info.sampleRate.hz() * 60.0));
+    sa::AudioBuffer audio{info.layout, wanted};
+    if (const auto read = source->read(0, audio.view()); !read) {
+        return fail(std::string{read.error().what()});
+    }
+
+    const auto channel = static_cast<int>(options.number("channel", 0.0));
+    const auto estimate = sa::analysis::detectKey(audio.view(), info.sampleRate, {}, channel);
+    if (!estimate) {
+        return fail(std::string{estimate.error().what()});
+    }
+    const auto& found = estimate.value();
+    const auto name = std::filesystem::path{options.positional[1]}.filename().string();
+
+    if (options.has("json")) {
+        std::printf("{\n  \"file\": \"%s\",\n", name.c_str());
+        std::printf("  \"key\": \"%s\",\n", sa::analysis::keyName(found).c_str());
+        std::printf("  \"tonic\": \"%.*s\",\n",
+                    static_cast<int>(sa::analysis::pitchClassName(found.tonic).size()),
+                    sa::analysis::pitchClassName(found.tonic).data());
+        std::printf("  \"mode\": \"%s\",\n",
+                    found.mode == sa::analysis::Mode::Major ? "major" : "minor");
+        std::printf("  \"strength\": %.3f,\n  \"fit\": %.3f,\n  \"contrast\": %.3f,\n",
+                    found.strength, found.fit, found.contrast);
+        std::printf("  \"margin\": %.3f,\n  \"tuningOffsetCents\": %.1f,\n", found.margin,
+                    found.tuningOffsetCents);
+        std::printf("  \"runnerUp\": \"%.*s %s\",\n",
+                    static_cast<int>(sa::analysis::pitchClassName(found.runnerUpTonic).size()),
+                    sa::analysis::pitchClassName(found.runnerUpTonic).data(),
+                    found.runnerUpMode == sa::analysis::Mode::Major ? "major" : "minor");
+        std::printf("  \"chroma\": [");
+        for (std::size_t i = 0; i < found.chroma.size(); ++i) {
+            std::printf("%s%.4f", i == 0 ? "" : ", ", found.chroma[i]);
+        }
+        std::printf("]\n}\n");
+        return 0;
+    }
+
+    std::printf("%s\n", name.c_str());
+    std::printf("    key        %s\n", sa::analysis::keyName(found).c_str());
+    std::printf("    strength   %.2f\n", found.strength);
+    std::printf("    runner-up  %.*s %s, %.2f behind on fit\n",
+                static_cast<int>(sa::analysis::pitchClassName(found.runnerUpTonic).size()),
+                sa::analysis::pitchClassName(found.runnerUpTonic).data(),
+                found.runnerUpMode == sa::analysis::Mode::Major ? "major" : "minor", found.margin);
+    std::printf("    tuning     %+.0f cents from A = 440\n", found.tuningOffsetCents);
+    if (found.contrast < 0.15) {
+        std::printf("    note       the twelve notes are used near-evenly; there may be no key "
+                    "here to find\n");
+    }
+    if (std::abs(found.tuningOffsetCents) > 25.0) {
+        std::printf("    note       far from concert pitch; the answer above is worth less\n");
+    }
+    return 0;
+}
+
+/// The sweep settings that both halves of a measurement have to agree on.
+///
+/// The deconvolution is only valid against the exact sweep that was played, so
+/// the two commands read the same flags into the same struct rather than each
+/// having its own defaults to drift apart.
+[[nodiscard]] sa::analysis::SweepSettings sweepSettingsFrom(const Options& options) {
+    sa::analysis::SweepSettings settings;
+    settings.startHz = options.number("start", settings.startHz);
+    settings.endHz = options.number("end", settings.endHz);
+    settings.seconds = options.number("seconds", settings.seconds);
+    settings.fadeSeconds = options.number("fade", settings.fadeSeconds);
+    const double level = options.number("level", -6.0);
+    settings.amplitude = std::pow(10.0, level / 20.0);
+    return settings;
+}
+
+int sweep(const Options& options) {
+    if (options.positional.size() != 2) {
+        return fail("sweep needs an output file");
+    }
+    const sa::SampleRate rate{options.number("rate", 48000.0)};
+    const auto settings = sweepSettingsFrom(options);
+
+    auto generated = sa::analysis::generateSweep(rate, settings);
+    if (!generated) {
+        return fail(std::string{generated.error().what()});
+    }
+    const sa::SampleCount frames = generated.value().frames();
+
+    std::string error;
+    // Float by default. The sweep is going to be played and recorded, and
+    // quantising it on the way out puts a noise floor into the excitation for
+    // no reason.
+    const sa::engine::BufferSource source{std::move(generated.value()), rate};
+    if (!write(source, options.positional[1], formatFrom(options, sa::io::SampleFormat::Float32),
+               error)) {
+        return fail(error);
+    }
+
+    std::printf("%.1f Hz to %.1f Hz over %.2f s at %.1f dBFS, %lld frames at %.0f Hz\n",
+                settings.startHz, settings.endHz, static_cast<double>(frames) / rate.hz(),
+                20.0 * std::log10(settings.amplitude), static_cast<long long>(frames), rate.hz());
+    std::printf("Play this, record it, and pass the recording to `sa-cli deconvolve` with the "
+                "same --start, --end and --seconds.\n");
+    return 0;
+}
+
+int deconvolve(const Options& options) {
+    if (options.positional.size() != 3) {
+        return fail("deconvolve needs a recording and an output file");
+    }
+    std::string error;
+    const auto source = open(options.positional[1], error);
+    if (!source) {
+        return fail(error);
+    }
+    const sa::io::AudioFileInfo& info = source->info();
+
+    sa::AudioBuffer recorded{info.layout, info.frameCount};
+    if (const auto read = source->read(0, recorded.view()); !read) {
+        return fail(std::string{read.error().what()});
+    }
+
+    const auto settings = sweepSettingsFrom(options);
+    const auto channel = static_cast<int>(options.number("channel", 0.0));
+    const double keep = options.number("keep", 0.0);
+
+    auto impulse =
+        sa::analysis::deconvolveSweep(recorded.view(), info.sampleRate, settings, keep, channel);
+    if (!impulse) {
+        return fail(std::string{impulse.error().what()});
+    }
+    const sa::SampleCount frames = impulse.value().frames();
+
+    // Report the impulse before writing it, because the useful number is the
+    // one that says whether the measurement is worth keeping: how far the peak
+    // stands above what is left at the end of the window.
+    double peak = 0.0;
+    for (sa::SampleCount i = 0; i < frames; ++i) {
+        peak = std::max(peak, std::abs(static_cast<double>(impulse.value().channel(0)[i])));
+    }
+    double floorEnergy = 0.0;
+    sa::SampleCount counted = 0;
+    for (sa::SampleCount i = frames - std::min<sa::SampleCount>(frames, frames / 10); i < frames;
+         ++i) {
+        floorEnergy +=
+            static_cast<double>(impulse.value().channel(0)[i]) * impulse.value().channel(0)[i];
+        ++counted;
+    }
+    const double noiseFloor =
+        counted > 0 ? std::sqrt(floorEnergy / static_cast<double>(counted)) : 0.0;
+
+    const sa::engine::BufferSource result{std::move(impulse.value()), info.sampleRate};
+    if (!write(result, options.positional[2], formatFrom(options, sa::io::SampleFormat::Float32),
+               error)) {
+        return fail(error);
+    }
+
+    std::printf("%lld frames (%.3f s) at %.0f Hz\n", static_cast<long long>(frames),
+                static_cast<double>(frames) / info.sampleRate.hz(), info.sampleRate.hz());
+    if (peak > 0.0 && noiseFloor > 0.0) {
+        std::printf("peak %.1f dB above the last tenth of the window\n",
+                    20.0 * std::log10(peak / noiseFloor));
+    }
+    std::printf("Harmonic distortion deconvolved to negative time and has been cut off.\n");
+    std::printf("Measure it with `sa-cli room %s`.\n", options.positional[2].c_str());
     return 0;
 }
 
@@ -1580,6 +1792,15 @@ int main(int argc, char** argv) {
     }
     if (command == "bands") {
         return bands(options);
+    }
+    if (command == "key") {
+        return key(options);
+    }
+    if (command == "sweep") {
+        return sweep(options);
+    }
+    if (command == "deconvolve") {
+        return deconvolve(options);
     }
     if (command == "room") {
         return room(options);

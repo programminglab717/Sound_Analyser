@@ -17,9 +17,10 @@ run `sound-analyser.exe`. Qt ships beside it, so there is nothing to install.
 It is about 13.3 MB and it is built and tested by the same run that produces it:
 every CI job green -- both MSVC configurations, AddressSanitizer and
 ThreadSanitizer among them -- before the package is uploaded. `sa-cli.exe` is
-in the folder beside it: the headless driver, with seventeen commands: analyse,
-bands, room, provenance, convert, normalise, denoise, declick, declip, dehum,
-deess, compress, gate, channels, render, stretch and pitch. `analyse --csv` gives one
+in the folder beside it: the headless driver, with twenty commands: analyse,
+bands, room, sweep, deconvolve, key, provenance, convert, normalise, denoise,
+declick, declip, dehum, deess, compress, gate, channels, render, stretch and
+pitch. `analyse --csv` gives one
 row per file, which is what to point at a folder of deliverables.
 
 Then open something real — a recording of your own, not a test tone — and try:
@@ -159,6 +160,45 @@ Not blocked, but a person's judgement would be better than mine.
   decay has no range for a figure, which is most impulse responses for T30.
   A tool that always prints a number for T30 is not measuring more than this
   one, it is extrapolating through its own noise floor.
+
+- **Measuring a real room, which is the part I cannot do.** `sa-cli sweep`
+  writes an exponential sine sweep; play it through a speaker, record it, and
+  `sa-cli deconvolve` turns the recording back into an impulse response that
+  `sa-cli room` will then measure. Everything here has been checked against
+  synthetic rooms: a three-tap response comes back with its taps on the right
+  samples at the right levels with the right polarity, and a synthetic decay
+  of 0.900 s reads 0.894 s through real files end to end.
+
+  What none of that touches is a loudspeaker, a microphone, a preamp or a
+  room. The number to watch is the one `deconvolve` prints -- how far the peak
+  stands above the end of the window. Below about 40 dB the measurement is
+  mostly noise and the reverberation figures will read short. If it is low,
+  the fixes in order are: a longer `--seconds`, a louder playback, and a
+  quieter room.
+
+  Use the same `--start`, `--end` and `--seconds` on both commands. They are
+  not defaults that happen to match; the deconvolution is only valid against
+  the exact sweep that was played, and passing different ones gives a
+  confident, wrong answer rather than an error.
+
+- **Whether `sa-cli key` is right about music you know the key of.** This is
+  the one on the list I am least able to check myself. It is right on every
+  synthetic progression I can build -- all twenty-four keys, and it is not
+  fooled by the relative minor, which is the classic confusion -- but
+  synthetic progressions are four chords of sawtooths and real music is not.
+
+  Point it at a folder of things whose key you know and tell me the hit rate.
+  What I expect to go wrong, in order: pieces that modulate (it reports one
+  key for the whole thing and will name whichever dominates); anything not at
+  A = 440, which it will tell you about in the tuning line; and major/minor
+  confusion on music that stays off its leading note.
+
+  The key profiles are written from music theory and are in the source in
+  full, with the reasoning for each weight. They are deliberately *not* the
+  probe-tone profiles from the psychology literature: those are very likely
+  better and I am not willing to transcribe a table of constants from memory.
+  If the hit rate disappoints you, obtaining those tables is the first thing
+  to try and it is a small change.
 
 - **Where the band display should live.** `sa-cli bands` prints thirty-one
   third-octaves, or ten octaves with --octave, and nothing in the window

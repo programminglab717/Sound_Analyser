@@ -528,6 +528,190 @@ def main() -> int:
         check("room on a missing file fails",
               run("room", str(workspace / "nope.wav")).returncode != 0)
 
+        # Measuring an impulse response with a sweep, end to end through files.
+        # The room here is three discrete arrivals rather than a decay: a
+        # sparse response can be convolved in pure Python in a moment, and it
+        # says more about whether the deconvolution is placing things
+        # correctly than a wash of noise would. The decay case is covered by
+        # the C++ tests, which can afford a dense one.
+        print("sweep and deconvolve:")
+        sweep_file = workspace / "sweep.wav"
+        sweep_args = ("--seconds", "0.5", "--start", "100", "--end", "12000")
+        result = run("sweep", str(sweep_file), *sweep_args, "--format", "24")
+        check("sweep exits cleanly", result.returncode == 0, result.stderr)
+        check("sweep says what it wrote", "0.50 s" in result.stdout, result.stdout)
+
+        if result.returncode == 0:
+            played, sweep_rate = read_wav(sweep_file)
+            check("the sweep is as long as it was asked for",
+                  abs(len(played) - 24000) <= 1, f"{len(played)} frames")
+            check("the sweep stays inside the file",
+                  max(abs(v) for v in played) <= 1.0)
+
+            # A room: direct sound, an early reflection with its polarity
+            # flipped, and a later one. Positions in samples so there is
+            # nothing to round.
+            taps = [(0, 1.0), (511, -0.5), (1303, 0.3)]
+            recorded = [0.0] * (len(played) + 1400)
+            for offset, gain in taps:
+                for i, value in enumerate(played):
+                    recorded[i + offset] += value * gain
+            loudest = max(abs(v) for v in recorded)
+            recorded = [v * (0.5 / loudest) for v in recorded]
+            recording = workspace / "recording.wav"
+            write_wav32(recording, recorded)
+
+            impulse = workspace / "impulse.wav"
+            result = run("deconvolve", str(recording), str(impulse), *sweep_args,
+                         "--keep", "0.05", "--format", "24")
+            check("deconvolve exits cleanly", result.returncode == 0, result.stderr)
+            check("deconvolve reports the headroom it found",
+                  "above the last tenth" in result.stdout, result.stdout)
+
+            if result.returncode == 0:
+                answer, _ = read_wav(impulse)
+                # A recording of length R is a sweep of length N through a
+                # response of length L, so R = N + L - 1 and there are only
+                # R - N + 1 samples of measurement to be had. --keep asked for
+                # 0.05 s, which is 2400 samples and more than exists; the
+                # shorter of the two has to win, because the rest would be the
+                # deconvolution's own residual dressed up as a room.
+                informative = len(recorded) - len(played) + 1
+                check("the impulse response stops where the measurement does",
+                      len(answer) == informative,
+                      f"{len(answer)} frames, {informative} available")
+                direct = answer[0]
+                check("the direct sound is at sample zero",
+                      max(range(len(answer)), key=lambda i: abs(answer[i])) == 0,
+                      f"peak at {max(range(len(answer)), key=lambda i: abs(answer[i]))}")
+                # Each reflection at the sample it was put at, and at the level
+                # it was given relative to the direct sound. The polarity of
+                # the first one is the point: a measurement that loses the sign
+                # of a reflection is not measuring a room.
+                for offset, gain in taps[1:]:
+                    got = answer[offset] / direct
+                    check(f"the arrival at {offset} comes back at {gain}",
+                          abs(got - gain) < 0.06, f"{got:+.4f}")
+                between = max(abs(answer[i]) for i in range(60, 451)) / abs(direct)
+                check("and nothing is smeared between them",
+                      between < 0.05, f"{between:.4f}")
+
+            # And where --keep is the shorter of the two, it is the one that
+            # binds: 0.01 s is 480 samples, well inside what is available.
+            short = workspace / "impulse-short.wav"
+            result = run("deconvolve", str(recording), str(short), *sweep_args,
+                         "--keep", "0.01", "--format", "24")
+            check("deconvolve honours a --keep shorter than the measurement",
+                  result.returncode == 0 and len(read_wav(short)[0]) == 480,
+                  result.stderr or f"{len(read_wav(short)[0])} frames")
+
+        # The flags have to match what was played. Deconvolving against a sweep
+        # that was not the one used is not a smaller error, it is a different
+        # measurement, and it should not quietly return something.
+        if sweep_file.exists():
+            mismatched = run("deconvolve", str(workspace / "recording.wav"),
+                             str(workspace / "wrong.wav"), "--seconds", "2.0",
+                             "--format", "24")
+            check("deconvolving a recording shorter than the sweep fails",
+                  mismatched.returncode != 0, mismatched.stdout)
+
+        check("sweep with no output file fails", run("sweep").returncode != 0)
+        check("deconvolve with no output file fails",
+              run("deconvolve", str(workspace / "recording.wav")).returncode != 0)
+        check("deconvolve on a missing file fails",
+              run("deconvolve", str(workspace / "nope.wav"),
+                  str(workspace / "out.wav")).returncode != 0)
+
+        print("key:")
+
+        def render_progression(path: Path, chords: list[tuple[list[int], int]],
+                               transpose: int) -> None:
+            """Chord progressions built from sawtooth-ish notes.
+
+            Six harmonics at 1/h, because a fold onto pitch classes has to cope
+            with harmonics -- a pure sine would make the test easier than the
+            job is.
+            """
+            beat = SAMPLE_RATE // 2
+            total = sum(beat * count for _, count in chords) * 2
+            samples = [0.0] * total
+            cursor = 0
+            for _ in range(2):
+                for intervals, count in chords:
+                    length = beat * count
+                    fade = min(length // 8, SAMPLE_RATE // 100)
+                    for interval in intervals:
+                        hz = 440.0 * 2.0 ** ((60 + transpose + interval - 69) / 12.0)
+                        partials = [hz * h for h in range(1, 7) if hz * h < SAMPLE_RATE * 0.45]
+                        gain = 0.12 / len(intervals)
+                        for i in range(length):
+                            if cursor + i >= total:
+                                break
+                            t = i / SAMPLE_RATE
+                            value = sum(
+                                math.sin(2.0 * math.pi * p * t) / (n + 1)
+                                for n, p in enumerate(partials)
+                            )
+                            if i < fade:
+                                envelope = i / fade
+                            elif i > length - fade:
+                                envelope = (length - i) / fade
+                            else:
+                                envelope = 1.0
+                            samples[cursor + i] += value * gain * envelope
+                    cursor += length
+            write_wav(path, samples)
+
+        major = [([0, 4, 7, 12], 2), ([5, 9, 12], 1), ([7, 11, 14], 1), ([0, 4, 7, 12], 2)]
+        minor = [([0, 3, 7, 12], 2), ([5, 8, 12], 1), ([7, 11, 14], 1), ([0, 3, 7, 12], 2)]
+
+        # Two keys a tritone apart in the major, and one in the minor whose
+        # relative major is a different answer again -- so a detector that had
+        # simply learnt one answer could not pass all three.
+        for name, chords, transpose, wanted in (
+            ("d-major", major, 2, "D major"),
+            ("g#-major", major, 8, "G# major"),
+            ("f#-minor", minor, 6, "F# minor"),
+        ):
+            music = workspace / f"{name}.wav"
+            render_progression(music, chords, transpose)
+            result = run("key", str(music), "--json")
+            check(f"key exits cleanly on {name}", result.returncode == 0, result.stderr)
+            if result.returncode != 0:
+                continue
+            report = json.loads(result.stdout)
+            check(f"{name} is read as {wanted}", report["key"] == wanted, report["key"])
+            # Tonal music makes a strongly shaped chroma; this is the number a
+            # caller would threshold on and it has to be high here.
+            check(f"{name} is a confident answer", report["strength"] > 0.6,
+                  str(report["strength"]))
+            # Rendered at exactly A = 440, so the tuning estimate has to agree.
+            check(f"{name} reads as being at concert pitch",
+                  abs(report["tuningOffsetCents"]) < 12.0, str(report["tuningOffsetCents"]))
+            chroma = report["chroma"]
+            check(f"{name} chroma has twelve entries and sums to one",
+                  len(chroma) == 12 and abs(sum(chroma) - 1.0) < 0.01, str(sum(chroma)))
+
+        # All twelve notes evenly: there is no key, and the strength has to say
+        # so rather than reporting whichever way the noise leaned.
+        chromatic = [([semitone], 1) for semitone in range(12)]
+        atonal = workspace / "chromatic.wav"
+        render_progression(atonal, chromatic, 0)
+        result = run("key", str(atonal), "--json")
+        check("key exits cleanly on atonal material", result.returncode == 0, result.stderr)
+        if result.returncode == 0:
+            report = json.loads(result.stdout)
+            check("atonal material is not a confident key",
+                  report["strength"] < 0.15, str(report["strength"]))
+            check("and the plain output says why",
+                  "no key here to find" in run("key", str(atonal)).stdout)
+
+        check("key with no file fails", run("key").returncode != 0)
+        check("key on a missing file fails",
+              run("key", str(workspace / "nope.wav")).returncode != 0)
+        check("key on a channel that is not there fails",
+              run("key", str(workspace / "d-major.wav"), "--channel", "7").returncode != 0)
+
         print("bands:")
         result = run("bands", str(noise_source), "--csv")
         check("bands exits cleanly", result.returncode == 0, result.stderr)
