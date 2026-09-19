@@ -23,6 +23,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 import wave
 from pathlib import Path
 
@@ -380,6 +381,53 @@ def main() -> int:
             len(side_sizes) == 3 and side_sizes[2] > side_sizes[1],
             f"split_side={dragged.get('split_side')}",
         )
+
+        # -- a run that is killed before it ever draws anything -------------
+        # Opening a file saves at once, because the recent list is saved at
+        # once. That write happens before the window has been laid out, and a
+        # window that has never been laid out answers with a handful of pixels
+        # per splitter and whatever size its constructor asked for. If that
+        # were written back, one launch that was killed before it drew
+        # anything would replace the layout of every launch before it.
+        interrupted = workspace / "interrupted.ini"
+        layout = {
+            "x": str(screen[0] + 80),
+            "y": str(screen[1] + 90),
+            "width": "720",
+            "height": "500",
+            "mainsplit": '"260,430"',
+            "sidesplit": '"410,240,150"',
+        }
+        write_settings(interrupted, {"General": {"version": "1"}, "window": dict(layout)})
+
+        process = subprocess.Popen(
+            [str(arguments.binary), str(first), "--settings", str(interrupted)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            # Wait for the one write it is going to make: the file it was told
+            # to open appearing in the recent list is the signal.
+            for _ in range(300):
+                time.sleep(0.1)
+                if "first.wav" in interrupted.read_text(encoding="utf-8", errors="replace"):
+                    break
+        finally:
+            process.kill()
+            process.wait(timeout=60)
+
+        after = interrupted.read_text(encoding="utf-8", errors="replace")
+        check(
+            "an interrupted run still records what it opened",
+            "first.wav" in after,
+            after.replace("\n", " | "),
+        )
+        for key, value in layout.items():
+            check(
+                f"an interrupted run leaves window/{key} alone",
+                f"{key}={value}" in after,
+                f"wanted {key}={value}, file says: {after.replace(chr(10), ' | ')}",
+            )
 
         # -- a file that is not a settings file at all ----------------------
         junk = workspace / "junk.ini"

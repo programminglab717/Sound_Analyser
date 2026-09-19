@@ -479,8 +479,20 @@ private:
     bool restoredWindow_ = false;
     bool settingsWritten_ = false;
 
-    /// What applySavedLayout put the window at. See normalFrame().
+    /// The layout as it was restored: the rectangle the confining rule
+    /// settled on, whether it was maximised, and the two splitters' stored
+    /// sizes.
+    ///
+    /// Kept because a run that never shows the window still saves -- opening a
+    /// file from the command line saves the recent list, and that writes the
+    /// whole file. Widgets that have never been laid out answer with nonsense
+    /// when asked how big they are, and writing that nonsense back is how one
+    /// launch that was killed before it drew anything loses the layout of
+    /// every launch before it.
     std::optional<Rect> restoredFrame_;
+    bool restoredMaximised_ = false;
+    std::vector<int> loadedMainSplit_;
+    std::vector<int> loadedSideSplit_;
 
     /// The two splitters, kept so their sizes can be saved and restored. The
     /// main one holds the waveform over the spectrogram; the side one holds

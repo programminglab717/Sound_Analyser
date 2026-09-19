@@ -248,15 +248,6 @@ MainWindow::MainWindow(std::optional<std::filesystem::path> settingsFile)
     // measurement that has since been superseded.
     connect(analysis_, &AnalysisPanel::analysisFinished, this, &MainWindow::showMusicalAnalysis);
 
-    // The target lives in the panel's combo; this is how a change there
-    // reaches the file. Saved at once rather than at the next close, for the
-    // reason the preferences dialog is: a setting somebody has just made is
-    // the one they would most notice losing.
-    connect(meters_, &LoudnessPanel::targetChanged, this, [this] {
-        preferences_.loudnessTarget = meters_->target();
-        saveSettings();
-    });
-
     status_ = new QLabel{tr("Open an audio file to begin"), this};
     readout_ = new QLabel{this};
     readout_->setMinimumWidth(340);
@@ -307,6 +298,18 @@ MainWindow::MainWindow(std::optional<std::filesystem::path> settingsFile)
     // saved layout goes into the widgets that have just been laid out.
     applyPreferences();
     applySavedLayout(saved);
+
+    // Only now. The target lives in the panel's combo, and this is how a
+    // change there reaches the file -- saved at once rather than at the next
+    // close, for the reason the preferences dialog is: a setting somebody has
+    // just made is the one they would most notice losing. Connected after the
+    // preferences have been applied, because applying them sets the combo, and
+    // a window that saved its settings while it was still being built would
+    // write the file on every launch for no reason.
+    connect(meters_, &LoudnessPanel::targetChanged, this, [this] {
+        preferences_.loudnessTarget = meters_->target();
+        saveSettings();
+    });
 }
 
 MainWindow::~MainWindow() {
@@ -647,6 +650,8 @@ SavedSettings MainWindow::loadSettings() {
     preferences_ = saved.preferences;
     recent_ = saved.recent;
     mayWriteSettings_ = saved.writeBack;
+    loadedMainSplit_ = saved.mainSplit;
+    loadedSideSplit_ = saved.sideSplit;
     return saved;
 }
 
@@ -690,6 +695,7 @@ void MainWindow::applySavedLayout(const SavedSettings& saved) {
     const Rect placed = confineToScreens(saved.window->frame, attachedScreens());
     setGeometry(placed.x, placed.y, placed.width, placed.height);
     restoredFrame_ = placed;
+    restoredMaximised_ = saved.window->maximised;
     if (saved.window->maximised) {
         // Set rather than shown: the window is not visible yet -- whoever
         // constructed it decides when it appears -- and a state set now is the
@@ -738,27 +744,45 @@ void MainWindow::saveSettings() {
         settings.preferences.loudnessTarget = meters_->target();
     }
 
-    const Rect frame = normalFrame();
-    if (frame.width > 0 && frame.height > 0) {
-        WindowPlacement placement;
-        placement.frame = frame;
-        placement.maximised = isMaximized();
-        settings.window = placement;
-    }
-
-    const auto sizesOf = [](const QSplitter* splitter, std::size_t panes) {
-        std::vector<int> held;
-        if (splitter != nullptr) {
-            const QList<int> sizes = splitter->sizes();
-            held.assign(sizes.begin(), sizes.end());
+    // A window that has never been shown has never been laid out either: its
+    // splitters answer with a handful of pixels each and its geometry is
+    // whatever the constructor asked for. That is not a layout anybody chose,
+    // and saving it would mean that opening a file from the command line and
+    // then being killed -- which saves, because the recent list is saved at
+    // once -- quietly replaced the layout of every launch before it.
+    //
+    // So a run that has not shown the window writes back what it read.
+    if (isVisible()) {
+        const Rect frame = normalFrame();
+        if (frame.width > 0 && frame.height > 0) {
+            WindowPlacement placement;
+            placement.frame = frame;
+            placement.maximised = isMaximized();
+            settings.window = placement;
         }
-        // A degenerate layout is not saved. A window that was never shown has
-        // never laid its splitters out, and storing what they say then would
-        // hand the next launch a layout nobody chose.
-        return splitterSizesUsable(held, panes) ? held : std::vector<int>{};
-    };
-    settings.mainSplit = sizesOf(splitter_, 2);
-    settings.sideSplit = sizesOf(sideSplitter_, 3);
+
+        // A reading that is not a usable layout falls back to the stored one
+        // rather than to nothing: losing a layout somebody dragged into place
+        // because the widget answered oddly once would be the same failure
+        // this whole branch exists to avoid.
+        const auto sizesOf = [](const QSplitter* splitter, std::size_t panes,
+                                const std::vector<int>& stored) {
+            std::vector<int> held;
+            if (splitter != nullptr) {
+                const QList<int> sizes = splitter->sizes();
+                held.assign(sizes.begin(), sizes.end());
+            }
+            return splitterSizesUsable(held, panes) ? held : stored;
+        };
+        settings.mainSplit = sizesOf(splitter_, 2, loadedMainSplit_);
+        settings.sideSplit = sizesOf(sideSplitter_, 3, loadedSideSplit_);
+    } else {
+        if (restoredFrame_) {
+            settings.window = WindowPlacement{*restoredFrame_, restoredMaximised_};
+        }
+        settings.mainSplit = loadedMainSplit_;
+        settings.sideSplit = loadedSideSplit_;
+    }
 
     const SettingsStore store{settingsFile_.path};
     if (!store.write(writeSettings(settings))) {
