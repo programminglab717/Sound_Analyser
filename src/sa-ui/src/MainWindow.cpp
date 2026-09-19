@@ -689,6 +689,7 @@ void MainWindow::applySavedLayout(const SavedSettings& saved) {
 
     const Rect placed = confineToScreens(saved.window->frame, attachedScreens());
     setGeometry(placed.x, placed.y, placed.width, placed.height);
+    restoredFrame_ = placed;
     if (saved.window->maximised) {
         // Set rather than shown: the window is not visible yet -- whoever
         // constructed it decides when it appears -- and a state set now is the
@@ -697,6 +698,26 @@ void MainWindow::applySavedLayout(const SavedSettings& saved) {
         setWindowState(windowState() | Qt::WindowMaximized);
     }
     restoredWindow_ = true;
+}
+
+Rect MainWindow::normalFrame() const {
+    // geometry() rather than frameGeometry(), because setGeometry() is what
+    // puts it back: saving one and restoring through the other is how a window
+    // creeps down the screen by its own title bar height on every launch.
+    const QRect live = isMaximized() ? normalGeometry() : geometry();
+    if (live.isValid() && live.width() > 0 && live.height() > 0) {
+        return Rect{live.x(), live.y(), live.width(), live.height()};
+    }
+    // Maximised, and never shown any other way. The rectangle the restore
+    // applied is the best answer anyone has to where this window goes when it
+    // is not maximised, and it is a great deal better than nothing -- nothing
+    // means the next launch opens at the default size, in the default place,
+    // and not maximised either.
+    if (restoredFrame_) {
+        return *restoredFrame_;
+    }
+    const QRect fallback = geometry();
+    return Rect{fallback.x(), fallback.y(), fallback.width(), fallback.height()};
 }
 
 void MainWindow::saveSettings() {
@@ -717,16 +738,10 @@ void MainWindow::saveSettings() {
         settings.preferences.loudnessTarget = meters_->target();
     }
 
-    // The normal geometry when maximised, so that un-maximising after a
-    // restore lands the window where it was rather than at some remembered
-    // full-screen rectangle. geometry() both ways rather than frameGeometry(),
-    // because setGeometry() is what puts it back: saving one and restoring
-    // through the other is how a window creeps down the screen by its own
-    // title bar height on every launch.
-    const QRect frame = isMaximized() ? normalGeometry() : geometry();
-    if (frame.width() > 0 && frame.height() > 0) {
+    const Rect frame = normalFrame();
+    if (frame.width > 0 && frame.height > 0) {
         WindowPlacement placement;
-        placement.frame = Rect{frame.x(), frame.y(), frame.width(), frame.height()};
+        placement.frame = frame;
         placement.maximised = isMaximized();
         settings.window = placement;
     }
@@ -878,10 +893,10 @@ bool MainWindow::printSettings() const {
     // being checked is that the file reached the window -- including the case
     // where the confining rule decided the file was asking for somewhere
     // nobody could see.
-    const QRect frame = isMaximized() ? normalGeometry() : geometry();
+    const Rect frame = normalFrame();
     std::printf("window_restored=%d\nwindow_x=%d\nwindow_y=%d\nwindow_width=%d\n"
                 "window_height=%d\nwindow_maximised=%d\n",
-                restoredWindow_ ? 1 : 0, frame.x(), frame.y(), frame.width(), frame.height(),
+                restoredWindow_ ? 1 : 0, frame.x, frame.y, frame.width, frame.height,
                 isMaximized() ? 1 : 0);
 
     // The screens the confining rule was given, so that a driver can hold the

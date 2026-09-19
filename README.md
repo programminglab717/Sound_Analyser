@@ -118,7 +118,7 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | A draggable EQ curve over the analyser | ✅ Done — drag for frequency and gain, wheel or shift-drag for Q; the drawn curve is checked against the filter's own transfer function, and applying it moves the audio by what the curve promised |
 | GPU shader renderer | ⬜ An optimisation, not a requirement — the CPU path fits in the frame budget |
 
-**979 tests passing on GCC 13, under ASan/UBSan with leak detection, and
+**980 tests passing on GCC 13, under ASan/UBSan with leak detection, and
 under ThreadSanitizer**, plus five end-to-end driver scripts that run the real
 binaries: one that edits and compares exported samples, one that renders the
 window and inspects the pixels, one that drives the EQ curve with synthesised

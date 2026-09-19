@@ -298,6 +298,52 @@ def main() -> int:
             f"wanted {wanted_frame[0]},{wanted_frame[1]}",
         )
 
+        # -- maximised, and the position it would go back to ----------------
+        # A window restored straight into a maximised state has never been
+        # shown as a normal one, so the widget has no normal geometry to
+        # report. If that is taken at face value, "maximise, quit, reopen"
+        # writes no window at all and loses the position and the maximised
+        # state together.
+        big = workspace / "big.ini"
+        big_frame = (screen[0] + 40, screen[1] + 60, 700, 560)
+        write_settings(
+            big,
+            {
+                "General": {"version": "1"},
+                "window": {
+                    "x": str(big_frame[0]),
+                    "y": str(big_frame[1]),
+                    "width": str(big_frame[2]),
+                    "height": str(big_frame[3]),
+                    "maximised": "true",
+                },
+            },
+        )
+        maximised = run(arguments.binary, big, str(first))
+        check(
+            "a maximised window comes back maximised",
+            maximised.get("window_maximised") == "1",
+            f"window_maximised={maximised.get('window_maximised')}",
+        )
+        check(
+            "and still knows where it goes when it is not",
+            (
+                int(maximised.get("window_x", "-1")),
+                int(maximised.get("window_y", "-1")),
+                int(maximised.get("window_width", "-1")),
+                int(maximised.get("window_height", "-1")),
+            )
+            == big_frame,
+            f"{maximised.get('window_x')},{maximised.get('window_y')} "
+            f"{maximised.get('window_width')}x{maximised.get('window_height')}",
+        )
+        written = big.read_text(encoding="utf-8")
+        check(
+            "and writes both back",
+            f"width={big_frame[2]}" in written and "maximised=true" in written,
+            written.replace("\n", " | "),
+        )
+
         # -- the splitters -------------------------------------------------
         panes = workspace / "panes.ini"
         write_settings(

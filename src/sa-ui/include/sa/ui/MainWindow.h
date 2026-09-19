@@ -203,6 +203,17 @@ private:
     /// The available area of every attached screen, in desktop coordinates.
     [[nodiscard]] std::vector<Rect> attachedScreens() const;
 
+    /// The rectangle to save: where the window would be if it were not
+    /// maximised.
+    ///
+    /// QWidget::normalGeometry() answers that, but only once the window has
+    /// been shown as a normal window at least once. A window restored straight
+    /// into a maximised state never has been, and it answers with an invalid
+    /// rectangle -- which is how "maximise, quit, reopen" loses the position
+    /// as well as the maximised state. So the rectangle the restore applied is
+    /// kept, and used when the widget has nothing better to say.
+    [[nodiscard]] Rect normalFrame() const;
+
     void choosePreferences();
 
     /// Rebuild the recent files submenu, greying out what is not there.
@@ -467,6 +478,9 @@ private:
     /// a second time.
     bool restoredWindow_ = false;
     bool settingsWritten_ = false;
+
+    /// What applySavedLayout put the window at. See normalFrame().
+    std::optional<Rect> restoredFrame_;
 
     /// The two splitters, kept so their sizes can be saved and restored. The
     /// main one holds the waveform over the spectrogram; the side one holds
