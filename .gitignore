@@ -11,6 +11,11 @@ CMakeUserPresets.json
 vcpkg_installed/
 _deps/
 
+# Python leavings. tools/ holds scripts, not a package; a .pyc got committed
+# once because one of them imports another and nothing here ignored it.
+__pycache__/
+*.pyc
+
 # Artifacts
 *.exe
 *.dll

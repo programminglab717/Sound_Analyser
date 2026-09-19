@@ -9,6 +9,7 @@
 #include <sa/ui/Colourmap.h>
 #include <sa/ui/LoudnessPanel.h>
 #include <sa/ui/SpectrogramView.h>
+#include <sa/ui/SpectrumView.h>
 #include <sa/ui/TimeRuler.h>
 #include <sa/ui/WaveformView.h>
 
@@ -99,6 +100,11 @@ public:
     /// starts, and that guess is what breaks the next time the layout moves.
     [[nodiscard]] bool saveSpectrogramImage(const std::filesystem::path& path);
 
+    /// The spectrum panel alone, without its gutter. As with the spectrogram,
+    /// the point is that a test can say what the pixels should be rather than
+    /// only that the program did not crash.
+    [[nodiscard]] bool saveSpectrumImage(const std::filesystem::path& path);
+
 private slots:
     void chooseFile();
     void chooseSaveSession();
@@ -117,6 +123,15 @@ private:
     /// Re-measure whatever the panel should be showing: the selection when
     /// there is one, the whole document otherwise.
     void remeasure();
+    /// Recompute the spectrum panel, after a short pause.
+    ///
+    /// Deferred rather than immediate because the selection changes on every
+    /// mouse move of a drag, and this reads several seconds of audio and
+    /// transforms it. The meters solve the same problem with a worker thread
+    /// and a generation counter; a spectrum is cheap enough that waiting for
+    /// the drag to stop is the whole answer.
+    void respectrumSoon();
+    void respectrum();
 
     /// Rebuild the peak cache from the *document*, not the file. After the
     /// first edit those are different things, and showing the file is showing
@@ -177,6 +192,7 @@ private:
                      const QString& label);
     void chooseDeclick();
     void restoreClipping();
+    bool removeHum();
     bool applyDeclick(double threshold, const QString& label);
     void chooseTimeStretch();
     void choosePitchShift();
@@ -200,6 +216,8 @@ private:
 
     TimeRuler* ruler_ = nullptr;
     LoudnessPanel* meters_ = nullptr;
+    SpectrumView* spectrum_ = nullptr;
+    QTimer* spectrumTimer_ = nullptr;
     WaveformView* waveform_ = nullptr;
     SpectrogramView* spectrogram_ = nullptr;
     QLabel* status_ = nullptr;

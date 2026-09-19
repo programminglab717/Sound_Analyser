@@ -71,23 +71,24 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | `sa-core`: buffers, channel layouts, time types, `Result`, RT instrumentation | ✅ Done |
 | `sa-dsp`: FFT, windows, STFT, biquads, EQ, dynamics, resampling | ✅ Done — STFT round trip is a CI gate |
 | `sa-io`: WAV, AIFF, FLAC, MP3, peak pyramid, WAV writer | ✅ Done |
-| `sa-analysis`: LUFS, true peak, statistics, compliance targets | ✅ Done — see the caveat below |
+| `sa-analysis`: LUFS, true peak, statistics, compliance targets, average spectrum | ✅ Done — see the caveat below |
 | `sa-spectral`: spectrogram pyramid, attenuate and heal | ✅ Done |
 | `sa-engine`: non-destructive document, edits, undo, sessions | ✅ Done |
 | `sa-device`: WASAPI, ALSA, null backend | ✅ Done — never run on real hardware |
 | `sa-transport`: playback with a playhead | ✅ Done |
-| `sa-ui`: waveform, spectrogram, rulers, meters, editing, repair | ✅ Done |
+| `sa-ui`: waveform, spectrogram, spectrum, rulers, meters, editing, repair | ✅ Done |
 | Resampling: any ratio, streaming, real-time safe | ✅ Done |
 | Noise profile learning and spectral denoise | ✅ Done |
 | Click detection and repair, by linear prediction | ✅ Done |
 | Declipping: restoring peaks a converter took off | ✅ Done |
+| De-humming: finding a mains harmonic series and subtracting it | ✅ Done |
 | Mastering: filters, true-peak limiting, normalisation | ✅ Done |
-| `sa-cli`: headless batch driver | ✅ Done — nine commands, tested end to end |
+| `sa-cli`: headless batch driver | ✅ Done — ten commands, tested end to end |
 | Time-stretch and pitch-shift | ✅ Done — phase vocoder with identity phase locking |
 | Markers and regions in the interface; a draggable EQ curve | ⬜ Next |
 | GPU shader renderer | ⬜ An optimisation, not a requirement — the CPU path fits in the frame budget |
 
-**581 tests passing on GCC 13, under ASan/UBSan with leak detection, and under
+**598 tests passing on GCC 13, under ASan/UBSan with leak detection, and under
 ThreadSanitizer.** CI runs the same suite on MSVC 19 (Visual Studio 18), and
 the most recent run was green on every job -- both Windows configurations
 included -- and produced a packaged Windows build as an artifact.

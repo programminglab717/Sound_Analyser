@@ -17,8 +17,8 @@ run `sound-analyser.exe`. Qt ships beside it, so there is nothing to install.
 It is about 12.6 MB and it is built and tested by the same run that produces it:
 all ten CI jobs green, including both MSVC configurations, before the package is
 uploaded. `sa-cli.exe` is not in the package yet -- say if you want it and it is
-a one-line change. It now has nine commands: analyse, convert, normalise,
-denoise, declick, declip, render, stretch and pitch.
+a one-line change. It now has ten commands: analyse, convert, normalise,
+denoise, declick, declip, dehum, render, stretch and pitch.
 
 Then open something real — a recording of your own, not a test tone — and try:
 
@@ -29,6 +29,7 @@ Then open something real — a recording of your own, not a test tone — and tr
 | Select | Drag in the waveform for a time span; drag in the spectrogram for a time *and frequency* box |
 | Play | Space |
 | Measure | The panel on the right; it follows the selection |
+| Read the spectrum | The curve under the meters, also following the selection. The filled shape is the average, the line above it is the loudest any moment got. Hover for a frequency and a level |
 | Fix the level | Process ▸ Normalise to target, after picking a target in the panel |
 | Filter | Process ▸ Filter, or Ctrl+F. High-pass at 80 Hz is the one to try first on anything with rumble in it |
 | Limit | Process ▸ Limiter. It holds a true-peak ceiling rather than approaching it |
@@ -38,6 +39,7 @@ Then open something real — a recording of your own, not a test tone — and tr
 | Denoise | Select a passage of noise alone ▸ Repair ▸ Learn noise profile, then select the whole thing ▸ Repair ▸ Reduce noise |
 | Declick | Repair ▸ Remove clicks. It says how many it found. On a clean recording the right answer is none, and it gives that answer |
 | Declip | Repair ▸ Restore clipped peaks. It says how many it put back, and how far it had to bring the file down so they fit |
+| Dehum | Repair ▸ Remove mains hum. It finds the frequency itself — 50 or 60, and to a hundredth of a Hertz — and says what it found |
 | Save | File ▸ Save session, reopen it, check nothing was lost |
 
 **What I need back.** Not a bug list — impressions. Where did you expect
@@ -81,6 +83,13 @@ that becomes exact.
 ## 4. Things I would want a second opinion on
 
 Not blocked, but a person's judgement would be better than mine.
+
+- **Whether the de-hummer is cautious enough, or too cautious.** It only
+  removes a partial where a steady sinusoid clearly dominates, and leaves the
+  rest, so on a recording where hum sits under a loud bass line it will take
+  out the exposed harmonics and leave the buried ones. That is the safe
+  direction to err in, but I do not know whether it is the one you want. If you
+  have anything with real hum on it, that is the test.
 
 - **Whether declipping helps on something you actually have.** On synthetic
   material it puts the peaks back to within a decibel of where they started

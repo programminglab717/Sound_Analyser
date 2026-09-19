@@ -119,6 +119,31 @@ def read_png(path: Path) -> tuple[int, int, list[list[tuple[int, int, int]]]]:
     return width, height, rows
 
 
+def spectrum_curve(path: Path) -> tuple[int, int, list[int]]:
+    """The height of the spectrum panel's average curve in each column.
+
+    The curve is the one bright blue line in the panel, so the topmost blue
+    pixel in a column is how high it reaches there. Smaller means higher on
+    screen, which means louder.
+    """
+    width, height, rows = read_png(path)
+    plot_height = height - 18  # The frequency labels sit below the plot.
+    highest = [plot_height] * width
+    for y in range(plot_height):
+        row = rows[y]
+        for x in range(width):
+            red, _, blue = row[x]
+            if blue > 150 and blue > red + 40 and y < highest[x]:
+                highest[x] = y
+    return width, plot_height, highest
+
+
+def spectrum_column(width: int, hz: float) -> int:
+    """Which column a frequency lands in, on the same log axis the panel uses."""
+    fraction = math.log(hz / 20.0) / math.log(24000.0 / 20.0)
+    return max(0, min(width - 1, int(fraction * width)))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", type=Path, help="path to the sound-analyser executable")
@@ -134,6 +159,7 @@ def main() -> int:
         write_probe_wav(audio)
 
         plot = workspace / "plot.png"
+        curve = workspace / "curve.png"
         completed = subprocess.run(
             [
                 str(arguments.binary),
@@ -142,6 +168,8 @@ def main() -> int:
                 str(shot),
                 "--screenshot-spectrogram",
                 str(plot),
+                "--screenshot-spectrum",
+                str(curve),
                 "--print-analysis",
             ],
             capture_output=True,
@@ -167,6 +195,82 @@ def main() -> int:
             return 1
 
         plot_width, plot_height, plot_rows = read_png(plot)
+
+        # The spectrum panel, checked at three points on its frequency axis.
+        #
+        # The probe sweeps 40 Hz to 18 kHz, so the curve should stand well clear
+        # of the floor at 100 Hz, 1 kHz and 10 kHz and fall away above 18 kHz
+        # where the sweep stops. Three points inside and one outside pin the
+        # mapping: an axis that is reversed, linear instead of logarithmic, or
+        # off by an octave fails at least one of them, where a check that the
+        # curve merely exists would pass all four.
+        if not curve.exists():
+            print("FAIL: no spectrum image was written")
+            return 1
+        curve_width, curve_height, heights = spectrum_curve(curve)
+        if curve_width < 120 or curve_height < 80:
+            print(f"FAIL: the spectrum panel is {curve_width}x{curve_height}")
+            return 1
+
+        floor = curve_height - 1
+        inside = {hz: heights[spectrum_column(curve_width, hz)] for hz in (100.0, 1000.0, 10000.0)}
+        above = min(heights[spectrum_column(curve_width, hz)] for hz in (21000.0, 23000.0))
+        if any(height > curve_height * 0.75 for height in inside.values()):
+            print(
+                "FAIL: the spectrum is at the floor inside the swept band -- "
+                + ", ".join(f"{hz:.0f} Hz at row {row}" for hz, row in inside.items())
+                + f" of {floor}"
+            )
+            return 1
+        if above < max(inside.values()) + 8:
+            print(
+                f"FAIL: the spectrum is as loud above the sweep (row {above}) as inside it "
+                f"(row {max(inside.values())}) -- the frequency axis is wrong"
+            )
+            return 1
+
+        # And the panel follows the selection, which is the whole point of it.
+        #
+        # The probe sweeps 40 Hz to 18 kHz over six seconds, so the first
+        # second holds nothing above about 114 Hz and the last second nothing
+        # below about 6 kHz. Rendering each and checking that the curve is at
+        # the floor where the sweep was not says three things at once: the
+        # selection reaches the analysis, the analysis reaches the picture, and
+        # the frequency axis is right at both ends of its range.
+        for span, present, absent in (("0-1", 60.0, 1000.0), ("5-6", 12000.0, 1000.0)):
+            selected = workspace / f"curve{span}.png"
+            done = subprocess.run(
+                [
+                    str(arguments.binary),
+                    str(audio),
+                    "--apply",
+                    f"select:{span}",
+                    "--screenshot-spectrum",
+                    str(selected),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            if done.returncode != 0 or not selected.exists():
+                print(f"FAIL: selecting {span} s and rendering the spectrum exited "
+                      f"{done.returncode} -- {done.stderr}")
+                return 1
+            span_width, span_height, span_heights = spectrum_curve(selected)
+            here = span_heights[spectrum_column(span_width, present)]
+            there = span_heights[spectrum_column(span_width, absent)]
+            if here > span_height * 0.6:
+                print(
+                    f"FAIL: with {span} s selected, {present:.0f} Hz is at row {here} of "
+                    f"{span_height} -- the sweep is there and the spectrum does not show it"
+                )
+                return 1
+            if there < span_height * 0.9:
+                print(
+                    f"FAIL: with {span} s selected, {absent:.0f} Hz is at row {there} of "
+                    f"{span_height} -- the sweep is not there and the spectrum shows it anyway"
+                )
+                return 1
 
         # An empty render is one flat colour. A real one is not.
         region = [pixel for row in plot_rows[::3] for pixel in row[::4]]

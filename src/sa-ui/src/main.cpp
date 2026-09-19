@@ -40,6 +40,8 @@ int main(int argc, char** argv) {
     QCommandLineOption screenshot{"screenshot", "Render the window to <png> and exit.", "png"};
     QCommandLineOption plot{"screenshot-spectrogram",
                             "Render the spectrogram plot alone to <png> and exit.", "png"};
+    QCommandLineOption curve{"screenshot-spectrum",
+                             "Render the spectrum panel alone to <png> and exit.", "png"};
     QCommandLineOption select{"select",
                               "Select <from>-<to> in seconds before --apply runs. For anything "
                               "with more than one step, put select: inside --apply instead: Qt "
@@ -60,7 +62,7 @@ int main(int argc, char** argv) {
                             "Play the selection to its end and report where the transport got "
                             "to. Runs in real time."};
     for (const QCommandLineOption& option :
-         {screenshot, plot, select, apply, exportTo, printAnalysis, play, saveSession}) {
+         {screenshot, plot, curve, select, apply, exportTo, printAnalysis, play, saveSession}) {
         parser.addOption(option);
     }
     parser.process(app);
@@ -78,8 +80,9 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    const bool batch = parser.isSet(screenshot) || parser.isSet(plot) || parser.isSet(exportTo) ||
-                       parser.isSet(apply) || parser.isSet(printAnalysis) || parser.isSet(play) ||
+    const bool batch = parser.isSet(screenshot) || parser.isSet(plot) || parser.isSet(curve) ||
+                       parser.isSet(exportTo) || parser.isSet(apply) ||
+                       parser.isSet(printAnalysis) || parser.isSet(play) ||
                        parser.isSet(saveSession);
     if (!batch) {
         window.show();
@@ -140,6 +143,10 @@ int main(int argc, char** argv) {
     }
     if (parser.isSet(plot) && !window.saveSpectrogramImage(parser.value(plot).toStdString())) {
         std::fprintf(stderr, "spectrogram screenshot failed\n");
+        return 1;
+    }
+    if (parser.isSet(curve) && !window.saveSpectrumImage(parser.value(curve).toStdString())) {
+        std::fprintf(stderr, "spectrum screenshot failed\n");
         return 1;
     }
     return 0;

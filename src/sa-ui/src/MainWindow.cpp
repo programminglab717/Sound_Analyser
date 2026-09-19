@@ -1,7 +1,9 @@
+#include <sa/analysis/Spectrum.h>
 #include <sa/device/AudioDeviceManager.h>
 #include <sa/device/NullAudioDevice.h>
 #include <sa/dsp/Declick.h>
 #include <sa/dsp/Declip.h>
+#include <sa/dsp/Dehum.h>
 #include <sa/dsp/Dynamics.h>
 #include <sa/dsp/OfflineLimiter.h>
 #include <sa/dsp/ParametricEq.h>
@@ -103,12 +105,23 @@ MainWindow::MainWindow() {
     // numbers and the picture are answers to the same question, and a reader
     // who has to move a window to see both will stop looking at one of them.
     meters_ = new LoudnessPanel{this};
+    spectrum_ = new SpectrumView{this};
+
+    // The spectrum goes under the meters rather than beside the views: it
+    // answers the same kind of question the numbers do -- what is this passage
+    // made of -- and unlike the two views above it does not have to line up
+    // with the time axis.
+    auto* side = new QSplitter{Qt::Vertical, this};
+    side->addWidget(meters_);
+    side->addWidget(spectrum_);
+    side->setStretchFactor(0, 3);
+    side->setStretchFactor(1, 2);
     auto* row = new QWidget{this};
     auto* across = new QHBoxLayout{row};
     across->setContentsMargins(0, 0, 0, 0);
     across->setSpacing(0);
     across->addWidget(central, 1);
-    across->addWidget(meters_);
+    across->addWidget(side);
     setCentralWidget(row);
 
     // One time axis and one selection. Either view can drive them; the other
@@ -136,6 +149,13 @@ MainWindow::MainWindow() {
     // it costs nothing. The position it reads is frames the callback has
     // actually played, not frames queued, so it does not run ahead of the
     // sound.
+    // A quarter of a second after the last change, which is past the end of a
+    // drag and short enough not to feel deferred.
+    spectrumTimer_ = new QTimer{this};
+    spectrumTimer_->setSingleShot(true);
+    spectrumTimer_->setInterval(250);
+    connect(spectrumTimer_, &QTimer::timeout, this, &MainWindow::respectrum);
+
     playheadTimer_ = new QTimer{this};
     playheadTimer_->setInterval(33);
     connect(playheadTimer_, &QTimer::timeout, this, &MainWindow::followPlayhead);
@@ -261,6 +281,7 @@ void MainWindow::buildMenus() {
     repair->addAction(tr("Remove &clicks…"), QKeySequence{Qt::CTRL | Qt::SHIFT | Qt::Key_C}, this,
                       &MainWindow::chooseDeclick);
     repair->addAction(tr("Restore clipped &peaks"), this, &MainWindow::restoreClipping);
+    repair->addAction(tr("Remove mains &hum"), this, [this] { (void)removeHum(); });
     repair->addSeparator();
     repair->addAction(tr("Select all &frequencies"), this,
                       [this] { selectFrequencyBand(0.0, document_.sampleRate().hz() * 0.5); });
@@ -330,6 +351,74 @@ void MainWindow::selectionChanged(SampleIndex start, SampleIndex end) {
     refreshActions();
     updateStatus();
     remeasure();
+    respectrumSoon();
+}
+
+void MainWindow::respectrumSoon() {
+    if (spectrumTimer_) {
+        spectrumTimer_->start();
+    }
+}
+
+void MainWindow::respectrum() {
+    if (!spectrum_) {
+        return;
+    }
+    if (!documentSource_ || document_.duration() <= 0) {
+        spectrum_->clear();
+        spectrum_->setNote(tr("Nothing open"));
+        return;
+    }
+
+    const TimeSelection range = targetRange();
+    auto made = analysis::SpectrumAnalyser::create(document_.sampleRate());
+    if (!made) {
+        spectrum_->setNote(tr("Could not analyse"));
+        return;
+    }
+    analysis::SpectrumAnalyser& analyser = made.value();
+
+    // A bounded amount of reading, whatever is selected. An average spectrum is
+    // characterised by a few hundred frames, so reading two hours to compute
+    // one would make selecting anything feel broken and would say the same
+    // thing. A long selection is sampled in stretches spread across it, with a
+    // segment boundary between them so the joins are not analysed as audio.
+    constexpr SampleCount kStretch = 1 << 17; // About 2.7 s at 48 kHz.
+    constexpr int kMostStretches = 24;
+
+    const SampleCount length = range.length();
+    const int stretches = length <= kStretch
+                              ? 1
+                              : static_cast<int>(std::min<SampleCount>(
+                                    kMostStretches, (length + kStretch - 1) / kStretch));
+
+    AudioBuffer block{document_.layout(), std::min<SampleCount>(kStretch, length)};
+    for (int i = 0; i < stretches; ++i) {
+        const SampleIndex at =
+            stretches > 1
+                ? range.start + static_cast<SampleIndex>(
+                                    static_cast<double>(length - block.frames()) *
+                                    static_cast<double>(i) / static_cast<double>(stretches - 1))
+                : range.start;
+        if (!documentSource_->read(at, block.view())) {
+            break;
+        }
+        if (i > 0) {
+            analyser.startSegment();
+        }
+        // The first channel only. A spectrum of a stereo sum shows a comb
+        // wherever the two channels disagree in phase, which is a picture of
+        // the summing rather than of the material.
+        analyser.add(block.constView(), 0);
+    }
+
+    if (analyser.frameCount() == 0) {
+        spectrum_->clear();
+        spectrum_->setNote(tr("Too short for a spectrum"));
+        return;
+    }
+    spectrum_->setSpectrum(analyser.averageDb(), analyser.peakDb(), document_.sampleRate(),
+                           analyser.fftSize());
 }
 
 void MainWindow::remeasure() {
@@ -635,6 +724,7 @@ void MainWindow::refreshViews() {
     refreshActions();
     updateStatus();
     remeasure();
+    respectrumSoon();
 }
 
 void MainWindow::refreshActions() {
@@ -1253,6 +1343,46 @@ void MainWindow::restoreClipping() {
     }
 }
 
+bool MainWindow::removeHum() {
+    const TimeSelection range = targetRange();
+    if (range.isEmpty() || !documentSource_) {
+        return false;
+    }
+
+    AudioBuffer span{document_.layout(), range.length()};
+    if (!documentSource_->read(range.start, span.view())) {
+        status_->setText(tr("Could not read the selection"));
+        return false;
+    }
+
+    status_->setText(tr("Looking for hum…"));
+    status_->repaint();
+
+    const auto report = dsp::dehum(span.view(), document_.sampleRate());
+    if (!report) {
+        status_->setText(tr("Could not remove hum: %1")
+                             .arg(QString::fromStdString(std::string{report.error().what()})));
+        return false;
+    }
+    if (!report.value().found) {
+        // Not a failure: a recording with no hum in it is the common case, and
+        // the useful thing to say is that it looked and there was none.
+        status_->setText(tr("No mains hum found"));
+        return true;
+    }
+
+    const bool changed = applyEdit(tr("remove hum"), [this, &range, &span] {
+        return engine::replaceRange(document_, range.start, std::move(span)).ok();
+    });
+    if (changed) {
+        status_->setText(tr("Removed %n partial(s) of %1 Hz hum, taking out %2 dB", nullptr,
+                            report.value().harmonics)
+                             .arg(report.value().frequency, 0, 'f', 2)
+                             .arg(-report.value().removedDb, 0, 'f', 2));
+    }
+    return changed;
+}
+
 void MainWindow::chooseTimeStretch() {
     if (!hasDocument()) {
         return;
@@ -1752,6 +1882,9 @@ bool MainWindow::applyOperation(const QString& name) {
                     QStringLiteral("low-pass"));
         return true;
     }
+    if (name == "dehum") {
+        return removeHum();
+    }
     if (name == "declip") {
         restoreClipping();
         return true;
@@ -1946,6 +2079,14 @@ bool MainWindow::waitForAnalysis(int timeoutMs) {
         // queued call, so the loop only needs to wake when something arrives.
         QApplication::processEvents(QEventLoop::WaitForMoreEvents, 50);
     }
+    // The spectrum is deferred behind a timer so that dragging a selection
+    // does not recompute it on every mouse move. A batch run has no drag and no
+    // patience: force whatever is pending rather than racing the timer and
+    // writing a screenshot of the previous selection's spectrum.
+    if (spectrumTimer_ && spectrumTimer_->isActive()) {
+        spectrumTimer_->stop();
+        respectrum();
+    }
     QApplication::processEvents();
     return true;
 }
@@ -1954,6 +2095,18 @@ bool MainWindow::saveSpectrogramImage(const std::filesystem::path& path) {
     QApplication::processEvents();
     const QPixmap shot = spectrogram_->grab(
         QRect{kGutterWidth, 0, spectrogram_->width() - kGutterWidth, spectrogram_->height()});
+    QApplication::processEvents();
+    return shot.save(QString::fromStdString(path.string()), "PNG");
+}
+
+bool MainWindow::saveSpectrumImage(const std::filesystem::path& path) {
+    if (spectrumTimer_ && spectrumTimer_->isActive()) {
+        spectrumTimer_->stop();
+        respectrum();
+    }
+    QApplication::processEvents();
+    const QPixmap shot = spectrum_->grab(
+        QRect{kGutterWidth, 0, spectrum_->width() - kGutterWidth, spectrum_->height()});
     QApplication::processEvents();
     return shot.save(QString::fromStdString(path.string()), "PNG");
 }

@@ -15,6 +15,7 @@
 #include <sa/analysis/TruePeakMeter.h>
 #include <sa/dsp/Declick.h>
 #include <sa/dsp/Declip.h>
+#include <sa/dsp/Dehum.h>
 #include <sa/dsp/Resampler.h>
 #include <sa/dsp/TimeStretch.h>
 #include <sa/engine/BufferSource.h>
@@ -308,6 +309,10 @@ void usage() {
 
   denoise <in> <out> --noise <from>-<to> [--amount <dB>] [--format 16|24|float]
       Learn a noise profile from <from>-<to> in seconds, then clean the file.
+
+  dehum <in> <out> [--frequency <hz>] [--amount <0..1>] [--format 16|24|float]
+      Find mains hum and subtract it. Prints the frequency it found and how
+      many partials it took out; finding none is success, not failure.
 
   declip <in> <out> [--keep-level] [--format 16|24|float]
       Restore clipped peaks. The result is brought down to fit them unless
@@ -606,6 +611,50 @@ int reshape(const Options& options,
     return 0;
 }
 
+int dehumFile(const Options& options) {
+    if (options.positional.size() != 3) {
+        return fail("dehum needs an input and an output");
+    }
+
+    sa::dsp::DehumSettings settings;
+    settings.frequency = options.number("frequency", 0.0);
+    settings.amount = options.number("amount", settings.amount);
+
+    std::string error;
+    const auto source = open(options.positional[1], error);
+    if (!source) {
+        return fail(error);
+    }
+    const sa::io::AudioFileInfo& info = source->info();
+
+    sa::AudioBuffer audio{info.layout, info.frameCount};
+    if (const auto read = source->read(0, audio.view()); !read) {
+        return fail(std::string{read.error().what()});
+    }
+
+    const auto report = sa::dsp::dehum(audio.view(), info.sampleRate, settings);
+    if (!report) {
+        return fail(std::string{report.error().what()});
+    }
+
+    const sa::engine::BufferSource cleaned{std::move(audio), info.sampleRate};
+    if (!write(cleaned, options.positional[2], formatFrom(options, info.format), error)) {
+        return fail(error);
+    }
+    if (report.value().found) {
+        std::printf("%s: %.2f Hz hum, %d partial%s removed, %.2f dB taken out -> %s\n",
+                    std::filesystem::path{options.positional[1]}.filename().string().c_str(),
+                    report.value().frequency, report.value().harmonics,
+                    report.value().harmonics == 1 ? "" : "s", -report.value().removedDb,
+                    std::filesystem::path{options.positional[2]}.filename().string().c_str());
+    } else {
+        std::printf("%s: no mains hum found -> %s\n",
+                    std::filesystem::path{options.positional[1]}.filename().string().c_str(),
+                    std::filesystem::path{options.positional[2]}.filename().string().c_str());
+    }
+    return 0;
+}
+
 int declipFile(const Options& options) {
     if (options.positional.size() != 3) {
         return fail("declip needs an input and an output");
@@ -783,6 +832,9 @@ int main(int argc, char** argv) {
     }
     if (command == "denoise") {
         return denoise(options);
+    }
+    if (command == "dehum") {
+        return dehumFile(options);
     }
     if (command == "declip") {
         return declipFile(options);

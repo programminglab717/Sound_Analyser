@@ -645,6 +645,68 @@ def main() -> int:
             else:
                 print("  ok  declip: unclipped material is left alone")
 
+        # De-humming. Two claims again, and the second is the one that keeps a
+        # restoration tool trustworthy: it takes the hum out, and on a
+        # recording with no hum in it, it does nothing whatsoever.
+        print("\ndehum:")
+        notes = [293.0, 392.0, 349.0, 440.0, 330.0, 494.0]
+        hum_rng = random.Random(5)
+        tune_frames = SAMPLE_RATE * 5
+        each = tune_frames // 6
+        tune: list[float] = []
+        for i in range(tune_frames):
+            which = min(5, i // each)
+            into = (i - which * each) / each
+            envelope = min(1.0, into * 30.0) * math.exp(-2.2 * into)
+            # Notes, not tones: a held sine is indistinguishable from hum, so
+            # material made of them would be testing the wrong thing.
+            frequency = notes[which] * (1.0 + 0.004 * math.sin(2.0 * math.pi * 5.2 * i / SAMPLE_RATE))
+            value = sum(
+                (0.10 / k) * math.sin(2.0 * math.pi * frequency * k * i / SAMPLE_RATE + 0.6 * k)
+                for k in range(1, 5)
+            )
+            tune.append(envelope * value + hum_rng.gauss(0.0, 0.004))
+        hummy = [
+            v + sum((0.02 / k) * math.sin(2.0 * math.pi * 50.0 * k * i / SAMPLE_RATE + 0.3 * k)
+                    for k in range(1, 41))
+            for i, v in enumerate(tune)
+        ]
+
+        tune_file = workspace / "tune.wav"
+        hummy_file = workspace / "hummy.wav"
+        write_samples(tune_file, tune)
+        write_samples(hummy_file, hummy)
+        tune_reference = load(tune_file)
+
+        cleaned = declicked(hummy_file, "dehum", "dehummed")
+        if cleaned is not None:
+            before = amplitude_at(load(hummy_file), 50.0, 0, len(hummy))
+            after = amplitude_at(cleaned, 50.0, 0, len(cleaned))
+            error_before = error_db(load(hummy_file), tune_reference)
+            error_after = error_db(cleaned, tune_reference)
+            if after > before * 0.1:
+                failures.append(f"dehum: 50 Hz went {before:.5f} -> {after:.5f}")
+            elif error_after > error_before - 6.0:
+                failures.append(
+                    f"dehum: error {error_before:.1f} dB -> {error_after:.1f} dB, wanted at "
+                    "least 6 dB better"
+                )
+            else:
+                print(
+                    f"  ok  dehum: 50 Hz {before:.5f} -> {after:.5f}, error "
+                    f"{error_before:.1f} dB -> {error_after:.1f} dB"
+                )
+
+        untouched_tune = declicked(tune_file, "dehum", "dehummed-clean")
+        if untouched_tune is not None:
+            moved = max((abs(a - b) for a, b in zip(untouched_tune, tune_reference)), default=0.0)
+            if moved > 0.0:
+                failures.append(
+                    f"dehum: a recording with no hum moved by {moved:.6f}"
+                )
+            else:
+                print("  ok  dehum: a recording with no hum comes back bit-identical")
+
         # Playback, against the null device. That device runs a real thread on a
         # real clock, so this exercises the ring, the render worker, the
         # callback and the position counter -- everything except the final

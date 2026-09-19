@@ -207,6 +207,40 @@ def main() -> int:
             after = error_db(repaired_samples, clean_samples)
             check("the clicks are gone", after < before - 20.0, f"{before:.1f} -> {after:.1f} dB")
 
+        print("dehum:")
+        # Not the 1 kHz tone the other checks use, for two reasons that are
+        # really one: it is perfectly steady, and 1000 Hz is exactly the
+        # twentieth harmonic of 50. A held sine at a hum harmonic *is* hum by
+        # every available test -- sa-dsp's own tests pin that -- so using it
+        # here would be checking the pathological case rather than the ordinary
+        # one. 1037 Hz is not a multiple of 50 and is left alone.
+        carrier = [
+            0.4 * math.sin(2.0 * math.pi * 1037.0 * i / SAMPLE_RATE)
+            for i in range(len(clean_samples))
+        ]
+        hum_file = workspace / "hummy.wav"
+        hummed = [
+            v + sum((0.02 / k) * math.sin(2.0 * math.pi * 50.0 * k * i / SAMPLE_RATE + 0.3 * k)
+                    for k in range(1, 41))
+            for i, v in enumerate(carrier)
+        ]
+        write_wav(hum_file, hummed)
+        dehummed_file = workspace / "dehummed.wav"
+        result = run("dehum", str(hum_file), str(dehummed_file))
+        check("exits cleanly", result.returncode == 0, result.stderr)
+        check("names the frequency it found", "50." in result.stdout, result.stdout)
+        if dehummed_file.exists():
+            dehummed_samples, rate = read_wav(dehummed_file)
+            before = tone_amplitude(hummed, 50.0, rate)
+            after = tone_amplitude(dehummed_samples, 50.0, rate)
+            check("the hum is gone", after < before * 0.1, f"{before:.5f} -> {after:.5f}")
+            survived = tone_amplitude(dehummed_samples, 1037.0, rate)
+            check(
+                "the tone it was sitting under survives",
+                abs(survived - 0.4) < 0.01,
+                f"1037 Hz came out at {survived:.4f}, wanted 0.4",
+            )
+
         print("declip:")
         # Deliberately not the 1 kHz tone the other checks use. A single
         # sustained tone, clipped every cycle, is the one case a model-based

@@ -17,6 +17,7 @@ add_library(sa-ui STATIC
     src/LoudnessPanel.cpp
     src/MainWindow.cpp
     src/SpectrogramView.cpp
+    src/SpectrumView.cpp
     src/TimeAxisView.cpp
     src/TimeRuler.cpp
     src/ViewGeometry.cpp
@@ -24,6 +25,7 @@ add_library(sa-ui STATIC
     include/sa/ui/LoudnessPanel.h
     include/sa/ui/MainWindow.h
     include/sa/ui/SpectrogramView.h
+    include/sa/ui/SpectrumView.h
     include/sa/ui/TimeAxisView.h
     include/sa/ui/TimeRuler.h
     include/sa/ui/WaveformView.h
