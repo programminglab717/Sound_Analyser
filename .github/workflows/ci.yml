@@ -125,6 +125,13 @@ jobs:
         run: cmake --preset tsan
       - name: Build
         run: cmake --build --preset tsan
+      # A clean sanitiser run is evidence only if the sanitiser was awake, and
+      # nothing about a green job distinguishes "no races" from "the flags
+      # stopped reaching the compiler". This compiles a program that is a data
+      # race and nothing else, with the flags read out of the build directory,
+      # and fails if it is not reported.
+      - name: Check ThreadSanitizer is awake
+        run: python3 tools/tsan_selftest.py build/tsan
       - name: Test
         run: ctest --preset tsan
         env:
