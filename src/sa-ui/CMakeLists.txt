@@ -16,6 +16,7 @@ add_library(sa-ui STATIC
     src/AnalysisOverlay.cpp
     src/AnalysisPanel.cpp
     src/AnalysisReadout.cpp
+    src/ChunkedPitch.cpp
     src/Colourmap.cpp
     src/EqCurve.cpp
     src/EqCurveView.cpp
@@ -60,6 +61,7 @@ if(SA_BUILD_TESTS)
     add_executable(sa-ui-tests
         tests/AnalysisOverlayTests.cpp
         tests/AnalysisReadoutTests.cpp
+        tests/ChunkedPitchTests.cpp
         tests/EqCurveTests.cpp
         tests/TimePlotTests.cpp
     )
