@@ -2,7 +2,6 @@
 #include <sa/analysis/LoudnessMeter.h>
 #include <sa/analysis/TruePeakMeter.h>
 
-#include <algorithm>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
@@ -10,7 +9,6 @@
 #include <limits>
 #include <numbers>
 #include <optional>
-#include <vector>
 
 using namespace sa;
 using namespace sa::analysis;
@@ -660,8 +658,8 @@ TEST_CASE("Degenerate input is refused rather than guessed at", "[analysis][cont
     }
 
     SECTION("audio shorter than one 400 ms block") {
-        // One frame short of a block, and one frame over it: the boundary
-        // itself, since 400 ms is exactly where a momentary value begins.
+        // One frame short of a block, then exactly a block: the boundary
+        // itself, since 400 ms is precisely where a momentary value begins.
         AudioBuffer justUnder{mono, framesFor(0.4, rate) - 1};
         fillSine(justUnder, 0, 1000.0, 0.3, rate);
         CHECK_FALSE(measureLoudnessContour(justUnder.constView(), rate, mono).hasValue());
