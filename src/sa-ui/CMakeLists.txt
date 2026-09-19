@@ -120,7 +120,23 @@ if(SA_BUILD_TESTS)
             tests/widget/WidgetTestMain.cpp
         )
         target_link_libraries(sa-ui-widget-tests PRIVATE sa-ui Catch2::Catch2)
-        catch_discover_tests(sa-ui-widget-tests)
+        # DL_PATHS is why this line differs from every other catch_discover_tests
+        # in the tree, and it is not optional on Windows.
+        #
+        # catch_discover_tests runs the binary at build time to enumerate its
+        # cases. This is the first test executable here that links Qt -- the
+        # windowless sa-ui-tests deliberately does not -- so it is the first one
+        # that needs Qt6Core.dll at that moment. On Linux the RPATH answers for
+        # that; on Windows nothing does, and the run dies with 0xc0000135,
+        # STATUS_DLL_NOT_FOUND, before a single test is discovered. That takes
+        # the whole build down, because failing to enumerate is a build error
+        # and not a test failure.
+        #
+        # DL_PATHS puts Qt's own directory on the search path for both the
+        # discovery run and the tests themselves, which is what it exists for.
+        # On Linux it lands on LD_LIBRARY_PATH and changes nothing.
+        catch_discover_tests(sa-ui-widget-tests
+                             DL_PATHS "$<TARGET_FILE_DIR:Qt6::Core>")
     else()
         message(STATUS "  sa-ui-widget-tests . SKIPPED (sanitiser build; see the comment "
                        "in src/sa-ui/CMakeLists.txt)")
