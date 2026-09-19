@@ -73,6 +73,27 @@ enum class FrequencyScale {
     Linear,      ///< Even spacing in Hz. Right for harmonic and intermodulation work.
 };
 
+/// Perceptually-ordered colour maps for spectrogram display.
+///
+/// The classic blue-green-red "rainbow" is excluded deliberately. It is not
+/// perceptually uniform -- equal steps in value produce unequal steps in
+/// apparent brightness -- so it invents edges where the data has none and hides
+/// edges where it does. It is also unreadable to the ~8% of men with red-green
+/// colour blindness, who are not a rounding error in an audio tool's audience.
+///
+/// Magma and viridis both increase monotonically in lightness, so they survive
+/// being printed in greyscale and stay legible to every kind of colour vision.
+///
+/// Here rather than in Colourmap.h, beside the other view setting that is a
+/// plain choice with no Qt in it. Colourmap.h holds the tables, and a table of
+/// QRgb pulls a Qt header in with it -- which the windowless layers, the
+/// settings among them, cannot have.
+enum class Colourmap {
+    Magma,   ///< Black to purple to orange to white. The default.
+    Viridis, ///< Dark blue to green to yellow. Better for fine detail.
+    Grey,    ///< For print, and for anyone who wants no hue at all.
+};
+
 /// Bottom of a logarithmic frequency axis, in Hz.
 ///
 /// Zero cannot be shown on a log axis and the bottom octaves carry almost no
