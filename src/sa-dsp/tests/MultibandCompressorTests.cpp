@@ -758,13 +758,15 @@ TEST_CASE("A run-up leaves the compressor already working at the first sample ke
     const AudioBuffer warmed = run(kRunUp, kRunUp + kBody);
     const AudioBuffer cold = run(0, kBody);
 
-    // Over ten milliseconds against a 50 ms attack a cold compressor has
-    // reached about a fifth of its travel, so it is still passing some 8 dB
-    // more of the band than a warmed one holding the full 10.5 dB down.
+    // Over the first ten milliseconds against a 50 ms attack the cold envelope
+    // has covered under a tenth of its travel -- the mean of 1 - exp(-t/50 ms)
+    // from 0 to 10 ms is 0.094 -- so it is still passing very nearly the whole
+    // band. Measured: -9.66 dBFS cold against -17.62 warmed, where the tone's
+    // own RMS is -9.03, so the warmed one is 8.6 dB down and the cold one 0.6.
     const double coldDb = decibels(rmsOf(cold, 48, 480));
     const double warmedDb = decibels(rmsOf(warmed, kRunUp, 480));
     CAPTURE(coldDb, warmedDb);
-    REQUIRE(coldDb > warmedDb + 3.0);
+    REQUIRE(coldDb > warmedDb + 6.0);
 }
 
 TEST_CASE("The edges of a multiband selection are blended, so the sum does not step") {
