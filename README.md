@@ -51,6 +51,10 @@ plugin hosting, measurement reporting) rather than access.
 | [06 — Spike: spectrogram at 60 fps](docs/06-spike-spectrogram.md) | The Phase 0 gating risk, measured |
 | [07 — Work queue](docs/07-autonomous-queue.md) | What is next, what is blocked, and on what |
 | [08 — What needs you](docs/08-for-review.md) | The list that cannot be closed without a person |
+| [Quick start](docs/QUICKSTART.md) | One page: download it, get past SmartScreen, hear something |
+| [User manual](docs/MANUAL.md) | Every panel, every command, and when not to trust a measurement |
+| [Licence agreement](docs/EULA.md) | Draft, pending legal review |
+| [Privacy policy](docs/PRIVACY.md) | Draft. Short, because the product collects nothing |
 | [ADRs](docs/adr/) | Architecture decision records for the choices that are expensive to reverse |
 
 ## Decisions already locked
