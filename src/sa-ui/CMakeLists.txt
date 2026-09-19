@@ -52,11 +52,13 @@ target_compile_features(sa-ui PUBLIC cxx_std_20)
 add_executable(auscultate src/main.cpp)
 target_link_libraries(auscultate PRIVATE sa-ui)
 
-# The view geometry and the EQ curve are deliberately windowless, so they are
-# tested the same way every other module is: by calling them. sa-warnings is
-# applied here although it is not applied to sa-ui, because nothing under
-# tests/ includes a Qt header -- the whole point of the classes it covers is
-# that they do not need one.
+# The view geometry, the EQ curve and the chunked contour are deliberately
+# windowless, so they are tested the same way every other module is: by calling
+# them. sa-warnings is applied here although it is not applied to sa-ui, because
+# nothing in this first binary includes a Qt header -- the whole point of the
+# classes it covers is that they do not need one. The widget binary below is
+# where anything that does need one lives, and it is kept separate so that this
+# one stays honest.
 if(SA_BUILD_TESTS)
     add_executable(sa-ui-tests
         tests/AnalysisOverlayTests.cpp
@@ -67,4 +69,17 @@ if(SA_BUILD_TESTS)
     )
     target_link_libraries(sa-ui-tests PRIVATE sa-ui sa-warnings Catch2::Catch2WithMain)
     catch_discover_tests(sa-ui-tests)
+
+    # And a second binary for the handful of claims a windowless class cannot
+    # be asked about: a panel that cancels a worker in the middle of a
+    # measurement, and a view whose claim is about the pen it drew a line with.
+    # It builds its own main so that there is a QApplication to make a widget
+    # under, and it is not given sa-warnings for the reason the library above
+    # is not: Qt's headers do not survive this project's warning set.
+    add_executable(sa-ui-widget-tests
+        tests/widget/PanelHandoffTests.cpp
+        tests/widget/WidgetTestMain.cpp
+    )
+    target_link_libraries(sa-ui-widget-tests PRIVATE sa-ui Catch2::Catch2)
+    catch_discover_tests(sa-ui-widget-tests)
 endif()
