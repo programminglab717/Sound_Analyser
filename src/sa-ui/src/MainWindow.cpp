@@ -414,6 +414,43 @@ void MainWindow::buildMenus() {
     addMap(tr("Magma"), Colourmap::Magma, true);
     addMap(tr("Viridis"), Colourmap::Viridis, false);
     addMap(tr("Greyscale"), Colourmap::Grey, false);
+
+    view->addSeparator();
+    view->addAction(tr("Set spectrum &reference"), QKeySequence{Qt::CTRL | Qt::Key_R}, this,
+                    &MainWindow::captureSpectrumReference);
+    clearReferenceAction_ =
+        view->addAction(tr("Clear spectrum reference"), this, &MainWindow::clearSpectrumReference);
+}
+
+void MainWindow::captureSpectrumReference() {
+    // The spectrum is computed behind the same quarter-second timer as the
+    // meters, so a batch run -- where a selection and this verb arrive in the
+    // same instant -- has nothing on screen yet to keep. Flush it first, the
+    // way normalising flushes the measurement it is about to use. Interactively
+    // this is a no-op, because by the time anyone reaches the menu the timer
+    // has long since fired.
+    if (analysisTimer_ != nullptr && analysisTimer_->isActive()) {
+        reanalyseNow();
+    }
+
+    // Whatever is on screen, not a fresh measurement of the selection. The
+    // curve shown is the curve being compared against, and taking it from the
+    // panel means the two are the same thing by construction rather than by
+    // two code paths agreeing.
+    if (!spectrum_ || !spectrum_->captureReference()) {
+        status_->setText(tr("There is no spectrum to keep as a reference yet"));
+        return;
+    }
+    status_->setText(tr("Spectrum reference set; later selections are drawn against it"));
+    refreshActions();
+}
+
+void MainWindow::clearSpectrumReference() {
+    if (spectrum_) {
+        spectrum_->clearReference();
+    }
+    status_->setText(tr("Spectrum reference cleared"));
+    refreshActions();
 }
 
 void MainWindow::setColourmap(Colourmap map) {
@@ -872,6 +909,9 @@ void MainWindow::refreshActions() {
     silenceAction_->setEnabled(selected);
     trimAction_->setEnabled(selected);
     exportSelectionAction_->setEnabled(selected);
+    if (clearReferenceAction_ != nullptr) {
+        clearReferenceAction_->setEnabled(spectrum_ != nullptr && spectrum_->hasReference());
+    }
     pasteAction_->setEnabled(document && clipboard_.frames() > 0);
     // Enabled whenever there is a document, not only once a measurement has
     // landed. The action waits for the measurement itself and says what it
@@ -2290,6 +2330,14 @@ bool MainWindow::applyOperation(const QString& name) {
             return false;
         }
         limitTo(ceiling);
+        return true;
+    }
+    if (name == "reference") {
+        captureSpectrumReference();
+        return spectrum_ != nullptr && spectrum_->hasReference();
+    }
+    if (name == "clearreference") {
+        clearSpectrumReference();
         return true;
     }
     if (name == "normalise") {

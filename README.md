@@ -88,6 +88,7 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | Markers and regions in the interface | ✅ Done — add, name, navigate, saved in sessions |
 | Reverse, invert polarity, swap channels, sum to mono | ✅ Done — exact to the sample, and obeys the selection |
 | Fades in five shapes | ✅ Done — linear, equal power, logarithmic, exponential, S-curve |
+| Spectrum reference for A/B tonal comparison | ✅ Done — freeze a curve, see later ones against it with the difference in dB |
 | A draggable EQ curve over the analyser | ⬜ Next |
 | GPU shader renderer | ⬜ An optimisation, not a requirement — the CPU path fits in the frame budget |
 

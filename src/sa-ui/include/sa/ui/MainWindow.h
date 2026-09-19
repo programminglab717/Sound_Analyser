@@ -215,6 +215,11 @@ private:
     /// Index of the marker nearest the caret, or -1 when there are none.
     [[nodiscard]] int nearestMarker() const noexcept;
 
+    /// Freeze the spectrum on screen to compare later selections against, and
+    /// forget it again.
+    void captureSpectrumReference();
+    void clearSpectrumReference();
+
     void learnNoiseProfile();
     void chooseDenoise();
     void chooseAttenuate();
@@ -282,6 +287,7 @@ private:
     QAction* healAction_ = nullptr;
     QAction* denoiseAction_ = nullptr;
     QAction* exportSelectionAction_ = nullptr;
+    QAction* clearReferenceAction_ = nullptr;
 
     QAction* playAction_ = nullptr;
     QTimer* playheadTimer_ = nullptr;

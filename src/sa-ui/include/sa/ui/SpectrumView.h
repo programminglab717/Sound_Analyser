@@ -34,6 +34,25 @@ public:
 
     void clear();
 
+    /// Freeze the average currently shown, to compare later ones against.
+    /// Returns false when there is nothing to freeze.
+    ///
+    /// The comparison a spectrum analyser is for. Judging a tonal balance
+    /// means asking "compared with what", and the honest answer is usually
+    /// another passage: the chorus against the verse, this take against the
+    /// last one, a master against the reference it is chasing. Remembering a
+    /// curve well enough to compare it with the next one is not a thing anyone
+    /// can do by eye, so the panel remembers it instead.
+    ///
+    /// Only the average is kept. The peak curve says how much a frequency
+    /// comes and goes, which is a question about one passage rather than a
+    /// comparison between two.
+    bool captureReference();
+
+    void clearReference();
+
+    [[nodiscard]] bool hasReference() const noexcept { return !reference_.empty(); }
+
     /// A line shown instead of the curves: "measuring", "nothing selected", a
     /// failure. Empty means draw the curves.
     void setNote(QString note);
@@ -62,12 +81,21 @@ private:
     /// Loudest value of `curve` in the bins covering [from, to) Hz, or nothing
     /// below the floor. Taking the loudest rather than the mean is what keeps a
     /// narrow peak visible when a column spans many bins.
-    [[nodiscard]] double loudestIn(const std::vector<float>& curve, double from, double to) const;
+    /// `rate` and `fftSize` are passed rather than read from the members
+    /// because the reference curve carries its own: it can have been captured
+    /// from a different file at a different sample rate, and mapping its bins
+    /// with the current file's spacing would draw it at the wrong frequencies.
+    [[nodiscard]] double loudestIn(const std::vector<float>& curve, double from, double to,
+                                   SampleRate rate, int fftSize) const;
 
     std::vector<float> average_;
     std::vector<float> peak_;
     SampleRate rate_{48000.0};
     int fftSize_ = 0;
+
+    std::vector<float> reference_;
+    SampleRate referenceRate_{48000.0};
+    int referenceFftSize_ = 0;
     QString note_;
     int cursorX_ = -1;
 };

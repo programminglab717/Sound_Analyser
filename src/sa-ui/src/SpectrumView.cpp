@@ -22,6 +22,10 @@ const QColor kAverageFill{86, 154, 214, 140};
 const QColor kAverageLine{126, 194, 244};
 const QColor kPeakLine{232, 186, 104};
 const QColor kCursorLine{220, 220, 230, 120};
+/// Deliberately not a third hue competing with the two curves: the reference
+/// is context, and a dashed neutral line reads as "what it was" without
+/// fighting the thing being looked at.
+const QColor kReferenceLine{206, 210, 222, 190};
 
 } // namespace
 
@@ -44,6 +48,10 @@ void SpectrumView::clear() {
     average_.clear();
     peak_.clear();
     fftSize_ = 0;
+    // The reference deliberately survives. It is cleared only when asked for,
+    // because it is meant to outlive the thing it is being compared against --
+    // including a different selection, and including a different file, which
+    // is the case of matching a mix to a record somebody handed you.
     update();
 }
 
@@ -78,11 +86,12 @@ int SpectrumView::yAtLevel(double decibels) const {
     return plot.top() + static_cast<int>(std::lround(fraction * (plot.height() - 1)));
 }
 
-double SpectrumView::loudestIn(const std::vector<float>& curve, double from, double to) const {
-    if (curve.empty() || fftSize_ <= 0) {
+double SpectrumView::loudestIn(const std::vector<float>& curve, double from, double to,
+                               SampleRate rate, int fftSize) const {
+    if (curve.empty() || fftSize <= 0) {
         return kBottomDb;
     }
-    const double perBin = rate_.hz() / static_cast<double>(fftSize_);
+    const double perBin = rate.hz() / static_cast<double>(fftSize);
     if (!(perBin > 0.0)) {
         return kBottomDb;
     }
@@ -98,6 +107,23 @@ double SpectrumView::loudestIn(const std::vector<float>& curve, double from, dou
         loudest = std::max(loudest, static_cast<double>(curve[static_cast<std::size_t>(bin)]));
     }
     return loudest;
+}
+
+bool SpectrumView::captureReference() {
+    if (average_.empty() || fftSize_ <= 0) {
+        return false;
+    }
+    reference_ = average_;
+    referenceRate_ = rate_;
+    referenceFftSize_ = fftSize_;
+    update();
+    return true;
+}
+
+void SpectrumView::clearReference() {
+    reference_.clear();
+    referenceFftSize_ = 0;
+    update();
 }
 
 void SpectrumView::paintEvent(QPaintEvent* /*event*/) {
@@ -147,12 +173,17 @@ void SpectrumView::paintEvent(QPaintEvent* /*event*/) {
     const int columns = plot.width();
     std::vector<double> averageDb(static_cast<std::size_t>(columns));
     std::vector<double> peakDb(static_cast<std::size_t>(columns));
+    std::vector<double> referenceDb(static_cast<std::size_t>(columns), kBottomDb);
     for (int column = 0; column < columns; ++column) {
         const double from = frequencyAtX(plot.left() + column);
         const double to = frequencyAtX(plot.left() + column + 1);
-        averageDb[static_cast<std::size_t>(column)] = loudestIn(average_, from, to);
+        averageDb[static_cast<std::size_t>(column)] =
+            loudestIn(average_, from, to, rate_, fftSize_);
         peakDb[static_cast<std::size_t>(column)] =
-            peak_.empty() ? kBottomDb : loudestIn(peak_, from, to);
+            peak_.empty() ? kBottomDb : loudestIn(peak_, from, to, rate_, fftSize_);
+        referenceDb[static_cast<std::size_t>(column)] =
+            reference_.empty() ? kBottomDb
+                               : loudestIn(reference_, from, to, referenceRate_, referenceFftSize_);
     }
 
     QPainterPath filled;
@@ -165,6 +196,19 @@ void SpectrumView::paintEvent(QPaintEvent* /*event*/) {
     painter.fillPath(filled, kAverageFill);
 
     painter.setRenderHint(QPainter::Antialiasing, true);
+    // Under the current curves, so the thing being looked at stays on top.
+    if (!reference_.empty()) {
+        QPainterPath line;
+        line.moveTo(plot.left(), yAtLevel(referenceDb[0]));
+        for (int column = 1; column < columns; ++column) {
+            line.lineTo(plot.left() + column,
+                        yAtLevel(referenceDb[static_cast<std::size_t>(column)]));
+        }
+        QPen pen{kReferenceLine, 1.2};
+        pen.setStyle(Qt::DashLine);
+        painter.setPen(pen);
+        painter.drawPath(line);
+    }
     if (!peak_.empty()) {
         QPainterPath line;
         line.moveTo(plot.left(), yAtLevel(peakDb[0]));
@@ -192,10 +236,21 @@ void SpectrumView::paintEvent(QPaintEvent* /*event*/) {
 
         const int column = std::clamp(cursorX_ - plot.left(), 0, columns - 1);
         const double hz = frequencyAtX(cursorX_);
-        const QString text = tr("%1  avg %2  peak %3")
-                                 .arg(QString::fromStdString(formatFrequency(hz)))
-                                 .arg(averageDb[static_cast<std::size_t>(column)], 0, 'f', 1)
-                                 .arg(peakDb[static_cast<std::size_t>(column)], 0, 'f', 1);
+        QString text = tr("%1  avg %2  peak %3")
+                           .arg(QString::fromStdString(formatFrequency(hz)))
+                           .arg(averageDb[static_cast<std::size_t>(column)], 0, 'f', 1)
+                           .arg(peakDb[static_cast<std::size_t>(column)], 0, 'f', 1);
+        if (!reference_.empty()) {
+            // The difference, signed and explicitly so, because that is the
+            // number being looked for: reading it off two curves by eye is
+            // what the reference exists to save.
+            const double difference = averageDb[static_cast<std::size_t>(column)] -
+                                      referenceDb[static_cast<std::size_t>(column)];
+            text += tr("  ref %1 (%2%3)")
+                        .arg(referenceDb[static_cast<std::size_t>(column)], 0, 'f', 1)
+                        .arg(difference >= 0.0 ? QStringLiteral("+") : QStringLiteral(""))
+                        .arg(difference, 0, 'f', 1);
+        }
         painter.setPen(kAxisText);
         painter.drawText(QRect{plot.left() + 6, plot.top() + 2, plot.width() - 12, 16},
                          Qt::AlignLeft | Qt::AlignVCenter, text);

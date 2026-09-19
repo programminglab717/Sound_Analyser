@@ -301,6 +301,43 @@ def main() -> int:
             print(f"FAIL: only {counts[1]} marker-coloured pixels with two markers placed")
             return 1
 
+        # The spectrum reference. Checked by comparing renders rather than by
+        # hunting for a colour: the line is dashed, antialiased and drawn with
+        # alpha, so no pixel in it holds the constant the code names. What can
+        # be said exactly is that setting a reference changes the picture and
+        # clearing it puts the picture back, and those are the two things that
+        # matter.
+        references = {}
+        for name, verbs in (
+            ("plain", "select:4-8"),
+            ("set", "select:0-4,reference,select:4-8"),
+            ("cleared", "select:0-4,reference,clearreference,select:4-8"),
+        ):
+            shot = workspace / f"reference-{name}.png"
+            done = subprocess.run(
+                [str(arguments.binary), str(audio), "--apply", verbs,
+                 "--screenshot-spectrum", str(shot)],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            if done.returncode != 0 or not shot.exists():
+                print(f"FAIL: spectrum reference '{name}' exited {done.returncode} -- {done.stderr}")
+                return 1
+            _, _, references[name] = read_png(shot)
+
+        def differing(a, b) -> int:
+            return sum(1 for ra, rb in zip(a, b) for pa, pb in zip(ra, rb) if pa != pb)
+
+        changed = differing(references["plain"], references["set"])
+        if changed < 200:
+            print(f"FAIL: setting a spectrum reference changed only {changed} pixels")
+            return 1
+        restored = differing(references["plain"], references["cleared"])
+        if restored != 0:
+            print(f"FAIL: clearing the reference left {restored} pixels changed")
+            return 1
+
         # An empty render is one flat colour. A real one is not.
         region = [pixel for row in plot_rows[::3] for pixel in row[::4]]
         distinct = len(set(region))
