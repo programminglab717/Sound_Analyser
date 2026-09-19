@@ -4,6 +4,7 @@
 #include <sa/dsp/OfflineLimiter.h>
 #include <sa/dsp/ParametricEq.h>
 #include <sa/dsp/StereoLink.h>
+#include <sa/dsp/TimeStretch.h>
 #include <sa/engine/BufferSource.h>
 #include <sa/engine/Consolidate.h>
 #include <sa/engine/Edits.h>
@@ -11,7 +12,6 @@
 #include <sa/io/AudioFile.h>
 #include <sa/io/WavWriter.h>
 #include <sa/spectral/SpectralEdit.h>
-#include <sa/spectral/TimeStretch.h>
 #include <sa/ui/MainWindow.h>
 #include <sa/ui/ViewGeometry.h>
 
@@ -1125,8 +1125,7 @@ void MainWindow::chooseTimeStretch() {
     bool accepted = false;
     const double percent = QInputDialog::getDouble(
         this, tr("Time stretch"), tr("New length, as a percentage of the current one:"), 100.0,
-        100.0 * spectral::stretch::kMinimumFactor, 100.0 * spectral::stretch::kMaximumFactor, 2,
-        &accepted);
+        100.0 * dsp::stretch::kMinimumFactor, 100.0 * dsp::stretch::kMaximumFactor, 2, &accepted);
     if (!accepted || std::abs(percent - 100.0) < 1e-9) {
         return;
     }
@@ -1140,7 +1139,7 @@ void MainWindow::choosePitchShift() {
     bool accepted = false;
     const double semitones = QInputDialog::getDouble(
         this, tr("Pitch shift"), tr("Semitones, fractions allowed (0.01 is a cent):"), 0.0,
-        spectral::stretch::kMinimumSemitones, spectral::stretch::kMaximumSemitones, 2, &accepted);
+        dsp::stretch::kMinimumSemitones, dsp::stretch::kMaximumSemitones, 2, &accepted);
     if (!accepted || std::abs(semitones) < 1e-9) {
         return;
     }
@@ -1169,9 +1168,9 @@ bool MainWindow::applyTimeStretch(double factor, const QString& label) {
     status_->setText(tr("Stretching…"));
     status_->repaint();
 
-    spectral::StretchSettings settings;
+    dsp::StretchSettings settings;
     settings.factor = factor;
-    auto stretched = spectral::timeStretch(span, settings);
+    auto stretched = dsp::timeStretch(span, settings);
     if (!stretched) {
         status_->setText(tr("Could not stretch: %1")
                              .arg(QString::fromStdString(std::string{stretched.error().what()})));
@@ -1228,9 +1227,9 @@ bool MainWindow::applyPitchShift(double semitones, const QString& label) {
     status_->setText(tr("Shifting…"));
     status_->repaint(); // As above: no event loop, so no re-entry.
 
-    spectral::PitchSettings settings;
+    dsp::PitchSettings settings;
     settings.semitones = semitones;
-    auto shifted = spectral::pitchShift(span, settings);
+    auto shifted = dsp::pitchShift(span, settings);
     if (!shifted) {
         status_->setText(tr("Could not shift: %1")
                              .arg(QString::fromStdString(std::string{shifted.error().what()})));

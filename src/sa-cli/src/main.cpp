@@ -14,6 +14,7 @@
 #include <sa/analysis/SignalStatistics.h>
 #include <sa/analysis/TruePeakMeter.h>
 #include <sa/dsp/Resampler.h>
+#include <sa/dsp/TimeStretch.h>
 #include <sa/engine/BufferSource.h>
 #include <sa/engine/Consolidate.h>
 #include <sa/engine/Document.h>
@@ -23,7 +24,6 @@
 #include <sa/io/AudioFile.h>
 #include <sa/io/WavWriter.h>
 #include <sa/spectral/Denoise.h>
-#include <sa/spectral/TimeStretch.h>
 
 #include <algorithm>
 #include <cctype>
@@ -605,8 +605,8 @@ int stretch(const Options& options) {
     }
     const double percent = options.number("length", 100.0);
     const double factor = percent / 100.0;
-    if (!(factor >= sa::spectral::stretch::kMinimumFactor &&
-          factor <= sa::spectral::stretch::kMaximumFactor)) {
+    if (!(factor >= sa::dsp::stretch::kMinimumFactor &&
+          factor <= sa::dsp::stretch::kMaximumFactor)) {
         return fail("--length is outside 10 to 1000 percent");
     }
 
@@ -615,9 +615,9 @@ int stretch(const Options& options) {
     return reshape(
         options,
         [factor](const sa::AudioBuffer& audio) {
-            sa::spectral::StretchSettings settings;
+            sa::dsp::StretchSettings settings;
             settings.factor = factor;
-            return sa::spectral::timeStretch(audio, settings);
+            return sa::dsp::timeStretch(audio, settings);
         },
         described);
 }
@@ -630,20 +630,20 @@ int pitch(const Options& options) {
         return fail("pitch needs --semitones <n>; fractions are allowed, and 0.01 is a cent");
     }
     const double semitones = options.number("semitones", 0.0);
-    if (!(semitones >= sa::spectral::stretch::kMinimumSemitones &&
-          semitones <= sa::spectral::stretch::kMaximumSemitones)) {
+    if (!(semitones >= sa::dsp::stretch::kMinimumSemitones &&
+          semitones <= sa::dsp::stretch::kMaximumSemitones)) {
         return fail("--semitones is outside three octaves either way");
     }
 
     char described[64];
     std::snprintf(described, sizeof described, "shifted by %+.2f semitones (x%.5f)", semitones,
-                  sa::spectral::pitchRatio(semitones));
+                  sa::dsp::pitchRatio(semitones));
     return reshape(
         options,
         [semitones](const sa::AudioBuffer& audio) {
-            sa::spectral::PitchSettings settings;
+            sa::dsp::PitchSettings settings;
             settings.semitones = semitones;
-            return sa::spectral::pitchShift(audio, settings);
+            return sa::dsp::pitchShift(audio, settings);
         },
         described);
 }

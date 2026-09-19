@@ -1,6 +1,6 @@
 #include <sa/dsp/Resampler.h>
 #include <sa/dsp/Stft.h>
-#include <sa/spectral/TimeStretch.h>
+#include <sa/dsp/TimeStretch.h>
 
 #include <algorithm>
 #include <cmath>
@@ -8,7 +8,7 @@
 #include <numbers>
 #include <vector>
 
-namespace sa::spectral {
+namespace sa::dsp {
 
 namespace {
 
@@ -91,11 +91,11 @@ Result<AudioBuffer> timeStretch(const AudioBuffer& audio, const StretchSettings&
         return Error{ErrorCode::OutOfRange, "stretch factor is outside 0.1 to 10"};
     }
 
-    auto made = dsp::Stft::create(settings.fftSize, settings.hopSize, settings.window);
+    auto made = Stft::create(settings.fftSize, settings.hopSize, settings.window);
     if (!made) {
         return made.error();
     }
-    const dsp::Stft& stft = made.value();
+    const Stft& stft = made.value();
 
     const auto bins = static_cast<std::size_t>(stft.binCount());
     const SampleCount inputFrames = stft.frameCount(audio.frames());
@@ -230,25 +230,25 @@ Result<AudioBuffer> pitchShift(const AudioBuffer& audio, const PitchSettings& se
 
     // Undo the length change by resampling, which takes the pitch with it: the
     // same waveform read faster is the same waveform higher up.
-    dsp::ResamplerSpec spec;
+    ResamplerSpec spec;
     spec.inputRate = SampleRate{kReferenceRate * ratio};
     spec.outputRate = SampleRate{kReferenceRate};
     spec.quality = settings.quality;
 
     AudioBuffer result{audio.layout(), audio.frames()};
     for (int channel = 0; channel < audio.channelCount(); ++channel) {
-        auto converter = dsp::Resampler::create(spec);
+        auto converter = Resampler::create(spec);
         if (!converter) {
             return converter.error();
         }
-        dsp::Resampler& resampler = converter.value();
+        Resampler& resampler = converter.value();
 
         const float* input = source.channel(channel);
         float* output = result.channel(channel);
         SampleCount consumed = 0;
         SampleCount produced = 0;
         while (consumed < source.frames() && produced < result.frames()) {
-            const dsp::ResamplerProgress progress =
+            const ResamplerProgress progress =
                 resampler.process(input + consumed, source.frames() - consumed, output + produced,
                                   result.frames() - produced);
             if (progress.inputConsumed == 0 && progress.outputProduced == 0) {
@@ -275,4 +275,4 @@ Result<AudioBuffer> pitchShift(const AudioBuffer& audio, const PitchSettings& se
     return result;
 }
 
-} // namespace sa::spectral
+} // namespace sa::dsp

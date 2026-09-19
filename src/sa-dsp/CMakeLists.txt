@@ -9,6 +9,7 @@ add_library(sa-dsp STATIC
     src/OfflineLimiter.cpp
     src/Resampler.cpp
     src/Stft.cpp
+    src/TimeStretch.cpp
     src/TruePeakDetector.cpp
     src/Window.cpp
     src/WindowedSinc.cpp
@@ -30,6 +31,7 @@ if(SA_BUILD_TESTS)
         tests/ResamplerTests.cpp
         tests/StereoLinkTests.cpp
         tests/StftTests.cpp
+        tests/TimeStretchTests.cpp
         tests/TruePeakTests.cpp
         tests/WindowTests.cpp
     )

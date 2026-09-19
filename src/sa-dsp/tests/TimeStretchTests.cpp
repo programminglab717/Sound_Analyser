@@ -1,4 +1,4 @@
-#include <sa/spectral/TimeStretch.h>
+#include <sa/dsp/TimeStretch.h>
 
 #include <algorithm>
 #include <catch2/catch_approx.hpp>
@@ -11,7 +11,7 @@
 #include <vector>
 
 using namespace sa;
-using namespace sa::spectral;
+using namespace sa::dsp;
 using Catch::Approx;
 
 namespace {

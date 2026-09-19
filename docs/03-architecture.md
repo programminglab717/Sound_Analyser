@@ -36,28 +36,50 @@ identical types meaning the same thing are worse than a dependency, because
 every boundary between them needs a conversion shim that exists only to launder
 a name.
 
+A module marked ⬜ is planned and does not exist yet; everything else is built.
+
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ sa-app        shell, entitlements, updater, crash reporting   │
+│ ⬜ sa-app     shell, entitlements, updater, crash reporting   │
 ├──────────────────────────────────────────────────────────────┤
-│ sa-ui         Qt 6 shell · OpenGL spectrogram renderer        │
-├──────────────────────────────────────────────────────────────┤
-│ sa-engine     document model · EDL · undo · render scheduler  │
+│ sa-ui         Qt 6 widgets · CPU waveform & spectrogram       │
 ├───────────────────────────┬──────────────────────────────────┤
-│ sa-spectral               │ sa-host   CLAP, out-of-process    │
-│ STFT/ISTFT · layers       │                                   │
+│ sa-transport  playback ·   │ sa-device  WASAPI, ALSA, null    │
+│ playhead · ring buffer     │                                  │
+├───────────────────────────┴──────────────────────────────────┤
+│ sa-engine     document model · EDL · undo · sessions          │
+├───────────────────────────┬──────────────────────────────────┤
+│ sa-spectral               │ ⬜ sa-host  CLAP, out-of-process  │
+│ spectrogram cache ·       │                                  │
+│ attenuate · heal · denoise │                                 │
 ├───────────────┬───────────┴───────────┬──────────────────────┤
-│ sa-dsp        │ sa-analysis           │ sa-ml                 │
-│ filters, FFT, │ loudness, acoustics,  │ ONNX Runtime,         │
-│ dynamics,     │ MIR, forensics        │ EP selection,         │
-│ time/pitch    │                       │ model registry        │
+│ sa-dsp        │ sa-analysis           │ ⬜ sa-ml              │
+│ filters, FFT, │ loudness, true peak,  │ ONNX Runtime,        │
+│ STFT, dynamics│ statistics, targets   │ EP selection,        │
+│ resampling,   │                       │ model registry       │
+│ time/pitch    │                       │                      │
 ├───────────────┴───────────────────────┴──────────────────────┤
-│ sa-io         codecs · streaming reader · peak & spec caches  │
+│ sa-io         codecs · streaming reader · peak cache          │
 ├──────────────────────────────────────────────────────────────┤
 │ sa-core       buffers · channel layouts · time units · errors │
 └──────────────────────────────────────────────────────────────┘
                  sa-cli  ──▶ links sa-engine and below (no UI)
 ```
+
+Two things in that picture are worth saying out loud, because both were
+decisions rather than accidents:
+
+**The spectrogram renderer is CPU, not OpenGL.** It was measured before it was
+written: 11.59 ms against a 16.67 ms frame budget at 1080p. A GPU path remains
+an optimisation we could take, not a requirement we ducked -- and not requiring
+a GPU was a product decision.
+
+**Time and pitch live in `sa-dsp`, not `sa-spectral`, although they are built on
+the STFT.** The dividing line is not "does it use a transform" but "does it need
+a source". `sa-spectral` knows about `AudioSource`, because a spectrogram is
+built by streaming a file that does not fit in memory; a time stretch takes a
+buffer and returns a buffer, so putting it there would drag `sa-io` into every
+caller that only wants to stretch some samples.
 
 `sa-cli` existing from early on is a forcing function: if the engine can be
 driven headlessly, the UI is genuinely decoupled, and batch/scripting in P5

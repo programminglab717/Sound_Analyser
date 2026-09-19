@@ -6,7 +6,7 @@
 #include <sa/dsp/Resampler.h>
 #include <sa/dsp/Window.h>
 
-namespace sa::spectral {
+namespace sa::dsp {
 
 /// Changing how long something lasts without changing what it sounds like, and
 /// changing what it sounds like without changing how long it lasts.
@@ -75,7 +75,7 @@ struct StretchSettings {
     /// it.
     int fftSize = 2048;
     int hopSize = 256;
-    dsp::WindowType window = dsp::WindowType::Hann;
+    WindowType window = WindowType::Hann;
 
     /// Lock every bin of a partial to the partial's own peak.
     ///
@@ -131,7 +131,7 @@ struct PitchSettings {
 
     /// The resample that turns the stretch into a shift. Best is the default
     /// because a pitch shift is an edit a user commits to, not a preview.
-    dsp::ResamplerQuality quality = dsp::ResamplerQuality::Best;
+    ResamplerQuality quality = ResamplerQuality::Best;
 };
 
 /// Shift `audio` in pitch, leaving its length alone.
@@ -146,4 +146,4 @@ struct PitchSettings {
 /// The frequency ratio `semitones` describes: 2^(semitones/12).
 [[nodiscard]] double pitchRatio(double semitones) noexcept;
 
-} // namespace sa::spectral
+} // namespace sa::dsp
