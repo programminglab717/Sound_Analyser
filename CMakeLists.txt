@@ -27,6 +27,52 @@ endif()
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 # ---------------------------------------------------------------------------
+# Windows version resource
+# ---------------------------------------------------------------------------
+# Edited deliberately rather than taken from the build date, so a rebuild in
+# January does not silently restate the copyright.
+set(SA_PUBLISHER "Delta Creation Co.")
+set(SA_COPYRIGHT_YEAR "2026")
+
+if(WIN32)
+    # project() declares CXX only. A .rc source needs the resource compiler
+    # enabled explicitly, or the Ninja generator has no rule for it.
+    enable_language(RC)
+endif()
+
+# Give a Windows executable its version resource: publisher, product, version.
+#
+# Without one the Details tab of the file properties dialog is empty. That is
+# worth fixing generally, and it matters more than usual here because the
+# product ships unsigned (see docs/INSTALLING.md): this resource is the only
+# thing inside the binary that names who made it. It proves nothing -- anyone
+# can write any name into a resource -- but a blank publisher on a program
+# Windows has just warned about looks exactly like what the warning is for.
+#
+# Does nothing off Windows, so the Linux build and its tests are untouched.
+function(sa_add_version_resource target)
+    if(NOT WIN32)
+        return()
+    endif()
+
+    cmake_parse_arguments(SA_RC "" "DESCRIPTION;FILENAME" "" ${ARGN})
+    if(NOT SA_RC_DESCRIPTION OR NOT SA_RC_FILENAME)
+        message(FATAL_ERROR "sa_add_version_resource(${target}) needs DESCRIPTION and FILENAME")
+    endif()
+
+    set(SA_RC_VERSION_FIELDS
+        "${PROJECT_VERSION_MAJOR},${PROJECT_VERSION_MINOR},${PROJECT_VERSION_PATCH},0")
+    set(SA_RC_VERSION_TEXT "${PROJECT_VERSION}")
+    set(SA_RC_YEAR "${SA_COPYRIGHT_YEAR}")
+    set(SA_RC_INTERNAL_NAME "${target}")
+    set(SA_RC_ORIGINAL_FILENAME "${SA_RC_FILENAME}")
+
+    set(generated "${CMAKE_CURRENT_BINARY_DIR}/${target}-version.rc")
+    configure_file("${CMAKE_SOURCE_DIR}/packaging/windows/version.rc.in" "${generated}" @ONLY)
+    target_sources(${target} PRIVATE "${generated}")
+endfunction()
+
+# ---------------------------------------------------------------------------
 # Warning interface — every sa-* target links this
 # ---------------------------------------------------------------------------
 add_library(sa-warnings INTERFACE)

@@ -1,0 +1,50 @@
+/* Windows version resource, configured by sa_add_version_resource() in the
+ * top-level CMakeLists.txt.
+ *
+ * Without this the executables ship with an empty Details tab: no publisher, no
+ * version, nothing for a user to check against what they think they downloaded.
+ * That matters more here than it would for a signed product, because for an
+ * unsigned one this resource is the only thing in the binary that says who made
+ * it. It is not evidence -- anyone can write any name in here -- but its
+ * absence looks exactly like the thing a user is being warned about.
+ *
+ * ASCII only. The resource compiler reads a .rc in the system code page unless
+ * the file carries a byte order mark, so "(C)" rather than a copyright sign.
+ */
+
+#include <winver.h>
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     @SA_RC_VERSION_FIELDS@
+PRODUCTVERSION  @SA_RC_VERSION_FIELDS@
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+#ifdef _DEBUG
+FILEFLAGS       VS_FF_DEBUG
+#else
+FILEFLAGS       0x0L
+#endif
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        /* 0409 is US English, 04B0 is Unicode, matching the Translation entry
+         * below. Both blocks have to agree or the shell shows nothing. */
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "Delta Creation Co."
+            VALUE "FileDescription",  "@SA_RC_DESCRIPTION@"
+            VALUE "FileVersion",      "@SA_RC_VERSION_TEXT@"
+            VALUE "InternalName",     "@SA_RC_INTERNAL_NAME@"
+            VALUE "LegalCopyright",   "Copyright (C) @SA_RC_YEAR@ Delta Creation Co."
+            VALUE "OriginalFilename", "@SA_RC_ORIGINAL_FILENAME@"
+            VALUE "ProductName",      "Auscultate"
+            VALUE "ProductVersion",   "@SA_RC_VERSION_TEXT@"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
