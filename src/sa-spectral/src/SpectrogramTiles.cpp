@@ -17,9 +17,9 @@ SpectrogramTiles::SpectrogramTiles(SpectrogramTiles&& other) noexcept
     : source_(std::move(other.source_)), channel_(other.channel_),
       settings_(std::move(other.settings_)), binCount_(other.binCount_),
       sourceFrames_(other.sourceFrames_), fineFrameCount_(other.fineFrameCount_),
-      overview_(std::move(other.overview_)), tiles_(std::move(other.tiles_)),
-      order_(std::move(other.order_)), where_(std::move(other.where_)),
-      residentBytes_(other.residentBytes_) {
+      overview_(std::move(other.overview_)), overviewLoaded_(other.overviewLoaded_),
+      tiles_(std::move(other.tiles_)), order_(std::move(other.order_)),
+      where_(std::move(other.where_)), residentBytes_(other.residentBytes_) {
     other.residentBytes_ = 0;
 }
 
@@ -32,6 +32,7 @@ SpectrogramTiles& SpectrogramTiles::operator=(SpectrogramTiles&& other) noexcept
         sourceFrames_ = other.sourceFrames_;
         fineFrameCount_ = other.fineFrameCount_;
         overview_ = std::move(other.overview_);
+        overviewLoaded_ = other.overviewLoaded_;
         tiles_ = std::move(other.tiles_);
         order_ = std::move(other.order_);
         where_ = std::move(other.where_);
@@ -89,13 +90,132 @@ int SpectrogramTiles::coarseLevelFor(SampleCount sourceFrames, const Spectrogram
     return 24;
 }
 
+TileLayout SpectrogramTiles::layoutFor(const Settings& settings, int channel) noexcept {
+    TileLayout layout;
+    layout.config = settings.config;
+    layout.coarseLevel = settings.coarseLevel;
+    layout.tileFrames = settings.tileFrames;
+    layout.channel = channel;
+    return layout;
+}
+
+bool SpectrogramTiles::storeUsable() const noexcept {
+    return settings_.store != nullptr && !settings_.key.isNull();
+}
+
+SampleCount SpectrogramTiles::overviewFrameCount() const noexcept {
+    const SampleCount group = SampleCount{1} << settings_.coarseLevel;
+    return (fineFrameCount_ + group - 1) / group;
+}
+
+bool SpectrogramTiles::loadOverviewFromStore() {
+    if (!storeUsable() || sourceFrames_ <= 0) {
+        return false;
+    }
+    Result<StoredTile> stored =
+        settings_.store->read(settings_.key, kOverviewEntry, layoutFor(settings_, channel_));
+    if (!stored) {
+        return false;
+    }
+
+    // The key already covers everything that decides these, so a disagreement
+    // means a file that is not what its name says it is. Checking anyway costs
+    // five comparisons and is the difference between rebuilding and drawing one
+    // recording's overview over another's waveform.
+    StoredTile& tile = stored.value();
+    const SampleCount hop = settings_.config.hopSize * (SampleCount{1} << settings_.coarseLevel);
+    if (tile.binCount != binCount_ || tile.sourceFrames != sourceFrames_ || tile.hop != hop ||
+        tile.firstFrame != 0 || tile.frameCount != overviewFrameCount()) {
+        return false;
+    }
+
+    Result<SpectrogramPyramid> rebuilt =
+        SpectrogramPyramid::fromLevelZero(settings_.config, binCount_, sourceFrames_, hop,
+                                          tile.frameCount, std::move(tile.magnitudes));
+    if (!rebuilt) {
+        return false;
+    }
+    overview_ = std::move(rebuilt).value();
+    return true;
+}
+
+void SpectrogramTiles::saveOverviewToStore() {
+    if (!storeUsable() || overview_.isEmpty()) {
+        return;
+    }
+    StoredTile tile;
+    tile.firstFrame = 0;
+    tile.frameCount = overview_.frameCountAt(0);
+    tile.hop = overview_.hopAt(0);
+    tile.sourceFrames = sourceFrames_;
+    tile.binCount = binCount_;
+
+    const auto bins = static_cast<std::size_t>(binCount_);
+    tile.magnitudes.resize(static_cast<std::size_t>(tile.frameCount) * bins);
+    for (SampleCount frame = 0; frame < tile.frameCount; ++frame) {
+        const std::uint8_t* data = overview_.frameData(0, frame);
+        if (data == nullptr) {
+            return;
+        }
+        std::copy_n(data, bins,
+                    tile.magnitudes.begin() +
+                        static_cast<std::ptrdiff_t>(static_cast<std::size_t>(frame) * bins));
+    }
+    // A store that will not take it is a store that will not take it. The
+    // overview is already built and already correct.
+    (void)settings_.store->write(settings_.key, kOverviewEntry, layoutFor(settings_, channel_),
+                                 tile);
+}
+
+bool SpectrogramTiles::loadTileFromStore(Tile& tile) {
+    if (!storeUsable()) {
+        return false;
+    }
+    Result<StoredTile> stored =
+        settings_.store->read(settings_.key, tileEntry(tile.index), layoutFor(settings_, channel_));
+    if (!stored) {
+        return false;
+    }
+    StoredTile& got = stored.value();
+    if (got.binCount != binCount_ || got.firstFrame != tile.firstFrame ||
+        got.frameCount != tile.frameCount || got.hop != settings_.config.hopSize ||
+        got.sourceFrames != sourceFrames_) {
+        return false;
+    }
+    tile.magnitudes = std::move(got.magnitudes);
+    return true;
+}
+
+void SpectrogramTiles::saveTileToStore(const Tile& tile) {
+    if (!storeUsable()) {
+        return;
+    }
+    StoredTile stored;
+    stored.firstFrame = tile.firstFrame;
+    stored.frameCount = tile.frameCount;
+    stored.hop = settings_.config.hopSize;
+    stored.sourceFrames = sourceFrames_;
+    stored.binCount = binCount_;
+    stored.magnitudes = tile.magnitudes;
+    (void)settings_.store->write(settings_.key, tileEntry(tile.index),
+                                 layoutFor(settings_, channel_), stored);
+}
+
 Status SpectrogramTiles::buildOverview(const JobMonitor& monitor) {
+    overviewLoaded_ = false;
+    if (loadOverviewFromStore()) {
+        overviewLoaded_ = true;
+        monitor.report(1.0);
+        return {};
+    }
+
     auto built = SpectrogramPyramid::buildDecimated(*source_, channel_, settings_.config,
                                                     settings_.coarseLevel, monitor);
     if (!built) {
         return built.error();
     }
     overview_ = std::move(built).value();
+    saveOverviewToStore();
     return {};
 }
 
@@ -172,24 +292,33 @@ Status SpectrogramTiles::ensureDetail(SampleIndex startSample, SampleIndex endSa
         if (tile.frameCount <= 0) {
             continue;
         }
-        tile.magnitudes.assign(static_cast<std::size_t>(tile.frameCount) * bins, std::uint8_t{0});
 
-        // One analyser per tile. Its read buffer sweeps forward through the
-        // tile, so the audio under a tile is read once.
-        auto made = detail::FrameAnalyser::create(*source_, channel_, settings_.config);
-        if (!made) {
-            return made.error();
-        }
-        for (SampleCount frame = 0; frame < tile.frameCount; ++frame) {
-            if (monitor.shouldCancel()) {
-                return Error{ErrorCode::Cancelled, "cancelled"};
+        // The store first, because reading a megabyte is cheaper than an STFT
+        // over the audio under it by about the margin this whole class exists
+        // for. A miss, a mismatch or a file that fails its checks all arrive
+        // here as false, and all mean the same thing: analyse it.
+        if (!loadTileFromStore(tile)) {
+            tile.magnitudes.assign(static_cast<std::size_t>(tile.frameCount) * bins,
+                                   std::uint8_t{0});
+
+            // One analyser per tile. Its read buffer sweeps forward through the
+            // tile, so the audio under a tile is read once.
+            auto made = detail::FrameAnalyser::create(*source_, channel_, settings_.config);
+            if (!made) {
+                return made.error();
             }
-            const Status status = made.value().analyse(tile.firstFrame + frame,
-                                                       tile.magnitudes.data() +
-                                                           static_cast<std::size_t>(frame) * bins);
-            if (!status) {
-                return status;
+            for (SampleCount frame = 0; frame < tile.frameCount; ++frame) {
+                if (monitor.shouldCancel()) {
+                    return Error{ErrorCode::Cancelled, "cancelled"};
+                }
+                const Status status = made.value().analyse(
+                    tile.firstFrame + frame,
+                    tile.magnitudes.data() + static_cast<std::size_t>(frame) * bins);
+                if (!status) {
+                    return status;
+                }
             }
+            saveTileToStore(tile);
         }
 
         {

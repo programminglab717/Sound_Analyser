@@ -129,6 +129,40 @@ Result<SpectrogramPyramid> SpectrogramPyramid::buildDecimated(const io::AudioSou
     return pyramid;
 }
 
+Result<SpectrogramPyramid> SpectrogramPyramid::fromLevelZero(const SpectrogramConfig& config,
+                                                             int binCount, SampleCount sourceFrames,
+                                                             SampleCount hop, SampleCount frames,
+                                                             std::vector<std::uint8_t> magnitudes) {
+    if (binCount <= 0 || hop <= 0 || frames < 0) {
+        return Error{ErrorCode::InvalidArgument, "a level 0 of that shape cannot exist"};
+    }
+    // In 64 bits rather than the native size, so the check cannot be the thing
+    // that overflows: these numbers came out of a file.
+    const std::uint64_t expected =
+        static_cast<std::uint64_t>(frames) * static_cast<std::uint64_t>(binCount);
+    if (expected != static_cast<std::uint64_t>(magnitudes.size())) {
+        return Error{ErrorCode::InvalidArgument, "level 0's shape and its bytes disagree"};
+    }
+
+    SpectrogramPyramid pyramid;
+    pyramid.config_ = config;
+    pyramid.binCount_ = binCount;
+    pyramid.sourceFrames_ = sourceFrames;
+    // An empty source has no levels at all, not one empty level, because that is
+    // what buildDecimated produces and the two have to be indistinguishable.
+    if (sourceFrames <= 0) {
+        return pyramid;
+    }
+
+    Level base;
+    base.hop = hop;
+    base.frameCount = frames;
+    base.magnitudes = std::move(magnitudes);
+    pyramid.levels_.push_back(std::move(base));
+    pyramid.buildUpperLevels();
+    return pyramid;
+}
+
 Result<SpectrogramPyramid> SpectrogramPyramid::build(ConstAudioBufferView source, int channel,
                                                      const SpectrogramConfig& config) {
     // Emptiness first: an empty source has no channel 0, and rejecting it as an

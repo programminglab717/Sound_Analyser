@@ -5,6 +5,7 @@
 #include <sa/core/Types.h>
 #include <sa/io/AudioSource.h>
 #include <sa/spectral/SpectrogramPyramid.h>
+#include <sa/spectral/SpectrogramTileStore.h>
 
 #include <cstdint>
 #include <list>
@@ -36,6 +37,11 @@ namespace sa::spectral {
 /// expensive part. Opening a long file therefore costs what it already cost in
 /// time and a small fraction of what it cost in memory.
 ///
+/// Both halves can be backed by a store on disk, so that the second time a file
+/// is opened the overview is read rather than analysed. Nothing else changes:
+/// the store is consulted first and written when it misses, and every way it
+/// can fail leads back to computing the tile. See Settings::store.
+///
 /// Not a general cache. It is tied to one source, one channel and one
 /// configuration, because every one of those changes every byte in it.
 class SpectrogramTiles {
@@ -56,7 +62,33 @@ public:
         /// evictable, and a budget that could evict it would be a budget that
         /// can leave the window with nothing to draw.
         std::size_t detailBudgetBytes = std::size_t{192} << 20;
+
+        /// Where analysed tiles are kept between runs, or null for the
+        /// behaviour this class had before there was anywhere to keep them.
+        ///
+        /// Optional throughout. A store that cannot be opened, cannot be
+        /// written to, or hands back something that fails its checks costs a
+        /// rebuild and nothing else -- never an analysis that fails.
+        std::shared_ptr<SpectrogramTileStore> store;
+
+        /// What the store's entries are keyed on. A null key disables the store
+        /// as surely as a null store: nothing is looked up and nothing is
+        /// written, because a cache keyed on nothing would serve one file's
+        /// tiles for another's.
+        ///
+        /// Derived by the caller rather than here, because deriving it needs
+        /// the path that this class deliberately does not know:
+        ///
+        /// ```
+        /// const TileLayout layout = SpectrogramTiles::layoutFor(settings, channel);
+        /// settings.key = contentKeyForFile(path, layout).valueOr(ContentKey{});
+        /// ```
+        ContentKey key;
     };
+
+    /// The part of `settings` a store keys on, for deriving a key before there
+    /// is anything to derive it from.
+    [[nodiscard]] static TileLayout layoutFor(const Settings& settings, int channel) noexcept;
 
     [[nodiscard]] static Result<SpectrogramTiles>
     create(std::shared_ptr<const io::AudioSource> source, int channel, Settings settings);
@@ -78,8 +110,14 @@ public:
     SpectrogramTiles& operator=(SpectrogramTiles&&) noexcept;
     ~SpectrogramTiles();
 
-    /// Build the always-resident overview. One pass over the file.
+    /// Build the always-resident overview. One pass over the file, or none at
+    /// all when the store has it.
     [[nodiscard]] Status buildOverview(const JobMonitor& monitor = {});
+
+    /// Whether the last buildOverview() read the overview from the store rather
+    /// than analysing the file. For tests and for telling a user why opening a
+    /// file was instant; nothing in the drawing path should care.
+    [[nodiscard]] bool overviewCameFromStore() const noexcept { return overviewLoaded_; }
 
     [[nodiscard]] bool hasOverview() const noexcept { return !overview_.isEmpty(); }
 
@@ -159,6 +197,15 @@ private:
     [[nodiscard]] std::size_t tileBytes(const Tile& tile) const noexcept;
     [[nodiscard]] const std::uint8_t* fineFrameLocked(SampleCount frame) const noexcept;
 
+    /// Each returns false for "not in the store, or not usable from it", which
+    /// is the only distinction the caller needs: both mean build it.
+    [[nodiscard]] bool loadOverviewFromStore();
+    [[nodiscard]] bool loadTileFromStore(Tile& tile);
+    void saveOverviewToStore();
+    void saveTileToStore(const Tile& tile);
+    [[nodiscard]] bool storeUsable() const noexcept;
+    [[nodiscard]] SampleCount overviewFrameCount() const noexcept;
+
     std::shared_ptr<const io::AudioSource> source_;
     int channel_ = 0;
     Settings settings_;
@@ -167,6 +214,7 @@ private:
     SampleCount fineFrameCount_ = 0;
 
     SpectrogramPyramid overview_;
+    bool overviewLoaded_ = false;
 
     /// Guards the tile map and the LRU order only. The overview is written once
     /// by buildOverview and read-only afterwards.

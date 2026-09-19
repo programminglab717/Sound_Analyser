@@ -78,6 +78,26 @@ public:
     buildDecimated(const io::AudioSource& source, int channel, const SpectrogramConfig& config,
                    int decimation, const JobMonitor& monitor = {});
 
+    /// Rebuild from level 0 alone, for a level 0 that came from somewhere other
+    /// than an analysis -- the on-disk tile store being the only such place so
+    /// far.
+    ///
+    /// Only level 0 is stored because the levels above it are a pure function of
+    /// it: max-combining pairs, which is arithmetic over a few megabytes, where
+    /// recomputing level 0 means an STFT over the whole file. Storing them too
+    /// would double the cache for something that takes milliseconds to redo, and
+    /// would add a second copy of the same numbers that could disagree with the
+    /// first.
+    ///
+    /// The result is identical to what buildDecimated produced, which is the
+    /// property the store rests on and is asserted rather than assumed.
+    /// `frames` is checked against `binCount` and the size of `magnitudes`,
+    /// because this is the door the untrusted bytes of a cache file come in
+    /// through.
+    [[nodiscard]] static Result<SpectrogramPyramid>
+    fromLevelZero(const SpectrogramConfig& config, int binCount, SampleCount sourceFrames,
+                  SampleCount hop, SampleCount frames, std::vector<std::uint8_t> magnitudes);
+
     [[nodiscard]] bool isEmpty() const noexcept { return levels_.empty(); }
 
     [[nodiscard]] int levelCount() const noexcept { return static_cast<int>(levels_.size()); }
