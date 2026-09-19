@@ -83,6 +83,11 @@ public:
     /// the panel's logarithmic axis they come out evenly wide -- which is what
     /// makes the chart readable where the FFT curve slopes.
     ///
+    /// Drawn with the curves and not instead of them, so a panel that has
+    /// nothing to show a spectrum for shows no bands either -- the note in the
+    /// middle of an empty panel is the answer, and bars floating on their own
+    /// would contradict it.
+    ///
     /// Passing an empty vector takes them away.
     void setOctaveBands(std::vector<analysis::Band> bands);
 

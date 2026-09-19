@@ -148,7 +148,8 @@ MainWindow::MainWindow() {
     // numbers about this passage, they belong beside the other numbers about
     // it, and they were reachable only from the command line until now -- which
     // for a product that calls itself an analyser was the wrong way round.
-    // The analysis panel scrolls, and the other two do not. Its length is not
+    //
+    // Of the three, only the analysis panel scrolls. Its length is not
     // fixed -- the room section alone is eight rows, and it appears only when
     // someone asks for it -- so without this the side column's minimum height
     // would change with a menu tick and force the whole window taller than the
@@ -918,6 +919,15 @@ void MainWindow::rebuildCaches() {
     // straight away.
     spectrum_->setSampleRate(document_.sampleRate());
     spectrum_->setEqSampleRate(document_.sampleRate());
+
+    // The overlays belong to the document that has just been replaced. A beat
+    // grid is a list of instants, and after a cut those instants are somewhere
+    // else in the audio -- so it goes now rather than when its replacement
+    // lands. A selection change does not come through here, and does not clear
+    // them: the document is the same, so the old grid is over the right audio
+    // until a better one arrives.
+    waveform_->clearOverlays();
+    spectrum_->setOctaveBands({});
 
     documentSource_ = std::make_shared<const engine::DocumentSource>(document_);
     peaks_.reset();

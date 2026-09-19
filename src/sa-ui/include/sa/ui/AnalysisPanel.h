@@ -27,17 +27,29 @@ namespace sa::ui {
 /// earned. See AnalysisReadout.h, where every such decision is made, away from
 /// this window, so it can be checked by calling it.
 ///
-/// Measuring happens on a worker thread. A new request cancels the one before
-/// it and waits for it to stop, and each request carries a generation number so
-/// that a result already in the post when it was superseded is dropped rather
-/// than shown. The lifetime reasoning is LoudnessPanel's, deliberately copied
-/// rather than reinvented: see the Session comment there for why the panel
-/// pointer is read under a mutex and not through a flag.
+/// Measuring happens on a worker thread. Each request carries a generation
+/// number, so a result already in the post when it was superseded is dropped
+/// rather than shown. The reasoning about who may touch the panel is
+/// LoudnessPanel's, deliberately copied rather than reinvented: see the Session
+/// comment there for why the panel pointer is read under a mutex and not
+/// through a flag.
 ///
-/// What it does not claim. Nothing here is cancellable *inside* a stage: the
-/// analysis functions take a buffer and run to completion, so a cancellation
-/// lands between stages rather than part-way through one. What keeps a stage
-/// short is the bounded read below, not responsiveness in the analysis.
+/// Where this departs from that panel is in what happens to a superseded
+/// worker, and the difference is forced. LoudnessPanel cancels and *waits*,
+/// which it can afford because its work stops at the next block boundary --
+/// milliseconds. Nothing here is cancellable inside a stage: detectKey,
+/// trackTempo and measureBands each take a buffer and run to the end of it, and
+/// on two minutes of audio the longest of them is a second of work in a release
+/// build and several in a debug one. Waiting for that on the main thread is a
+/// window that stops repainting every time somebody moves a selection, which is
+/// the one thing this must not do.
+///
+/// So a superseded worker is cancelled and set aside rather than waited for.
+/// It stops at its next stage boundary -- or, for the contour, within a second
+/// of audio -- and is joined the next time one is swept up, or in the
+/// destructor, which is the one place where waiting is the right thing. It
+/// still holds its own generation, so it cannot write anything into the panel
+/// on its way out.
 class AnalysisPanel : public QWidget {
     Q_OBJECT
 
@@ -178,10 +190,39 @@ private:
 
     std::shared_ptr<Session> session_;
 
-    CancellationToken cancellation_;
+    /// The analysis in flight, the token that stops it, and the flag it sets
+    /// as its last act.
+    ///
+    /// The token is shared rather than a member the worker points at, because
+    /// a set-aside worker has to stay cancelled while the next one runs
+    /// uncancelled -- one token between them would un-cancel the first.
+    ///
+    /// The flag is the only way to ask a std::thread whether it has stopped
+    /// without blocking on it, which is exactly the question that decides
+    /// whether a worker can be joined here or has to be set aside.
+    std::shared_ptr<CancellationToken> cancellation_;
+    std::shared_ptr<std::atomic<bool>> finished_;
     std::thread worker_;
 
-    void stopWorker();
+    /// A worker that has been superseded and has not stopped yet.
+    struct Retired {
+        std::thread thread;
+        std::shared_ptr<std::atomic<bool>> finished;
+    };
+
+    /// Set aside, never left to run loose. Each one has been cancelled, so the
+    /// list drains itself: a sweep at the start of the next request joins
+    /// whatever has stopped since. Bounded in practice by the quarter-second
+    /// the window waits before re-analysing at all, which is longer than a
+    /// cancelled worker takes to notice.
+    std::vector<Retired> retired_;
+
+    /// Cancel whatever is running and either join it, if it has already
+    /// stopped, or set it aside.
+    void retireWorker();
+
+    /// Join and drop the set-aside workers that have stopped.
+    void sweepRetired();
 };
 
 } // namespace sa::ui
