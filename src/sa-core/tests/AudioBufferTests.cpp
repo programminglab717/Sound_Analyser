@@ -2,6 +2,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
+#include <iterator>
 #include <utility>
 
 using namespace sa;
@@ -170,4 +171,52 @@ TEST_CASE("A mutable view converts to a const view", "[core][view]") {
 
     const ConstAudioBufferView fromConstBuffer = std::as_const(buffer).view();
     CHECK(fromConstBuffer.channel(1)[2] == 1002.0f);
+}
+
+TEST_CASE("A buffer with no frames still has a pointer for every channel", "[core][buffer]") {
+    // The invariant that makes an empty range safe to iterate. Without it, a
+    // zero-frame buffer reported a channel count it had no pointers for, and
+    // asking it for channel 0 read off the end of an empty vector -- which
+    // every `channel(c)` to `channel(c) + frames()` loop does before the zero
+    // length can make it harmless.
+    AudioBuffer buffer{ChannelLayout::stereo(), 0};
+
+    CHECK(buffer.channelCount() == 2);
+    CHECK(buffer.frames() == 0);
+    CHECK(buffer.isEmpty());
+
+    for (int channel = 0; channel < buffer.channelCount(); ++channel) {
+        float* first = buffer.channel(channel);
+        // Adding zero to a null pointer is defined and yields null, so the
+        // empty range below is a valid one.
+        CHECK(first == first + buffer.frames());
+        CHECK(std::distance(first, first + buffer.frames()) == 0);
+    }
+
+    const AudioBufferView view = buffer.view();
+    CHECK(view.channelCount() == 2);
+    CHECK(view.isEmpty());
+    for (int channel = 0; channel < view.channelCount(); ++channel) {
+        float* first = view.channel(channel);
+        CHECK(first == first + view.frames());
+    }
+}
+
+TEST_CASE("Resizing to nothing and back again gives a usable buffer", "[core][buffer]") {
+    AudioBuffer buffer{ChannelLayout::stereo(), 64};
+    fillRamp(buffer);
+
+    buffer.resize(ChannelLayout::stereo(), 0);
+    CHECK(buffer.frames() == 0);
+    CHECK(buffer.channel(0) == nullptr);
+
+    buffer.resize(ChannelLayout::stereo(), 16);
+    REQUIRE(buffer.frames() == 16);
+    REQUIRE(buffer.channel(0) != nullptr);
+    for (int channel = 0; channel < buffer.channelCount(); ++channel) {
+        for (SampleCount i = 0; i < buffer.frames(); ++i) {
+            // Freshly allocated channels are zeroed, as they were before.
+            CHECK(buffer.channel(channel)[i] == 0.0f);
+        }
+    }
 }

@@ -118,6 +118,15 @@ public:
 
     [[nodiscard]] bool isEmpty() const noexcept { return channelCount() == 0 || frames_ == 0; }
 
+    /// Pointer to the first sample of `channel`. Valid for any index below
+    /// channelCount(), including on a buffer with no frames -- where it is
+    /// null, and where the only legal thing to do with it is to add zero.
+    /// That case is deliberate: it makes
+    /// `std::reverse(b.channel(c), b.channel(c) + b.frames())` correct on an
+    /// empty buffer instead of a crash.
+    ///
+    /// Out of range is still undefined. Audio-thread callers should not pay
+    /// for a check they can hoist, so validate at the boundary instead.
     [[nodiscard]] float* channel(int index) noexcept {
         return channels_[static_cast<std::size_t>(index)];
     }

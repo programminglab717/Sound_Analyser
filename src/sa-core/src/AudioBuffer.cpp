@@ -64,6 +64,15 @@ void AudioBuffer::resize(ChannelLayout layout, SampleCount frames) {
     if (channelCount <= 0 || frames <= 0) {
         layout_ = layout;
         frames_ = frames > 0 ? frames : 0;
+        // Null entries rather than an empty vector, so that channelCount()
+        // pointers always exist. Without them a zero-frame buffer reports a
+        // channel count it has no pointers for, and channel(0) reads off the
+        // end of an empty vector -- which is exactly what a caller doing
+        // `std::reverse(b.channel(c), b.channel(c) + b.frames())` does before
+        // the zero length ever gets a chance to make it harmless. It cost a
+        // segfault to learn. Deleting a null pointer is a no-op, so release()
+        // needs no change.
+        channels_.assign(static_cast<std::size_t>(std::max(channelCount, 0)), nullptr);
         return;
     }
 
