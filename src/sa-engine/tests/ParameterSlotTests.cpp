@@ -126,11 +126,14 @@ TEST_CASE("A writer and a reader can run at once", "[engine][preview][slot][thre
     std::thread writer{[&] {
         for (std::uint64_t value = 1; value <= kPublishes; ++value) {
             slot.publish(Stamped::of(value));
-            if (value % 256 == 0) {
+            if (value % 32 == 0) {
                 // Yielded now and then so the reader gets turns on a machine
-                // with one core to spare. Yielding on every publish instead
-                // hands the scheduler a decision hundreds of thousands of
-                // times and starves the writer under load.
+                // with one core to spare -- without it the writer wins whole
+                // timeslices and the reader collects a few dozen values out of
+                // twenty thousand. Yielding on every publish instead hands the
+                // scheduler a decision twenty thousand times, which under load
+                // starves the writer. The count of publishes is fixed, so the
+                // number of yields is bounded either way.
                 std::this_thread::yield();
             }
         }
