@@ -24,13 +24,15 @@
 /// third-octave centres, and it is the wrong splitter here for three separate
 /// reasons, any one of which would be enough.
 ///
-/// It does not sum. Two adjacent Butterworth band-passes cross at their -3 dB
-/// edges, so where they meet their sum is 3 dB up; further out the bands gap
-/// instead and the sum is down. The bank's own header says this out loud and
-/// reports the error at 0.11 to 0.74 dB depending on the rate. That is a fine
-/// number for a measurement read one band at a time and a disqualifying one for
-/// a processor whose output *is* the sum -- a permanent colouring of everything
-/// the tool touches, whether or not a single decibel of compression happened.
+/// It does not sum. Each band there is designed to measure its own share of
+/// the spectrum, not to add back to the signal: adjacent bands overlap around
+/// their -3 dB edges and gap between them, and what the overlap comes to
+/// depends on whatever phase each filter happens to have there. The bank's own
+/// header says the sum is not the signal and puts the error at 0.11 to 0.74 dB
+/// depending on the sample rate. That is a fine number for a measurement read
+/// one band at a time and a disqualifying one for a processor whose output *is*
+/// the sum -- it would colour everything the tool touched, whether or not a
+/// single decibel of compression ever happened.
 ///
 /// Its centres are fixed. They come from the base-ten octave series, and a
 /// multiband compressor needs its crossovers where the material puts them: 120
@@ -67,9 +69,10 @@
 /// Splitting twice does not work by splitting twice. Take the high half of the
 /// first crossover and split that again, and the three bands sum to
 /// LP1 + AP2 HP1, which is not all-pass: the second crossover's phase shift is
-/// in two of the three bands and not in the third, and the mismatch is a
-/// several-decibel scoop around the *first* crossover. It is the usual way to
-/// build a multiband compressor that quietly spoils everything switched into
+/// in the two upper bands and not in the lowest, and the mismatch is a scoop
+/// around the *first* crossover. Measured at the default settings, taking the
+/// compensation below back out puts 0.625 dB of it there. It is the usual way
+/// to build a multiband compressor that quietly spoils everything switched into
 /// it.
 ///
 /// The fix is to put the missing phase back: every band is also run through the
@@ -85,13 +88,14 @@
 /// ## What this does not claim
 ///
 /// The output is not the input. With every band bypassed the output is the
-/// input through one all-pass per crossover: flat in magnitude, measured flat
-/// to within 0.0002 dB from 20 Hz to 20 kHz at the default settings, but not
-/// flat in phase and not equal to the input sample for sample. A transient
-/// comes out smeared by the group delay of those all-passes, which at a 200 Hz
-/// crossover is a few milliseconds. That is the price of splitting at all, and
-/// anything that needs its samples back unchanged should not be routed through
-/// this at all.
+/// input through one all-pass per crossover: flat in magnitude -- measured flat
+/// to within 0.000003 dB from 20 Hz to 20 kHz at the default crossovers and
+/// order -- but not flat in phase, and so not the same samples. A transient
+/// comes out smeared by the group delay of those all-passes: an LR4 crossover
+/// at 200 Hz sums to a second-order all-pass, whose group delay at low
+/// frequencies is 2/(Q w0), or 2.3 ms. That is the price of splitting at all,
+/// and anything that needs its samples back unchanged should not be routed
+/// through this.
 ///
 /// Nothing here is real-time. It holds three copies of the selection and runs
 /// the whole buffer band by band.

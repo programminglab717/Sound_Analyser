@@ -175,9 +175,11 @@ TEST_CASE("Bypassed bands sum back to the input through one all-pass per crossov
     //
     // The residual is not zero because the two chains are different arithmetic
     // on the same transfer function -- six or more biquads' worth of float32
-    // rounding either way, each rounding about 6e-8 of its own output. Against
-    // samples of amplitude 0.5 that puts the difference in the 1e-6 range, and
-    // 2e-5 is a bound with room in it rather than a measurement.
+    // rounding either way, and each biquad returns a float. One unit in the
+    // last place of a float near 0.5 is 5.96e-8, and what these cases measure
+    // is one, two or three of them: 6e-8 through 1.8e-7, the same figures on
+    // debug, release and asan. 1e-6 is that worst case with room, and still
+    // five orders of magnitude under anything a design error could hide in.
     struct Case {
         std::vector<double> crossovers;
         int order;
@@ -211,7 +213,7 @@ TEST_CASE("Bypassed bands sum back to the input through one all-pass per crossov
 
         const double residual = worstDifference(audio, reference);
         CAPTURE(residual);
-        REQUIRE(residual < 2e-5);
+        REQUIRE(residual < 1e-6);
     }
 }
 
@@ -248,19 +250,27 @@ TEST_CASE("Bypassed bands recombine flat in magnitude") {
         worstDb = std::max(worstDb, std::abs(decibels(magnitude)));
     }
 
-    // Measured: 0.00013 dB from 20 Hz to 20 kHz. What is left is the float32
-    // rounding of six biquads and of the transform itself, not the design.
+    // Measured 0.0000026 dB on debug, release and asan alike. What is left is
+    // the float32 rounding of six biquads and of the transform itself, not the
+    // design: a magnitude wrong in the last float bit, 6e-8 of itself, is
+    // 0.0000005 dB out, so a handful of those is the whole of this figure.
+    //
+    // The bound is four times the measurement rather than a hundred times it,
+    // because what this has to catch is a design error and the smallest of
+    // those is large. Dropping the all-pass compensation -- one loop, and the
+    // mistake this design exists to avoid -- takes the same figure to 0.625 dB.
     CAPTURE(worstDb);
-    REQUIRE(worstDb < 0.001);
+    REQUIRE(worstDb < 1e-5);
 }
 
 TEST_CASE("A tone inside one band is compressed by that band's settings and no other's") {
     // Crossovers at 50 Hz and 10 kHz, and a tone at their geometric centre. An
     // LR4 half's magnitude is 1/(1+(f/fc)^4) below the crossover and
     // (f/fc)^4/(1+(f/fc)^4) above it, so at 707.107 Hz -- 14.142 times 50 and
-    // 1/14.142 of 10000 -- each skirt costs 1/(1+40000), which is 0.0002 dB.
-    // The middle band therefore carries the tone at the level it arrived at,
-    // and the expected reduction follows from the input amplitude alone.
+    // 1/14.142 of 10000, and 14.142^4 is 40000 -- each skirt is one part in
+    // 40001 down, which is 0.0002 dB. The middle band therefore carries the
+    // tone at the level it arrived at, and the expected reduction follows from
+    // the input amplitude alone.
     //
     // The same two ratios put the tone 92 dB down in each outer band, which is
     // -98 dBFS against a -20 dB threshold: those two compressors have nothing
@@ -461,11 +471,13 @@ TEST_CASE("Bypass takes a band's compressor out and leaves the band itself in") 
     REQUIRE(bypassedResult.value().gainReductionDb[1] == 0.0);
 
     // With every band bypassed the output is the all-pass chain and nothing
-    // else, and the one bypassed band is bit-for-bit that -- no gain of 1.0
-    // applied, no makeup, nothing.
+    // else. This run has a 20:1 compressor and 6 dB of makeup configured on the
+    // middle band and is still exactly that, so the bypass took out the makeup
+    // as well -- 6 dB is six hundred times the residual it would have to hide
+    // inside.
     AudioBuffer reference = copyOf(source);
     applyReferenceAllPasses(reference.view(), settings.crossoverHz, settings.order);
-    REQUIRE(worstDifference(bypassed, reference) < 2e-5);
+    REQUIRE(worstDifference(bypassed, reference) < 1e-6);
     REQUIRE_FALSE(identical(active, bypassed));
 }
 
@@ -566,7 +578,11 @@ TEST_CASE("A stereo pair is split and compressed without the image moving") {
         band.compressor.releaseSeconds = 5.0;
     }
 
-    REQUIRE(compressMultiband(audio.view(), kRate, settings));
+    const Result<MultibandResult> result = compressMultiband(audio.view(), kRate, settings);
+    REQUIRE(result);
+    // Something has to have happened, or the offset would be preserved by a
+    // processor that did nothing at all.
+    REQUIRE(result.value().gainReductionDb[1] > 5.0);
 
     const double left = decibels(rmsOf(audio, 72000, 24000, 0));
     const double right = decibels(rmsOf(audio, 72000, 24000, 1));
