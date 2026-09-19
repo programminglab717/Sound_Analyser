@@ -1,6 +1,7 @@
 #pragma once
 
 #include <sa/core/Types.h>
+#include <sa/ui/ViewGeometry.h>
 
 #include <QString>
 #include <QWidget>
@@ -34,6 +35,21 @@ public:
 
     void clear();
 
+    /// The rate the frequency axis is drawn against.
+    ///
+    /// Settable on its own as well as through setSpectrum, because anything
+    /// drawing over this panel has to be put on the document's axis the moment
+    /// the document is opened -- which is before the first transform has
+    /// finished and before there is any spectrum to hand.
+    void setSampleRate(SampleRate rate);
+
+    [[nodiscard]] SampleRate sampleRate() const noexcept { return rate_; }
+
+    /// The plot area and its axis mapping, as a value. This is what a subclass
+    /// drawing over the spectrum uses, so that it cannot land a curve anywhere
+    /// but where the spectrum under it already is.
+    [[nodiscard]] SpectrumPlot plot() const;
+
     /// Freeze the average currently shown, to compare later ones against.
     /// Returns false when there is nothing to freeze.
     ///
@@ -66,15 +82,9 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void leaveEvent(QEvent* event) override;
 
-private:
-    /// Top and bottom of the level axis, in dBFS. Zero at the top because that
-    /// is full scale and there is nothing above it to show; -108 at the bottom
-    /// because it is a round eighteen decades of nothing and puts the noise
-    /// floor of a 16-bit delivery comfortably on the display.
-    static constexpr double kTopDb = 0.0;
-    static constexpr double kBottomDb = -108.0;
-
     [[nodiscard]] QRect plotRect() const;
+
+private:
     [[nodiscard]] double frequencyAtX(int x) const;
     [[nodiscard]] int xAtFrequency(double hz) const;
     [[nodiscard]] int yAtLevel(double decibels) const;

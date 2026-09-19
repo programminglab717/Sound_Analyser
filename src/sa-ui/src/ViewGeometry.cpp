@@ -47,6 +47,35 @@ double fractionAtFrequency(FrequencyScale scale, double hz, double nyquistHz) no
     return std::log(hz / low) / std::log(nyquistHz / low);
 }
 
+double SpectrumPlot::frequencyAtX(int x) const noexcept {
+    const double fraction =
+        width > 1 ? static_cast<double>(x - left) / static_cast<double>(width) : 0.0;
+    return frequencyAtFraction(FrequencyScale::Logarithmic, std::clamp(fraction, 0.0, 1.0),
+                               nyquistHz);
+}
+
+int SpectrumPlot::xAtFrequency(double hz) const noexcept {
+    const double fraction = fractionAtFrequency(FrequencyScale::Logarithmic, hz, nyquistHz);
+    return left + static_cast<int>(std::lround(fraction * width));
+}
+
+int SpectrumPlot::yAtLevel(double decibels) const noexcept {
+    const double fraction =
+        std::clamp((kSpectrumTopDb - decibels) / (kSpectrumTopDb - kSpectrumBottomDb), 0.0, 1.0);
+    return top + static_cast<int>(std::lround(fraction * (height - 1)));
+}
+
+double SpectrumPlot::levelAtY(int y) const noexcept {
+    // One row tall is a degenerate plot rather than an error -- it happens
+    // while a splitter is being dragged shut -- and every level in it is the
+    // top of the axis.
+    if (height <= 1) {
+        return kSpectrumTopDb;
+    }
+    const double fraction = static_cast<double>(y - top) / static_cast<double>(height - 1);
+    return kSpectrumTopDb - std::clamp(fraction, 0.0, 1.0) * (kSpectrumTopDb - kSpectrumBottomDb);
+}
+
 std::string formatTime(double seconds, double spanSeconds) {
     if (seconds < 0.0) {
         seconds = 0.0;

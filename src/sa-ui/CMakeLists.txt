@@ -14,6 +14,8 @@ set(CMAKE_AUTOMOC ON)
 # by itself when it sits next to its .cpp, and ours live under include/.
 add_library(sa-ui STATIC
     src/Colourmap.cpp
+    src/EqCurve.cpp
+    src/EqCurveView.cpp
     src/FieldDialog.cpp
     src/LoudnessPanel.cpp
     src/MainWindow.cpp
@@ -23,6 +25,7 @@ add_library(sa-ui STATIC
     src/TimeRuler.cpp
     src/ViewGeometry.cpp
     src/WaveformView.cpp
+    include/sa/ui/EqCurveView.h
     include/sa/ui/FieldDialog.h
     include/sa/ui/LoudnessPanel.h
     include/sa/ui/MainWindow.h
@@ -43,3 +46,16 @@ target_compile_features(sa-ui PUBLIC cxx_std_20)
 
 add_executable(sound-analyser src/main.cpp)
 target_link_libraries(sound-analyser PRIVATE sa-ui)
+
+# The view geometry and the EQ curve are deliberately windowless, so they are
+# tested the same way every other module is: by calling them. sa-warnings is
+# applied here although it is not applied to sa-ui, because nothing under
+# tests/ includes a Qt header -- the whole point of the classes it covers is
+# that they do not need one.
+if(SA_BUILD_TESTS)
+    add_executable(sa-ui-tests
+        tests/EqCurveTests.cpp
+    )
+    target_link_libraries(sa-ui-tests PRIVATE sa-ui sa-warnings Catch2::Catch2WithMain)
+    catch_discover_tests(sa-ui-tests)
+endif()

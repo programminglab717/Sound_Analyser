@@ -13,9 +13,9 @@
 #include <sa/spectral/SpectrogramTiles.h>
 #include <sa/transport/Player.h>
 #include <sa/ui/Colourmap.h>
+#include <sa/ui/EqCurveView.h>
 #include <sa/ui/LoudnessPanel.h>
 #include <sa/ui/SpectrogramView.h>
-#include <sa/ui/SpectrumView.h>
 #include <sa/ui/TimeRuler.h>
 #include <sa/ui/WaveformView.h>
 
@@ -26,6 +26,7 @@
 #include <memory>
 #include <optional>
 #include <thread>
+#include <vector>
 
 class QAction;
 class QLabel;
@@ -98,6 +99,11 @@ public:
     /// Print the completed measurement as key=value lines on stdout, so a test
     /// can check the numbers rather than the pixels showing them.
     [[nodiscard]] bool printAnalysis() const;
+
+    /// The EQ bands as key=value lines on stdout, in the same spirit: a drag
+    /// that lands a band an octave out draws a curve that still looks like an
+    /// EQ, and only the numbers say which one.
+    [[nodiscard]] bool printEqBands() const;
 
     [[nodiscard]] bool saveScreenshot(const std::filesystem::path& path);
 
@@ -246,6 +252,29 @@ private:
     void chooseFilter();
     void applyFilter(int filterType, double frequency, double q, double gainDb,
                      const QString& label);
+
+    /// Run a set of EQ bands over the selection and commit the result.
+    ///
+    /// The one place a biquad meets the document, shared by the Filter dialog
+    /// and by the draggable curve. The run-up that settles the filters and the
+    /// blend that hides the step at each end of the selection are the whole
+    /// difference between filtering audio and filtering *part* of some audio,
+    /// and two copies of that reasoning is how only one of them gets fixed.
+    bool applyEqBands(const std::vector<dsp::EqBand>& bands, const QString& label);
+
+    /// Show or hide the draggable curve over the spectrum.
+    void setEqCurveVisible(bool visible);
+
+    /// Apply whatever the curve is currently drawing, through undo.
+    ///
+    /// The bands are left up afterwards rather than cleared. Clearing them
+    /// would lose a setting somebody spent time on the moment they used it,
+    /// and the same curve applied to a second selection is a real thing people
+    /// do; the status line says the curve is still armed so that a second
+    /// press is a choice rather than a surprise.
+    bool applyEqCurve();
+
+    void resetEqCurve();
     /// The two dynamics processors. Both are asked for through one form
     /// rather than a chain of prompts, because a threshold without its ratio
     /// beside it is not a setting anyone can judge.
@@ -293,7 +322,7 @@ private:
 
     TimeRuler* ruler_ = nullptr;
     LoudnessPanel* meters_ = nullptr;
-    SpectrumView* spectrum_ = nullptr;
+    EqCurveView* spectrum_ = nullptr;
     QTimer* analysisTimer_ = nullptr;
     WaveformView* waveform_ = nullptr;
     SpectrogramView* spectrogram_ = nullptr;
@@ -329,6 +358,9 @@ private:
     QAction* denoiseAction_ = nullptr;
     QAction* exportSelectionAction_ = nullptr;
     QAction* clearReferenceAction_ = nullptr;
+    QAction* showEqAction_ = nullptr;
+    QAction* applyEqAction_ = nullptr;
+    QAction* resetEqAction_ = nullptr;
 
     QAction* playAction_ = nullptr;
     QTimer* playheadTimer_ = nullptr;

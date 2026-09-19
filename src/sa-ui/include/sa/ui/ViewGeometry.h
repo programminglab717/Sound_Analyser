@@ -54,6 +54,69 @@ inline constexpr double kLogAxisMinimumHz = 20.0;
 [[nodiscard]] double fractionAtFrequency(FrequencyScale scale, double hz,
                                          double nyquistHz) noexcept;
 
+/// Top and bottom of the spectrum panel's level axis, in dBFS.
+///
+/// Zero at the top because that is full scale and there is nothing above it to
+/// show; -108 at the bottom because it is a round eighteen decades of nothing
+/// and puts the noise floor of a 16-bit delivery comfortably on the display.
+inline constexpr double kSpectrumTopDb = 0.0;
+inline constexpr double kSpectrumBottomDb = -108.0;
+
+/// The level the EQ curve's 0 dB line is drawn at, in dBFS.
+///
+/// Mid-axis, so that a full boost and a full cut both have room before the
+/// curve leaves the panel. Which line it is matters far less than the scale it
+/// is drawn on: gain uses the spectrum's own ruler, so a 6 dB boost is exactly
+/// as tall as the 6 dB peak someone is using it to correct. A curve on its own
+/// private decibel scale looks like an EQ and cannot be read against anything.
+///
+/// -54 rather than any other middle, because the panel's level grid runs every
+/// 12 dB from the top: the lines at -48 and -60 dBFS are then exactly +6 and
+/// -6 dB of EQ, so the curve gets a gain scale without a single line drawn for
+/// it.
+inline constexpr double kEqZeroLevelDb = -54.0;
+
+/// The plotting area of the spectrum panel, and the arithmetic mapping it to
+/// frequency and level.
+///
+/// A plain value rather than something the widget keeps to itself, because two
+/// things draw in this space now -- the spectrum, and the EQ curve over it --
+/// and a boost that does not sit exactly over the peak it is correcting is
+/// worse than no curve at all. It is also what lets every one of these
+/// mappings be checked without a window.
+///
+/// `width` counts columns, so the rightmost is `left + width - 1`, and
+/// `height` counts rows the same way. Neither covers the label strip below the
+/// plot, which is the widget's business and not the axis's.
+struct SpectrumPlot {
+    int left = 0;
+    int top = 0;
+    int width = 1;
+    int height = 1;
+    double nyquistHz = 24000.0;
+
+    /// Frequency at the left edge of column `x`, on the logarithmic axis the
+    /// panel draws. Columns outside the plot clamp to its ends rather than
+    /// running off the bottom of a log axis.
+    [[nodiscard]] double frequencyAtX(int x) const noexcept;
+
+    [[nodiscard]] int xAtFrequency(double hz) const noexcept;
+
+    /// Row a level in dBFS is drawn at. Levels off the axis clamp to its ends.
+    [[nodiscard]] int yAtLevel(double decibels) const noexcept;
+
+    /// Inverse of yAtLevel, to within the rounding that chose the row.
+    [[nodiscard]] double levelAtY(int y) const noexcept;
+
+    /// Row an EQ gain is drawn at: yAtLevel's ruler, shifted so that 0 dB of
+    /// gain sits on kEqZeroLevelDb.
+    [[nodiscard]] int yAtGain(double gainDb) const noexcept {
+        return yAtLevel(kEqZeroLevelDb + gainDb);
+    }
+
+    [[nodiscard]] double gainAtY(int y) const noexcept { return levelAtY(y) - kEqZeroLevelDb; }
+};
+
 /// A labelled position on an axis, in the axis's own units.
 struct AxisTick {
     double value = 0.0;    ///< Seconds, Hz or dB depending on the axis.

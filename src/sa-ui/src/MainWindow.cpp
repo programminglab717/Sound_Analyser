@@ -135,7 +135,7 @@ MainWindow::MainWindow() {
     // numbers and the picture are answers to the same question, and a reader
     // who has to move a window to see both will stop looking at one of them.
     meters_ = new LoudnessPanel{this};
-    spectrum_ = new SpectrumView{this};
+    spectrum_ = new EqCurveView{this};
 
     // The spectrum goes under the meters rather than beside the views: it
     // answers the same kind of question the numbers do -- what is this passage
@@ -168,6 +168,10 @@ MainWindow::MainWindow() {
 
     connect(waveform_, &WaveformView::cursorMoved, this, &MainWindow::showWaveformCursor);
     connect(spectrogram_, &SpectrogramView::cursorMoved, this, &MainWindow::showSpectrogramCursor);
+
+    // The EQ menu entries follow the curve, so that "apply" cannot be pressed
+    // on a curve that would do nothing.
+    connect(spectrum_, &EqCurveView::bandsChanged, this, &MainWindow::refreshActions);
 
     status_ = new QLabel{tr("Open an audio file to begin"), this};
     readout_ = new QLabel{this};
@@ -335,6 +339,21 @@ void MainWindow::buildMenus() {
     process->addAction(tr("Sum to &mono"), this, [this] {
         (void)applyChannelOp(dsp::ChannelOp::SumToMono, tr("sum to mono"));
     });
+    process->addSeparator();
+    // The EQ is not a dialog, so it is a pair of verbs on a curve that is
+    // edited over the analyser. Showing it and applying it are separate
+    // because looking at a proposed curve against the spectrum is most of what
+    // the curve is for, and a tool that applied on sight would make that
+    // impossible.
+    showEqAction_ =
+        process->addAction(tr("Show &EQ curve"), QKeySequence{Qt::CTRL | Qt::SHIFT | Qt::Key_E},
+                           this, [this] { setEqCurveVisible(!spectrum_->isEqVisible()); });
+    showEqAction_->setCheckable(true);
+    applyEqAction_ =
+        process->addAction(tr("App&ly EQ curve"), QKeySequence{Qt::CTRL | Qt::SHIFT | Qt::Key_Q},
+                           this, &MainWindow::applyEqCurve);
+    resetEqAction_ = process->addAction(tr("Reset EQ &bands"), this, &MainWindow::resetEqCurve);
+
     process->addSeparator();
     process->addAction(tr("Co&mpressor…"), this, &MainWindow::chooseCompressor);
     process->addAction(tr("&Gate…"), this, &MainWindow::chooseGate);
@@ -773,6 +792,14 @@ bool MainWindow::openFile(const std::filesystem::path& path) {
 }
 
 void MainWindow::rebuildCaches() {
+    // Both halves of the spectrum panel move with the document: the frequency
+    // axis it is drawn on, and the rate the EQ bands are designed at. Done
+    // here rather than on open because a session can bring a different rate
+    // in, and done before the first transform because the curve is editable
+    // straight away.
+    spectrum_->setSampleRate(document_.sampleRate());
+    spectrum_->setEqSampleRate(document_.sampleRate());
+
     documentSource_ = std::make_shared<const engine::DocumentSource>(document_);
     peaks_.reset();
     spectra_.reset();
@@ -1012,6 +1039,14 @@ void MainWindow::refreshActions() {
     attenuateAction_->setEnabled(document);
     healAction_->setEnabled(document);
     denoiseAction_->setEnabled(document && !noiseProfile_.isEmpty());
+
+    if (applyEqAction_ != nullptr) {
+        // A curve of bands all sitting at 0 dB would be an edit that changes
+        // nothing but still costs an undo step, so it is not offered.
+        applyEqAction_->setEnabled(document && !spectrum_->curve().isFlat());
+        resetEqAction_->setEnabled(spectrum_->curve().bandCount() > 0);
+        showEqAction_->setChecked(spectrum_->isEqVisible());
+    }
 }
 
 void MainWindow::updateStatus() {
@@ -1549,13 +1584,29 @@ void MainWindow::chooseFilter() {
 
 void MainWindow::applyFilter(int filterType, double frequency, double q, double gainDb,
                              const QString& label) {
+    dsp::EqBand band;
+    band.filter.type = static_cast<dsp::FilterType>(filterType);
+    band.filter.frequency = frequency;
+    band.filter.q = q;
+    band.filter.gainDb = gainDb;
+    (void)applyEqBands({band}, label);
+}
+
+bool MainWindow::applyEqBands(const std::vector<dsp::EqBand>& bands, const QString& label) {
     const TimeSelection range = targetRange();
-    if (range.isEmpty() || !documentSource_) {
-        return;
+    if (bands.empty() || range.isEmpty() || !documentSource_) {
+        return false;
     }
 
     const double rate = document_.sampleRate().hz();
-    const double period = rate / std::max(frequency, 1.0);
+    // The lowest band decides the run-up and the blend, because it is the one
+    // with the longest memory and the widest step to hide. Taking any other
+    // would settle the slowest filter in the chain least.
+    double lowest = rate * 0.5;
+    for (const dsp::EqBand& band : bands) {
+        lowest = std::min(lowest, band.filter.frequency);
+    }
+    const double period = rate / std::max(lowest, 1.0);
 
     // A biquad has memory, so starting it cold at the selection's edge steps out
     // of silence into signal and clicks. It gets a run-up outside the range to
@@ -1568,7 +1619,7 @@ void MainWindow::applyFilter(int filterType, double frequency, double q, double 
     AudioBuffer span{document_.layout(), range.end - spanStart};
     if (!documentSource_->read(spanStart, span.view())) {
         status_->setText(tr("Could not read the selection"));
-        return;
+        return false;
     }
 
     const int channels = document_.layout().count();
@@ -1580,24 +1631,20 @@ void MainWindow::applyFilter(int filterType, double frequency, double q, double 
         std::copy_n(span.channel(channel) + offset, original.frames(), original.channel(channel));
     }
 
-    dsp::FilterSpec spec;
-    spec.type = static_cast<dsp::FilterType>(filterType);
-    spec.frequency = frequency;
-    spec.q = q;
-    spec.gainDb = gainDb;
-
+    // One EQ per channel, built fresh so that each starts from cleared state
+    // and the channels cannot inherit each other's ringing.
     for (int channel = 0; channel < channels; ++channel) {
         auto eq = dsp::ParametricEq::create(document_.sampleRate());
         if (!eq) {
             status_->setText(tr("Could not build the filter: %1")
                                  .arg(QString::fromStdString(std::string{eq.error().what()})));
-            return;
+            return false;
         }
-        dsp::EqBand band;
-        band.filter = spec;
-        if (!eq.value().addBand(band)) {
-            status_->setText(tr("Those filter settings are not usable"));
-            return;
+        for (const dsp::EqBand& band : bands) {
+            if (!eq.value().addBand(band)) {
+                status_->setText(tr("Those filter settings are not usable"));
+                return false;
+            }
         }
         eq.value().processInPlace(span.channel(channel), span.frames());
     }
@@ -1645,9 +1692,47 @@ void MainWindow::applyFilter(int filterType, double frequency, double q, double 
         }
     }
 
-    (void)applyEdit(label, [this, &range, &applied] {
+    return applyEdit(label, [this, &range, &applied] {
         return engine::replaceRange(document_, range.start, std::move(applied)).ok();
     });
+}
+
+void MainWindow::setEqCurveVisible(bool visible) {
+    spectrum_->setEqVisible(visible);
+    // The menu's tick follows the panel rather than the other way round, so
+    // that the two cannot disagree after a verb has shown the curve without
+    // going through the action.
+    refreshActions();
+}
+
+bool MainWindow::applyEqCurve() {
+    if (!hasDocument() || spectrum_->curve().isFlat()) {
+        return false;
+    }
+    const QString summary = QString::fromStdString(spectrum_->curve().summarise());
+    if (!applyEqBands(spectrum_->bands(), tr("EQ: %1").arg(summary))) {
+        return false;
+    }
+    status_->setText(tr("EQ applied (%1). The curve is still up, so applying it again "
+                        "applies it twice.")
+                         .arg(summary));
+    return true;
+}
+
+void MainWindow::resetEqCurve() {
+    spectrum_->clearBands();
+    refreshActions();
+}
+
+bool MainWindow::printEqBands() const {
+    for (int index = 0; index < spectrum_->curve().bandCount(); ++index) {
+        const dsp::EqBand* band = spectrum_->curve().band(index);
+        std::printf("eq_band%d_hz=%.4f\neq_band%d_gain_db=%.4f\neq_band%d_q=%.4f\n", index,
+                    band->filter.frequency, index, band->filter.gainDb, index, band->filter.q);
+    }
+    std::printf("eq_bands=%d\n", spectrum_->curve().bandCount());
+    std::fflush(stdout);
+    return true;
 }
 
 bool MainWindow::applyOverRange(
@@ -2690,6 +2775,58 @@ bool MainWindow::applyOperation(const QString& name) {
             return false;
         }
         return true;
+    }
+
+    // The EQ curve, driven without a mouse. eqadd and eqdrag speak in hertz
+    // and decibels and are turned into pixels inside the view, so a script
+    // stays readable while the gesture still goes through the hit-testing and
+    // the axis mapping a pointer would -- which is where the mistakes are.
+    if (name == "eq") {
+        setEqCurveVisible(true);
+        return true;
+    }
+    if (name == "eqhide") {
+        setEqCurveVisible(false);
+        return true;
+    }
+    if (name == "eqreset") {
+        resetEqCurve();
+        return true;
+    }
+    if (name == "eqapply") {
+        return applyEqCurve();
+    }
+    if (name == "eqprint") {
+        return printEqBands();
+    }
+    if (name.startsWith("eqadd:") || name.startsWith("eqdrag:") || name.startsWith("eqq:") ||
+        name.startsWith("eqshiftdrag:") || name.startsWith("eqremove:")) {
+        const qsizetype colon = name.indexOf(QLatin1Char{':'});
+        const QStringList parts = name.mid(colon + 1).split(QLatin1Char{'/'}, Qt::SkipEmptyParts);
+        std::vector<double> numbers;
+        for (const QString& part : parts) {
+            bool ok = false;
+            numbers.push_back(part.toDouble(&ok));
+            if (!ok) {
+                return false;
+            }
+        }
+        if (name.startsWith("eqadd:")) {
+            return numbers.size() == 2 && spectrum_->addBandAt(numbers[0], numbers[1]);
+        }
+        if (name.startsWith("eqdrag:")) {
+            return numbers.size() == 3 &&
+                   spectrum_->dragBandTo(static_cast<int>(numbers[0]), numbers[1], numbers[2]);
+        }
+        if (name.startsWith("eqq:")) {
+            return numbers.size() == 2 &&
+                   spectrum_->turnWheelOverBand(static_cast<int>(numbers[0]), numbers[1]);
+        }
+        if (name.startsWith("eqshiftdrag:")) {
+            return numbers.size() == 2 && spectrum_->shiftDragBandBy(static_cast<int>(numbers[0]),
+                                                                     static_cast<int>(numbers[1]));
+        }
+        return numbers.size() == 1 && spectrum_->clickAwayBand(static_cast<int>(numbers[0]));
     }
 
     if (name == "reference") {

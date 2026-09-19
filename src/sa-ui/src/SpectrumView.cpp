@@ -55,6 +55,14 @@ void SpectrumView::clear() {
     update();
 }
 
+void SpectrumView::setSampleRate(SampleRate rate) {
+    if (!rate.isValid() || rate == rate_) {
+        return;
+    }
+    rate_ = rate;
+    update();
+}
+
 void SpectrumView::setNote(QString note) {
     note_ = std::move(note);
     update();
@@ -65,35 +73,31 @@ QRect SpectrumView::plotRect() const {
                  std::max(1, height() - kLabelStrip)};
 }
 
+SpectrumPlot SpectrumView::plot() const {
+    const QRect area = plotRect();
+    return SpectrumPlot{area.left(), area.top(), area.width(), area.height(), rate_.hz() * 0.5};
+}
+
 double SpectrumView::frequencyAtX(int x) const {
-    const QRect plot = plotRect();
-    const double fraction =
-        plot.width() > 1 ? static_cast<double>(x - plot.left()) / static_cast<double>(plot.width())
-                         : 0.0;
-    return frequencyAtFraction(FrequencyScale::Logarithmic, std::clamp(fraction, 0.0, 1.0),
-                               rate_.hz() * 0.5);
+    return plot().frequencyAtX(x);
 }
 
 int SpectrumView::xAtFrequency(double hz) const {
-    const QRect plot = plotRect();
-    const double fraction = fractionAtFrequency(FrequencyScale::Logarithmic, hz, rate_.hz() * 0.5);
-    return plot.left() + static_cast<int>(std::lround(fraction * plot.width()));
+    return plot().xAtFrequency(hz);
 }
 
 int SpectrumView::yAtLevel(double decibels) const {
-    const QRect plot = plotRect();
-    const double fraction = std::clamp((kTopDb - decibels) / (kTopDb - kBottomDb), 0.0, 1.0);
-    return plot.top() + static_cast<int>(std::lround(fraction * (plot.height() - 1)));
+    return plot().yAtLevel(decibels);
 }
 
 double SpectrumView::loudestIn(const std::vector<float>& curve, double from, double to,
                                SampleRate rate, int fftSize) const {
     if (curve.empty() || fftSize <= 0) {
-        return kBottomDb;
+        return kSpectrumBottomDb;
     }
     const double perBin = rate.hz() / static_cast<double>(fftSize);
     if (!(perBin > 0.0)) {
-        return kBottomDb;
+        return kSpectrumBottomDb;
     }
     const auto last = static_cast<int>(curve.size()) - 1;
     // At least one bin, always: at the left of a log axis a column spans far
@@ -102,7 +106,7 @@ double SpectrumView::loudestIn(const std::vector<float>& curve, double from, dou
     int first = std::clamp(static_cast<int>(std::floor(from / perBin)), 0, last);
     int stop = std::clamp(static_cast<int>(std::ceil(to / perBin)), first, last);
 
-    double loudest = kBottomDb;
+    double loudest = kSpectrumBottomDb;
     for (int bin = first; bin <= stop; ++bin) {
         loudest = std::max(loudest, static_cast<double>(curve[static_cast<std::size_t>(bin)]));
     }
@@ -139,7 +143,7 @@ void SpectrumView::paintEvent(QPaintEvent* /*event*/) {
     QFont small = painter.font();
     small.setPointSizeF(std::max(7.0, small.pointSizeF() - 2.0));
     painter.setFont(small);
-    for (double decibels = kTopDb; decibels >= kBottomDb; decibels -= 12.0) {
+    for (double decibels = kSpectrumTopDb; decibels >= kSpectrumBottomDb; decibels -= 12.0) {
         const int y = yAtLevel(decibels);
         painter.setPen(kGrid);
         painter.drawLine(plot.left(), y, plot.right(), y);
@@ -173,16 +177,16 @@ void SpectrumView::paintEvent(QPaintEvent* /*event*/) {
     const int columns = plot.width();
     std::vector<double> averageDb(static_cast<std::size_t>(columns));
     std::vector<double> peakDb(static_cast<std::size_t>(columns));
-    std::vector<double> referenceDb(static_cast<std::size_t>(columns), kBottomDb);
+    std::vector<double> referenceDb(static_cast<std::size_t>(columns), kSpectrumBottomDb);
     for (int column = 0; column < columns; ++column) {
         const double from = frequencyAtX(plot.left() + column);
         const double to = frequencyAtX(plot.left() + column + 1);
         averageDb[static_cast<std::size_t>(column)] =
             loudestIn(average_, from, to, rate_, fftSize_);
         peakDb[static_cast<std::size_t>(column)] =
-            peak_.empty() ? kBottomDb : loudestIn(peak_, from, to, rate_, fftSize_);
+            peak_.empty() ? kSpectrumBottomDb : loudestIn(peak_, from, to, rate_, fftSize_);
         referenceDb[static_cast<std::size_t>(column)] =
-            reference_.empty() ? kBottomDb
+            reference_.empty() ? kSpectrumBottomDb
                                : loudestIn(reference_, from, to, referenceRate_, referenceFftSize_);
     }
 
