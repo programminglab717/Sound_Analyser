@@ -254,6 +254,17 @@ jobs:
           & "$env:CMAKE_PREFIX_PATH/bin/windeployqt.exe" --release --no-translations `
               --no-system-d3d-compiler --no-opengl-sw "$stage/auscultate.exe"
 
+          # The product ships unsigned, so a downloaded copy carries the Zone
+          # Identifier mark and SmartScreen refuses it on reputation it has no
+          # way to have earned. The launcher strips that mark from the extracted
+          # folder and starts the application, which is what right-clicking the
+          # zip and ticking Unblock does, applied after the fact and to every
+          # file at once. The readme is what tells a user which of the two
+          # Windows features is refusing them, since the remedies differ and
+          # only one of them is inside our gift.
+          Copy-Item "packaging/windows/Run Auscultate.bat" $stage
+          Copy-Item "packaging/windows/README-FIRST.txt" $stage
+
       # Qt is LGPL-3.0 and may only ship dynamically linked. windeployqt putting
       # the DLLs beside the executable is what makes that true in the artefact,
       # so their absence is a licence failure and not merely a broken build.
@@ -265,6 +276,12 @@ jobs:
             if (-not (Test-Path "$stage/$dll")) {
               throw "$dll is missing: Qt must ship dynamically linked (ADR 0006)"
             }
+          }
+          # A package whose launcher is missing is one a user cannot start, and
+          # that is worth failing the build over rather than discovering on a
+          # machine with Smart App Control on.
+          foreach ($aid in @("Run Auscultate.bat", "README-FIRST.txt")) {
+            if (-not (Test-Path "$stage/$aid")) { throw "$aid is missing from the package" }
           }
           Get-ChildItem $stage -Filter "Qt6*.dll" | ForEach-Object { Write-Host $_.Name }
 
