@@ -295,6 +295,17 @@ TEST_CASE("A window stored as a sliver is opened at a size that can be used", "[
     REQUIRE(placed.height == kMinimumWindowHeight);
 }
 
+TEST_CASE("A screen smaller than the smallest window does not produce a smaller one",
+          "[ui][settings]") {
+    // The minimum and the screen disagree here, and the minimum wins. Worth a
+    // test of its own because getting the order wrong is not merely ugly:
+    // clamping to a low bound above the high bound is undefined behaviour.
+    const Rect tiny{0, 0, 320, 240};
+    const Rect placed = confineToScreens(Rect{0, 0, 1280, 760}, {tiny});
+    REQUIRE(placed.width == kMinimumWindowWidth);
+    REQUIRE(placed.height == kMinimumWindowHeight);
+}
+
 TEST_CASE("A stored rectangle with no screens to check against is left alone", "[ui][settings]") {
     // Cannot happen with a window up. If it ever does, guessing a position
     // would be a guess dressed as a fix.

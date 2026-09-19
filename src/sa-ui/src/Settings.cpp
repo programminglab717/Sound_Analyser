@@ -275,9 +275,15 @@ Rect confineToScreens(const Rect& saved, const std::vector<Rect>& screens) noexc
         }
     }
 
+    // The minimum wins over the screen when the two disagree, which they do on
+    // a screen smaller than the minimum window. Not merely a taste: std::clamp
+    // with a low bound above its high bound is undefined behaviour, so the
+    // order here is load-bearing.
     Rect placed = saved;
-    placed.width = std::clamp(placed.width, kMinimumWindowWidth, std::max(best->width, 1));
-    placed.height = std::clamp(placed.height, kMinimumWindowHeight, std::max(best->height, 1));
+    placed.width =
+        std::clamp(placed.width, kMinimumWindowWidth, std::max(best->width, kMinimumWindowWidth));
+    placed.height = std::clamp(placed.height, kMinimumWindowHeight,
+                               std::max(best->height, kMinimumWindowHeight));
 
     if (isReachable(placed, *best)) {
         return placed;

@@ -146,7 +146,8 @@ struct WindowPlacement {
 ///     the primary.
 ///   * The size is clamped into [kMinimumWindow..., that screen's size], so a
 ///     window saved on a 4K monitor does not open larger than the laptop panel
-///     it is reopened on.
+///     it is reopened on. On a screen smaller than the minimum the two
+///     disagree, and the minimum wins.
 ///   * A window with a grabbable amount of itself on that screen, title bar
 ///     included, keeps the position it was saved with -- deliberately hanging
 ///     a window over an edge is a thing people do and is not an error to
