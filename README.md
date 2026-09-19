@@ -89,7 +89,7 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | Export depth and dither | ✅ Done — 16/24/float, triangular and noise-shaped, measured at 12–14 dB less distortion |
 | Provenance: encoder cutoff and true bit depth | ✅ Done — reads what a file has been through, not what its header claims |
 | Octave and third-octave bands | ✅ Done — window-noise-bandwidth corrected; not an IEC 61260 filter bank, and does not claim to be |
-| Room acoustics from an impulse response | ✅ Done — EDT, T20, T30, C50, C80, D50, centre time; recovers a known decay to 1% |
+| Room acoustics from an impulse response | ✅ Done — EDT, T20, T30, C50, C80, D50, centre time; recovers a known decay to 1%, and per octave band |
 | Batch report export | ✅ Done — JSON per file, or CSV across a folder |
 | `sa-cli`: headless batch driver | ✅ Done — seventeen commands, tested end to end |
 | Time-stretch and pitch-shift | ✅ Done — phase vocoder with identity phase locking |

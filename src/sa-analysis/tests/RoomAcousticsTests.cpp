@@ -1,6 +1,7 @@
 #include <sa/analysis/RoomAcoustics.h>
 
 #include <algorithm>
+#include <array>
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <cmath>
@@ -258,4 +259,144 @@ TEST_CASE("Each channel of a stereo impulse response is measured separately", "[
     REQUIRE(right);
     REQUIRE(left.value().t20Seconds == Approx(0.4).epsilon(0.08));
     REQUIRE(right.value().t20Seconds == Approx(2.0).epsilon(0.08));
+}
+
+namespace {
+
+/// A decay whose rate depends on frequency: slow low down, fast up top, which
+/// is what a room with soft furnishings does and what a single T30 cannot say.
+[[nodiscard]] AudioBuffer twoRateDecay(double lowT60, double highT60, double seconds,
+                                       double splitHz = 1000.0, unsigned seed = 23) {
+    const auto frames = static_cast<SampleCount>(seconds * kRate.hz());
+    const double lowTau = tauForT60(lowT60);
+    const double highTau = tauForT60(highT60);
+
+    std::mt19937 engine{seed};
+    std::normal_distribution<double> noise{0.0, 1.0};
+
+    // Two noise sources with their own envelopes, separated by a cascade of six
+    // one-poles rather than one.
+    //
+    // One pole each way was the first attempt and it was the test material
+    // that was wrong, not the code. A single pole at 1 kHz leaves the slow
+    // low-frequency component only 12 dB down at 4 kHz, and because it decays
+    // four times more slowly it overtakes the fast component there within half
+    // a second -- so the 4 kHz band was correctly measuring leakage, and read
+    // 1.39 s where the high component's own rate is 0.5. Six poles is 72 dB of
+    // separation two octaves out, which the fast decay stays ahead of for
+    // longer than the fit needs.
+    constexpr int kStages = 6;
+    AudioBuffer buffer{ChannelLayout::mono(), frames};
+    const double w = 2.0 * std::numbers::pi * splitHz / kRate.hz();
+    const double alpha = std::sin(w) / (1.0 + std::cos(w));
+    std::array<double, kStages> lowState{};
+    std::array<double, kStages> highState{};
+
+    for (SampleCount i = 0; i < frames; ++i) {
+        const double t = static_cast<double>(i) / kRate.hz();
+
+        double lowValue = noise(engine);
+        for (int stage = 0; stage < kStages; ++stage) {
+            lowState[static_cast<std::size_t>(stage)] +=
+                alpha * (lowValue - lowState[static_cast<std::size_t>(stage)]);
+            lowValue = lowState[static_cast<std::size_t>(stage)];
+        }
+
+        double highValue = noise(engine);
+        for (int stage = 0; stage < kStages; ++stage) {
+            const double before = highValue;
+            highState[static_cast<std::size_t>(stage)] +=
+                alpha * (before - highState[static_cast<std::size_t>(stage)]);
+            highValue = before - highState[static_cast<std::size_t>(stage)];
+        }
+
+        // The low path loses a great deal of level to six low-passes; scaled so
+        // both components arrive at a comparable amplitude.
+        buffer.channel(0)[i] = static_cast<float>(
+            0.6 * (12.0 * lowValue * std::exp(-t / lowTau) + highValue * std::exp(-t / highTau)));
+    }
+    return buffer;
+}
+
+} // namespace
+
+TEST_CASE("Octave bands each report their own reverberation time", "[analysis][room][bands]") {
+    // The reason banded measurement exists: one number cannot say that a room
+    // is lively at the bottom and dead at the top, and that difference is what
+    // decides which material fixes it.
+    const AudioBuffer ir = twoRateDecay(2.0, 0.5, 6.0);
+    const auto banded = measureRoomAcousticsByBand(ir.view(), kRate);
+    REQUIRE(banded);
+    REQUIRE(banded.value().size() >= 8);
+
+    const auto at = [&](double centre) {
+        const auto found = std::find_if(
+            banded.value().begin(), banded.value().end(),
+            [centre](const BandedRoomAcoustics& b) { return std::abs(b.centreHz - centre) < 0.6; });
+        REQUIRE(found != banded.value().end());
+        return found->measures;
+    };
+
+    const RoomAcoustics low = at(250.0);
+    const RoomAcoustics high = at(4000.0);
+    REQUIRE(low.valid);
+    REQUIRE(high.valid);
+    REQUIRE(low.hasT20);
+    REQUIRE(high.hasT20);
+    // Not the exact rates -- the filters have skirts and the test material is
+    // crude -- but the ordering and a clear separation, which is the claim.
+    REQUIRE(low.t20Seconds > high.t20Seconds * 1.5);
+}
+
+TEST_CASE("A uniform decay reads the same in every band", "[analysis][room][bands]") {
+    // The converse, and the one that would catch a filter Q that varies with
+    // the band in a way it should not: white noise decaying at one rate has to
+    // come back as one rate everywhere.
+    const AudioBuffer ir = decayingNoise(1.0, 4.0);
+    const auto banded = measureRoomAcousticsByBand(ir.view(), kRate);
+    REQUIRE(banded);
+
+    int checked = 0;
+    for (const BandedRoomAcoustics& band : banded.value()) {
+        // The lowest bands have too few cycles in the record to measure, and
+        // say so rather than being wrong; skip those rather than assert on
+        // them.
+        if (!band.measures.valid || !band.measures.hasT20) {
+            continue;
+        }
+        REQUIRE(band.measures.t20Seconds == Approx(1.0).epsilon(0.20));
+        ++checked;
+    }
+    REQUIRE(checked >= 5);
+}
+
+TEST_CASE("Banded measurement covers the standard centres and stops at Nyquist",
+          "[analysis][room][bands]") {
+    const AudioBuffer ir = decayingNoise(1.0, 2.0);
+    const auto banded = measureRoomAcousticsByBand(ir.view(), kRate);
+    REQUIRE(banded);
+    REQUIRE(banded.value().front().centreHz == Approx(31.5));
+    for (const BandedRoomAcoustics& band : banded.value()) {
+        REQUIRE(band.centreHz * std::exp2(0.5) <= kRate.hz() * 0.5);
+    }
+
+    // Third octaves give more bands over the same range.
+    const auto thirds = measureRoomAcousticsByBand(ir.view(), kRate, 0, BandWidth::ThirdOctave);
+    REQUIRE(thirds);
+    REQUIRE(thirds.value().size() > banded.value().size() * 2);
+}
+
+TEST_CASE("Banded measurement refuses what the single-band one refuses",
+          "[analysis][room][bands]") {
+    const AudioBuffer ir = decayingNoise(1.0, 1.0);
+    REQUIRE_FALSE(measureRoomAcousticsByBand(ir.view(), kRate, 4));
+    REQUIRE_FALSE(measureRoomAcousticsByBand(ir.view(), SampleRate{0.0}));
+
+    const AudioBuffer empty{ChannelLayout::mono(), 0};
+    const auto nothing = measureRoomAcousticsByBand(empty.view(), kRate);
+    REQUIRE(nothing);
+    REQUIRE_FALSE(nothing.value().empty());
+    for (const BandedRoomAcoustics& band : nothing.value()) {
+        REQUIRE_FALSE(band.measures.valid);
+    }
 }

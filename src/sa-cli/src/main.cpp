@@ -452,7 +452,7 @@ void usage() {
       specifies -- nothing here claims to meet its tolerance masks, and a
       certified measurement needs a bank this does not have.
 
-  room <impulse.wav> [--json]
+  room <impulse.wav> [--bands | --thirds] [--json]
       Reverberation and clarity from an impulse response: EDT, T20, T30, C50,
       C80, D50 and centre time, per the definitions in ISO 3382.
 
@@ -464,6 +464,13 @@ void usage() {
       A figure the recording has no range for is reported as "--" rather than
       extrapolated. Measuring T30 needs the decay to fall 35 dB clear of the
       noise, and most impulse responses do not.
+
+      --bands gives a reverberation time per octave, which is how a room is
+      actually described: a single T30 says "reverberant" without saying what
+      to do about it, and 2.0 s at 125 Hz against 0.5 s at 4 kHz says both.
+      --thirds does the same in third-octaves. The impulse response is
+      filtered per band for these, which is not the same operation as the
+      energy integration behind the `bands` command.
 
   provenance <file>... [--json]
       What the audio says about where it came from, as opposed to what its
@@ -694,6 +701,62 @@ int room(const Options& options) {
     }
 
     const auto name = std::filesystem::path{options.positional[1]}.filename().string();
+
+    if (options.has("bands") || options.has("thirds")) {
+        const auto width = options.has("thirds") ? sa::analysis::BandWidth::ThirdOctave
+                                                 : sa::analysis::BandWidth::Octave;
+        const auto banded =
+            sa::analysis::measureRoomAcousticsByBand(audio.view(), info.sampleRate, 0, width);
+        if (!banded) {
+            return fail(std::string{banded.error().what()});
+        }
+        if (asJson) {
+            std::printf("{\n  \"file\": \"%s\",\n  \"bands\": [\n", name.c_str());
+            for (std::size_t i = 0; i < banded.value().size(); ++i) {
+                const auto& band = banded.value()[i];
+                std::printf("    {\"centreHz\": %.1f, ", band.centreHz);
+                if (band.measures.hasT20) {
+                    std::printf("\"t20Seconds\": %.3f, ", band.measures.t20Seconds);
+                } else {
+                    std::printf("\"t20Seconds\": null, ");
+                }
+                if (band.measures.hasT30) {
+                    std::printf("\"t30Seconds\": %.3f, ", band.measures.t30Seconds);
+                } else {
+                    std::printf("\"t30Seconds\": null, ");
+                }
+                if (band.measures.hasEarlyDecay) {
+                    std::printf("\"edtSeconds\": %.3f}%s\n", band.measures.earlyDecaySeconds,
+                                i + 1 < banded.value().size() ? "," : "");
+                } else {
+                    std::printf("\"edtSeconds\": null}%s\n",
+                                i + 1 < banded.value().size() ? "," : "");
+                }
+            }
+            std::printf("  ]\n}\n");
+            return 0;
+        }
+
+        std::printf("%s\n", name.c_str());
+        std::printf("   band        EDT       T20       T30\n");
+        for (const auto& band : banded.value()) {
+            const auto field = [](bool have, double value) {
+                static char buffer[16];
+                if (!have) {
+                    std::snprintf(buffer, sizeof buffer, "       --");
+                } else {
+                    std::snprintf(buffer, sizeof buffer, "%8.3f", value);
+                }
+                return std::string{buffer};
+            };
+            std::printf("  %7.1f Hz %s %s %s\n", band.centreHz,
+                        field(band.measures.hasEarlyDecay, band.measures.earlyDecaySeconds).c_str(),
+                        field(band.measures.hasT20, band.measures.t20Seconds).c_str(),
+                        field(band.measures.hasT30, band.measures.t30Seconds).c_str());
+        }
+        return 0;
+    }
+
     if (asJson) {
         std::printf("{\n  \"file\": \"%s\",\n  \"channels\": [\n", name.c_str());
     } else {

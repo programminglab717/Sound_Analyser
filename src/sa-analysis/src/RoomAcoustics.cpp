@@ -1,4 +1,5 @@
 #include <sa/analysis/RoomAcoustics.h>
+#include <sa/dsp/Biquad.h>
 
 #include <algorithm>
 #include <cmath>
@@ -313,6 +314,68 @@ Result<RoomAcoustics> measureRoomAcoustics(ConstAudioBufferView impulse, SampleR
             weighted += energy * static_cast<double>(i) * perSample;
         }
         out.centreTimeSeconds = weighted / total;
+    }
+    return out;
+}
+
+Result<std::vector<BandedRoomAcoustics>> measureRoomAcousticsByBand(ConstAudioBufferView impulse,
+                                                                    SampleRate rate, int channel,
+                                                                    BandWidth width) {
+    if (channel < 0 || channel >= impulse.channelCount()) {
+        return Error{ErrorCode::OutOfRange, "channel index outside the impulse response"};
+    }
+    if (!(rate.hz() > 0.0)) {
+        return Error{ErrorCode::InvalidArgument, "an impulse response needs a sample rate"};
+    }
+
+    OctaveBandSettings settings;
+    settings.width = width;
+    const std::vector<Band> layout = bandLayout(rate, settings);
+
+    std::vector<BandedRoomAcoustics> out;
+    out.reserve(layout.size());
+    if (impulse.frames() <= 0) {
+        for (const Band& band : layout) {
+            out.push_back(BandedRoomAcoustics{band.centreHz, RoomAcoustics{}});
+        }
+        return out;
+    }
+
+    const float* samples = impulse.channel(channel);
+    AudioBuffer filtered{ChannelLayout::mono(), impulse.frames()};
+
+    for (const Band& band : layout) {
+        BandedRoomAcoustics entry;
+        entry.centreHz = band.centreHz;
+
+        // Q from the band's own edges: a bandpass of width w centred on f has
+        // Q = f / w, so the filter follows whatever the layout says rather than
+        // a constant that would only be right for one bandwidth.
+        dsp::FilterSpec spec;
+        spec.type = dsp::FilterType::BandPass;
+        spec.frequency = band.centreHz;
+        spec.q = band.centreHz / std::max(1.0, band.highHz - band.lowHz);
+
+        auto coefficients = dsp::BiquadCoefficients::design(rate, spec);
+        if (!coefficients) {
+            out.push_back(entry);
+            continue;
+        }
+
+        // Two sections, and forward only. A zero-phase pass would be tidier but
+        // filtering backwards over an impulse response smears energy earlier in
+        // time, which is precisely the axis being measured.
+        dsp::Biquad first{coefficients.value()};
+        dsp::Biquad second{coefficients.value()};
+        for (SampleCount i = 0; i < impulse.frames(); ++i) {
+            filtered.channel(0)[i] = second.processSample(first.processSample(samples[i]));
+        }
+
+        auto measured = measureRoomAcoustics(filtered.constView(), rate, 0);
+        if (measured) {
+            entry.measures = std::move(measured).value();
+        }
+        out.push_back(entry);
     }
     return out;
 }

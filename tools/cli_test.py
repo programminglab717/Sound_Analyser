@@ -506,6 +506,24 @@ def main() -> int:
         check("a livelier room reads as less clear",
               len(clarities) == 2 and clarities[1] < clarities[0], str(clarities))
 
+        # Per-octave reverberation. A decay that is the same at every
+        # frequency has to read the same in every band, which is the check that
+        # the per-band filtering is not itself colouring the answer.
+        result = run("room", str(workspace / "ir-1.2.wav"), "--bands", "--json")
+        check("room --bands exits cleanly", result.returncode == 0, result.stderr)
+        if result.returncode == 0:
+            bands = json.loads(result.stdout)["bands"]
+            check("bands cover the octave centres", len(bands) >= 8, f"{len(bands)} bands")
+            measured = [b["t20Seconds"] for b in bands if b["t20Seconds"] is not None]
+            check("most bands measure something", len(measured) >= 5, f"{len(measured)}")
+            if measured:
+                # Wide, because the lowest bands have few cycles in a short
+                # record and are genuinely noisier; the point is that no band
+                # is wildly off, not that they agree to a percent.
+                check("and every band agrees with the decay it was made from",
+                      all(abs(v - 1.2) < 0.35 for v in measured),
+                      f"{min(measured):.3f} .. {max(measured):.3f}")
+
         check("room with no file fails", run("room").returncode != 0)
         check("room on a missing file fails",
               run("room", str(workspace / "nope.wav")).returncode != 0)

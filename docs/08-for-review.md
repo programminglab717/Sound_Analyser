@@ -152,7 +152,8 @@ Not blocked, but a person's judgement would be better than mine.
   6:1 range, which says the arithmetic is right and says nothing about
   whether it agrees with whatever measured your room. If you have an impulse
   response with a published or previously-measured T30, that comparison is
-  worth more than anything I can do here.
+  worth more than anything I can do here. `--bands` gives it per octave,
+  which is the form a room is usually described in.
 
   Note what it will not do: it reports "--" rather than a number when the
   decay has no range for a figure, which is most impulse responses for T30.

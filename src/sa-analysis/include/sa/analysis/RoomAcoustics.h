@@ -1,6 +1,7 @@
 #pragma once
 
 #include <sa/analysis/Decibels.h>
+#include <sa/analysis/OctaveBands.h>
 #include <sa/core/AudioBuffer.h>
 #include <sa/core/Result.h>
 #include <sa/core/Types.h>
@@ -87,6 +88,38 @@ struct RoomAcoustics {
 /// Measure one channel of an impulse response.
 [[nodiscard]] Result<RoomAcoustics> measureRoomAcoustics(ConstAudioBufferView impulse,
                                                          SampleRate rate, int channel = 0);
+
+/// One octave band's worth of the same measures.
+struct BandedRoomAcoustics {
+    /// Nominal centre, as it is written on a report: 125, 250, 500.
+    double centreHz = 0.0;
+    RoomAcoustics measures;
+};
+
+/// Reverberation per octave band, which is how a room is actually described.
+///
+/// A single T30 for a room is an average over a thing that is not flat. A
+/// concert hall is lively at 125 Hz and dead at 8 kHz, a room with soft
+/// furnishings is the other way round, and the two problems are fixed with
+/// different materials -- so a single number says "reverberant" without saying
+/// what to do about it, and the band figures say both.
+///
+/// The impulse response is filtered before each band is measured, which is
+/// what ISO 3382 asks for and is not the same thing as the FFT integration in
+/// OctaveBands.h. That one asks how much energy is in a band; this one needs
+/// the band's *signal* back in the time domain so its decay can be integrated,
+/// and only a filter gives that.
+///
+/// Two biquad sections per band, which is a gentler skirt than the standard's
+/// filter and is said to be rather than implied: a decay leaking in from the
+/// neighbouring band biases a band's reverberation time towards its
+/// neighbour's. On material where adjacent bands decay at similar rates -- most
+/// rooms -- that bias is small.
+///
+/// Bands whose top would pass Nyquist are left out, as in bandLayout().
+[[nodiscard]] Result<std::vector<BandedRoomAcoustics>>
+measureRoomAcousticsByBand(ConstAudioBufferView impulse, SampleRate rate, int channel = 0,
+                           BandWidth width = BandWidth::Octave);
 
 /// The backward-integrated decay curve, in dB relative to its own start.
 ///
