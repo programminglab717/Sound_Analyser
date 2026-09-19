@@ -17,8 +17,8 @@ run `sound-analyser.exe`. Qt ships beside it, so there is nothing to install.
 It is about 13.3 MB and it is built and tested by the same run that produces it:
 every CI job green -- both MSVC configurations, AddressSanitizer and
 ThreadSanitizer among them -- before the package is uploaded. `sa-cli.exe` is
-in the folder beside it: the headless driver, with twenty-three commands: analyse,
-bands, room, sweep, deconvolve, key, tempo, pitch-of, null, provenance, convert,
+in the folder beside it: the headless driver, with twenty-four commands: analyse,
+bands, room, sweep, deconvolve, key, tempo, pitch-of, null, dereverb, provenance, convert,
 normalise, denoise, declick, declip, dehum, deess, compress, gate, channels,
 render, stretch and pitch. `analyse --csv` gives one
 row per file, which is what to point at a folder of deliverables.
@@ -212,6 +212,29 @@ Not blocked, but a person's judgement would be better than mine.
   flatter envelope than anything I can synthesise, and if it falls below 0.55
   the tool will say "no tempo" about a track that plainly has one. That is the
   failure to watch for, and it is a one-number fix if you find it.
+
+- **`sa-cli dereverb` on a take made in a bad room.** This is the one most
+  likely to disappoint, and I would rather you knew why in advance than found
+  out.
+
+  It estimates the late reverberant energy in each frequency band from that
+  band's own recent history and subtracts it. On a measured room it takes EDT
+  from 0.817 s to 0.511 s and lifts C50 by 2.1 dB, which is audible.
+
+  What it does **not** do is shorten the decay. It scales the tail down and
+  leaves the slope alone, so if you measure T30 before and after you will find
+  it barely moved -- 0.792 to 0.741 -- and might conclude the tool did
+  nothing. Judge it on EDT, C50 and D50.
+
+  And it barely touches a discrete echo. A slapback at 30 ms goes in 6.02 dB
+  below the direct sound and comes back at 6.06. This is for a diffuse tail,
+  not a reflection off a wall behind the microphone. If your problem is a
+  slapback, this is the wrong tool and I would rather say so than sell it.
+
+  Set --decay to roughly the room's reverberation time. Over-stating it is not
+  a free way to remove more: a sustained note is indistinguishable from its
+  own tail, so too long a setting starts eating the material -- 0.21 dB off a
+  held tone at 0.4 s, 2.29 dB at 1.5 s.
 
 - **`sa-cli null` is the one I would reach for first.** Take a file, run it
   through anything -- this tool, another tool, a plugin chain, an export at a

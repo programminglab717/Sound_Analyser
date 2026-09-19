@@ -83,6 +83,7 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | Click detection and repair, by linear prediction | ✅ Done |
 | Declipping: restoring peaks a converter took off | ✅ Done |
 | De-humming: finding a mains harmonic series and subtracting it | ✅ Done |
+| De-reverberation | ✅ Done — attenuates a diffuse tail; EDT down 37% and C50 up 2.1 dB on a measured room. It does not shorten the decay and does not claim to |
 | De-essing: compressing the sibilance band alone | ✅ Done — the voice underneath is untouched to a fifth of a decibel |
 | Mastering: filters, true-peak limiting, normalisation | ✅ Done |
 | Compressor and noise gate | ✅ Done — stereo-linked, with a run-up so a selection does not open uncompressed |
@@ -99,7 +100,7 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | Tempo and beat grid | ✅ Done — onset flux and autocorrelation; recovers a known tempo to within 1 BPM with every beat inside one hop, and reports no tempo rather than a number on material that has none |
 | A/B null test | ✅ Done — aligns, gain-matches, subtracts; finds a 137-sample delay exactly and nulls an exact copy to the float floor |
 | Batch report export | ✅ Done — JSON per file, or CSV across a folder |
-| `sa-cli`: headless batch driver | ✅ Done — twenty-three commands, tested end to end |
+| `sa-cli`: headless batch driver | ✅ Done — twenty-four commands, tested end to end |
 | Time-stretch and pitch-shift | ✅ Done — phase vocoder with identity phase locking |
 | Markers and regions in the interface | ✅ Done — add, name, navigate, saved in sessions |
 | Reverse, invert polarity, swap channels, sum to mono | ✅ Done — exact to the sample, and obeys the selection |

@@ -42,6 +42,7 @@
 #include <sa/io/AudioFile.h>
 #include <sa/io/WavWriter.h>
 #include <sa/spectral/Denoise.h>
+#include <sa/spectral/Dereverb.h>
 
 #include <algorithm>
 #include <cctype>
@@ -430,6 +431,23 @@ void usage() {
   declip <in> <out> [--keep-level] [--format 16|24|float]
       Restore clipped peaks. The result is brought down to fit them unless
       --keep-level says otherwise, and the gain applied is printed.
+
+  dereverb <in> <out> [--amount <dB>] [--decay <s>] [--floor <dB>]
+        [--onset <s>] [--format 16|24|float]
+      Take some of the room back out of a take made in too live a one.
+      Estimates the late reverberant energy in each frequency bin from that
+      bin's own recent history and subtracts it. Defaults are 10 dB of
+      removal assuming a 0.4 s decay.
+
+      Set --decay to roughly the room's reverberation time. Over-stating it is
+      not a free way to remove more: a sustained note is indistinguishable
+      from its own tail, so too long a setting starts eating the material and
+      sounding like a gate.
+
+      What it does not do: shorten the decay. It scales the tail down and
+      leaves the slope alone, so T30 barely moves -- judge it on EDT, C50 and
+      D50. A discrete echo is barely touched; this is for a diffuse tail, not
+      a slapback.
 
   deess <in> <out> [--frequency <hz>] [--threshold <dB>] [--ratio <n>]
         [--max <dB>] [--format 16|24|float]
@@ -1906,6 +1924,51 @@ int channels(const Options& options) {
     return 0;
 }
 
+int dereverbFile(const Options& options) {
+    if (options.positional.size() != 3) {
+        return fail("dereverb needs an input and an output");
+    }
+    std::string error;
+    const auto source = open(options.positional[1], error);
+    if (!source) {
+        return fail(error);
+    }
+    const sa::io::AudioFileInfo& info = source->info();
+
+    sa::AudioBuffer audio{info.layout, info.frameCount};
+    if (const auto read = source->read(0, audio.view()); !read) {
+        return fail(std::string{read.error().what()});
+    }
+
+    sa::spectral::DereverbSettings settings;
+    settings.reductionDb = options.number("amount", settings.reductionDb);
+    settings.decaySeconds = options.number("decay", settings.decaySeconds);
+    settings.floorDb = options.number("floor", settings.floorDb);
+    settings.lateOnsetSeconds = options.number("onset", settings.lateOnsetSeconds);
+
+    if (const auto done = sa::spectral::reduceReverb(audio.view(), info.sampleRate, settings);
+        !done) {
+        return fail(std::string{done.error().what()});
+    }
+
+    const sa::engine::BufferSource result{std::move(audio), info.sampleRate};
+    if (!write(result, options.positional[2], formatFrom(options, info.format), error)) {
+        return fail(error);
+    }
+
+    // What it did, and what it did not. Saying the second part matters here
+    // more than usual: this scales a tail down without changing how fast the
+    // room decays, so a user who measures T30 before and after will find it
+    // barely moved and conclude the tool did nothing.
+    std::printf("removed up to %.1f dB of estimated late energy, assuming a %.2f s decay\n",
+                settings.reductionDb, settings.decaySeconds);
+    std::printf("This attenuates the tail; it does not shorten the room. Judge it on EDT, C50 "
+                "and D50 rather than T30.\n");
+    std::printf("A discrete echo is barely touched -- this is for a diffuse tail, not a "
+                "slapback.\n");
+    return 0;
+}
+
 int deessFile(const Options& options) {
     if (options.positional.size() != 3) {
         return fail("deess needs an input and an output");
@@ -2197,6 +2260,9 @@ int main(int argc, char** argv) {
     }
     if (command == "denoise") {
         return denoise(options);
+    }
+    if (command == "dereverb") {
+        return dereverbFile(options);
     }
     if (command == "deess") {
         return deessFile(options);

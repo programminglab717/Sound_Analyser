@@ -824,6 +824,57 @@ def main() -> int:
         check("null on a missing file fails",
               run("null", str(reference), str(workspace / "nope.wav")).returncode != 0)
 
+        print("dereverb:")
+        # A room of known reverberation, measured before and after. The claim
+        # is specific: it attenuates the tail without shortening the room, so
+        # EDT and clarity move a long way and T30 barely moves. Asserting both
+        # halves is what stops the tool quietly starting to claim more.
+        reverb_ir = workspace / "room.wav"
+        rng_room = random.Random(21)
+        t60 = 0.8
+        tau = t60 / (3.0 * math.log(10.0))
+        room = [math.exp(-(i / SAMPLE_RATE) / tau) * rng_room.gauss(0.0, 1.0)
+                for i in range(int(SAMPLE_RATE * t60 * 1.6))]
+        room[0] += 3.0
+        peak_room = max(abs(v) for v in room)
+        write_wav32(reverb_ir, [v / peak_room * 0.9 for v in room])
+
+        before = run("room", str(reverb_ir), "--json")
+        check("room measures the reverberant impulse response",
+              before.returncode == 0, before.stderr)
+        dry_ir = workspace / "room-dry.wav"
+        result = run("dereverb", str(reverb_ir), str(dry_ir), "--decay", "0.8")
+        check("dereverb exits cleanly", result.returncode == 0, result.stderr)
+        check("and says what it does not do",
+              "does not shorten the room" in result.stdout, result.stdout)
+
+        after = run("room", str(dry_ir), "--json")
+        if before.returncode == 0 and result.returncode == 0 and after.returncode == 0:
+            was = json.loads(before.stdout)["channels"][0]
+            now = json.loads(after.stdout)["channels"][0]
+            # Measured here: EDT 0.817 -> 0.511, C50 1.37 -> 3.47 dB.
+            check("early decay is markedly shorter",
+                  now["edtSeconds"] < was["edtSeconds"] * 0.75,
+                  f'{was["edtSeconds"]:.3f} -> {now["edtSeconds"]:.3f}')
+            check("and clarity is up by at least a decibel and a half",
+                  now["c50Db"] > was["c50Db"] + 1.5,
+                  f'{was["c50Db"]:.2f} -> {now["c50Db"]:.2f}')
+            # The other half of the claim, and the one a tool is tempted to
+            # overstate: the decay rate is essentially untouched. If T30 ever
+            # starts moving like EDT does, something changed that the header
+            # does not describe.
+            check("but the decay rate is essentially untouched",
+                  now["t30Seconds"] > was["t30Seconds"] * 0.85,
+                  f'{was["t30Seconds"]:.3f} -> {now["t30Seconds"]:.3f}')
+
+        check("dereverb with no output fails", run("dereverb", str(reverb_ir)).returncode != 0)
+        check("dereverb on a missing file fails",
+              run("dereverb", str(workspace / "nope.wav"),
+                  str(workspace / "out.wav")).returncode != 0)
+        check("dereverb with a negative amount is refused",
+              run("dereverb", str(reverb_ir), str(workspace / "out.wav"),
+                  "--amount", "-5").returncode != 0)
+
         print("key:")
 
         def render_progression(path: Path, chords: list[tuple[list[int], int]],
