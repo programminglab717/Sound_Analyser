@@ -100,6 +100,13 @@ private:
 [[nodiscard]] Result<std::vector<analysis::PitchPoint>>
 trackPitchInChunks(ConstAudioBufferView audio, SampleRate rate,
                    const analysis::PitchSettings& settings, const CancellationToken& cancellation) {
+    // Settings this cannot divide by are handed on whole, so that the refusal
+    // comes from the tracker with its own account of what was wrong rather
+    // than from arithmetic here.
+    if (!(settings.hop > 0) || !(settings.minHz > 0.0) || !rate.isValid()) {
+        return analysis::trackPitch(audio, rate, settings);
+    }
+
     // A second of audio: about a tenth of a second of work at the settings
     // this is used with, which is short enough not to be felt and long enough
     // that rebuilding the tracker's transform tables per chunk is noise.
@@ -115,6 +122,8 @@ trackPitchInChunks(ConstAudioBufferView audio, SampleRate rate,
     std::vector<analysis::PitchPoint> contour;
     for (SampleCount base = 0; base < audio.frames(); base += chunk) {
         if (cancellation.isCancelled()) {
+            // What it had, which nothing will look at: a cancelled run is a
+            // superseded one, and its generation check drops the result.
             return contour;
         }
         const bool last = base + chunk >= audio.frames();
