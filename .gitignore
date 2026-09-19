@@ -1,6 +1,9 @@
 # Build
 build/
 out/
+# Where the Windows job stages the application and builds the installer.
+package/
+installer/
 cmake-build-*/
 *.user
 .vs/
