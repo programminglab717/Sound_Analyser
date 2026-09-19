@@ -2,6 +2,7 @@
 
 #include <sa/core/Cancellation.h>
 #include <sa/dsp/ChannelOps.h>
+#include <sa/dsp/OfflineDynamics.h>
 #include <sa/engine/Clip.h>
 #include <sa/engine/Document.h>
 #include <sa/engine/DocumentSource.h>
@@ -18,6 +19,7 @@
 #include <QMainWindow>
 #include <atomic>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <thread>
@@ -232,6 +234,22 @@ private:
     void chooseFilter();
     void applyFilter(int filterType, double frequency, double q, double gainDb,
                      const QString& label);
+    /// The two dynamics processors. Both are asked for through one form
+    /// rather than a chain of prompts, because a threshold without its ratio
+    /// beside it is not a setting anyone can judge.
+    void chooseCompressor();
+    void chooseGate();
+
+    /// Run `apply` over the selection with a run-up before it and a blend at
+    /// each end, and commit the result under `label`.
+    ///
+    /// Shared by both because the run-up and the blend are the whole
+    /// difference between a processor and an edit, and neither should be
+    /// written twice.
+    bool
+    applyOverRange(const QString& label, double attackSeconds, double releaseSeconds,
+                   const std::function<Status(AudioBufferView, SampleCount, SampleCount)>& apply);
+
     void chooseDeclick();
     void restoreClipping();
     bool removeHum();

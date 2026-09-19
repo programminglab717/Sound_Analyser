@@ -849,6 +849,116 @@ def main() -> int:
                 else:
                     print("  ok  a saved session reopens with its markers")
 
+        # Dynamics. A loud half and a quiet half, so what each processor did
+        # to the distance between them is one number: a compressor closes the
+        # gap, a gate widens it, and nothing else does either.
+        print("\ndynamics:")
+        steps = workspace / "loud-then-quiet.wav"
+        with wave.open(str(steps), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(SAMPLE_RATE)
+            handle.writeframes(
+                b"".join(
+                    struct.pack(
+                        "<h",
+                        int((0.5 if i < 4 * SAMPLE_RATE else 0.02)
+                            * math.sin(2.0 * math.pi * 440.0 * i / SAMPLE_RATE) * 32767),
+                    )
+                    for i in range(8 * SAMPLE_RATE)
+                )
+            )
+
+        def loud_and_quiet(values: list[float]) -> tuple[float, float]:
+            def peak_db(start: int, stop: int) -> float:
+                loudest = max((abs(v) for v in values[start:stop]), default=0.0)
+                return 20.0 * math.log10(max(loudest, 1e-12))
+
+            return peak_db(2 * SAMPLE_RATE, 3 * SAMPLE_RATE), peak_db(
+                6 * SAMPLE_RATE, 7 * SAMPLE_RATE
+            )
+
+        before_loud, before_quiet = loud_and_quiet(load(steps))
+        for verb, expectation in (
+            ("compress:-30/8", "narrower"),
+            ("gate:-30/-60", "wider"),
+        ):
+            output = workspace / f"dynamics-{verb.split(':')[0]}.wav"
+            completed = subprocess.run(
+                [str(arguments.binary), str(steps), "--apply", f"selectall,{verb}",
+                 "--export", str(output)],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            if completed.returncode != 0 or not output.exists():
+                failures.append(f"{verb}: exited {completed.returncode} -- {completed.stderr}")
+                continue
+            after_loud, after_quiet = loud_and_quiet(load(output))
+            before_gap = before_loud - before_quiet
+            after_gap = after_loud - after_quiet
+            if expectation == "narrower":
+                # The loud half comes down and the quiet half, well under the
+                # threshold, is left where it was.
+                ok = after_gap < before_gap - 10.0 and abs(after_quiet - before_quiet) < 1.0
+            else:
+                # The gate does the opposite: the loud half untouched, the
+                # quiet half pushed down by the depth asked for.
+                ok = after_gap > before_gap + 30.0 and abs(after_loud - before_loud) < 1.0
+            if not ok:
+                failures.append(
+                    f"{verb}: gap went {before_gap:.1f} -> {after_gap:.1f} dB "
+                    f"(loud {before_loud:.1f} -> {after_loud:.1f}, "
+                    f"quiet {before_quiet:.1f} -> {after_quiet:.1f})"
+                )
+            else:
+                print(f"  ok  {verb}: gap {before_gap:.1f} -> {after_gap:.1f} dB, {expectation}")
+
+        # Applied to a selection, the rest of the file is left exactly alone.
+        # This is what the run-up and the edge blend are for, and getting it
+        # wrong is silent: the file still plays, just with the wrong four
+        # seconds processed.
+        output = workspace / "dynamics-part.wav"
+        completed = subprocess.run(
+            [str(arguments.binary), str(steps), "--apply", "select:4-8,gate:-30/-60",
+             "--export", str(output)],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if completed.returncode != 0 or not output.exists():
+            failures.append(f"gate over a selection: exited {completed.returncode}")
+        else:
+            gated = load(output)
+            source_samples = load(steps)
+            if len(gated) != len(source_samples):
+                failures.append(f"gate over a selection: {len(gated)} frames")
+            else:
+                # The first four seconds are outside the selection. The blend
+                # reaches a little way in from the boundary, so the check stops
+                # short of it rather than pretending the join is a hard edge.
+                untouched = 4 * SAMPLE_RATE - SAMPLE_RATE // 2
+                worst = max(
+                    abs(a - b) for a, b in zip(gated[:untouched], source_samples[:untouched])
+                )
+                if worst > 2e-4:
+                    failures.append(f"gate over a selection changed the rest by {worst:.2e}")
+                else:
+                    print(f"  ok  a gated selection leaves the rest alone ({worst:.2e})")
+
+        # An unparseable setting is refused rather than run with a default.
+        bad = subprocess.run(
+            [str(arguments.binary), str(steps), "--apply", "selectall,compress:loud",
+             "--export", str(workspace / "nope.wav")],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        if bad.returncode == 0:
+            failures.append("compress:loud was accepted")
+        else:
+            print("  ok  an unparseable setting is refused")
+
         # Fade shapes. The source is a constant, so the exported samples *are*
         # the gain curve and can be compared against the formula rather than
         # against "it got quieter".

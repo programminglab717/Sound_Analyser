@@ -17,6 +17,7 @@
 #include <sa/dsp/Declick.h>
 #include <sa/dsp/Declip.h>
 #include <sa/dsp/Dehum.h>
+#include <sa/dsp/OfflineDynamics.h>
 #include <sa/dsp/Resampler.h>
 #include <sa/dsp/TimeStretch.h>
 #include <sa/engine/BufferSource.h>
@@ -331,6 +332,21 @@ void usage() {
       Change its pitch without changing how long it lasts. Fractions are
       allowed, and 0.01 of a semitone is a cent.
 
+  compress <in> <out> [--threshold <dB>] [--ratio <n>] [--attack <ms>]
+           [--release <ms>] [--knee <dB>] [--makeup <dB>] [--no-link]
+           [--format 16|24|float]
+      Downward compression over the whole file. Defaults are -20 dB, 4:1,
+      10 ms and 100 ms. A stereo pair shares one sidechain unless --no-link,
+      so the image cannot move.
+
+  gate <in> <out> [--threshold <dB>] [--depth <dB>] [--attack <ms>]
+       [--hold <ms>] [--release <ms>] [--hysteresis <dB>] [--no-link]
+       [--format 16|24|float]
+      Noise gate with hysteresis and hold. Defaults are -40 dB open, 3 dB of
+      hysteresis and 80 dB of depth. Depth is finite on purpose: a gate that
+      mutes completely makes its own action more obvious than the noise it
+      removed.
+
   channels <in> <out> --op reverse|invert|swap|mono [--format 16|24|float]
       The four edits that are pure arithmetic: play it backwards, flip its
       polarity, exchange left and right, or put the average of the two
@@ -614,6 +630,75 @@ int reshape(const Options& options,
                 std::filesystem::path{options.positional[1]}.filename().string().c_str(),
                 description.c_str(),
                 std::filesystem::path{options.positional[2]}.filename().string().c_str(), seconds);
+    return 0;
+}
+
+/// Compress or gate a whole file.
+///
+/// No run-up and no edge blend, unlike the window: the range is the file, so
+/// there is nothing before it to settle on and nothing beside it to step
+/// against. The processor starts cold, which is correct here -- the first
+/// moments of a file are the first moments of the programme.
+int dynamics(const Options& options, bool compressing) {
+    const char* what = compressing ? "compress" : "gate";
+    if (options.positional.size() != 3) {
+        return fail(std::string{what} + " needs an input and an output");
+    }
+
+    std::string error;
+    const auto source = open(options.positional[1], error);
+    if (!source) {
+        return fail(error);
+    }
+    const sa::io::AudioFileInfo& info = source->info();
+
+    sa::AudioBuffer audio{info.layout, info.frameCount};
+    if (const auto read = source->read(0, audio.view()); !read) {
+        return fail(std::string{read.error().what()});
+    }
+
+    sa::dsp::OfflineDynamicsSettings shared;
+    shared.linkStereo = !options.has("no-link");
+
+    sa::Status status;
+    std::string summary;
+    if (compressing) {
+        sa::dsp::CompressorSettings settings;
+        settings.thresholdDb = options.number("threshold", settings.thresholdDb);
+        settings.ratio = options.number("ratio", settings.ratio);
+        settings.attackSeconds = options.number("attack", settings.attackSeconds * 1000.0) / 1000.0;
+        settings.releaseSeconds =
+            options.number("release", settings.releaseSeconds * 1000.0) / 1000.0;
+        settings.kneeDb = options.number("knee", settings.kneeDb);
+        settings.makeupGainDb = options.number("makeup", settings.makeupGainDb);
+        status = sa::dsp::compressOffline(audio.view(), info.sampleRate, settings, 0, 0, shared);
+        summary = std::to_string(settings.ratio).substr(0, 4) + ":1 at " +
+                  std::to_string(static_cast<int>(settings.thresholdDb)) + " dB";
+    } else {
+        sa::dsp::GateSettings settings;
+        settings.thresholdDb = options.number("threshold", settings.thresholdDb);
+        settings.rangeDb = -std::abs(options.number("depth", -settings.rangeDb));
+        settings.hysteresisDb = options.number("hysteresis", settings.hysteresisDb);
+        settings.attackSeconds = options.number("attack", settings.attackSeconds * 1000.0) / 1000.0;
+        settings.holdSeconds = options.number("hold", settings.holdSeconds * 1000.0) / 1000.0;
+        settings.releaseSeconds =
+            options.number("release", settings.releaseSeconds * 1000.0) / 1000.0;
+        status = sa::dsp::gateOffline(audio.view(), info.sampleRate, settings, 0, 0, shared);
+        summary = std::to_string(static_cast<int>(settings.thresholdDb)) + " dB open, " +
+                  std::to_string(static_cast<int>(-settings.rangeDb)) + " dB deep";
+    }
+    if (!status) {
+        return fail(std::string{status.error().what()});
+    }
+
+    const sa::engine::BufferSource processed{std::move(audio), info.sampleRate};
+    if (!write(processed, options.positional[2], formatFrom(options, info.format), error)) {
+        return fail(error);
+    }
+    std::printf("%s: %s %s -> %s\n",
+                std::filesystem::path{options.positional[1]}.filename().string().c_str(), what,
+                summary.c_str(),
+                std::filesystem::path{options.positional[2]}.filename().string().c_str());
     return 0;
 }
 
@@ -909,6 +994,12 @@ int main(int argc, char** argv) {
     }
     if (command == "pitch") {
         return pitch(options);
+    }
+    if (command == "compress") {
+        return dynamics(options, true);
+    }
+    if (command == "gate") {
+        return dynamics(options, false);
     }
     if (command == "channels") {
         return channels(options);

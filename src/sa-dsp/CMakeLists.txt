@@ -10,6 +10,7 @@ add_library(sa-dsp STATIC
     src/LinearPrediction.cpp
     src/ParametricEq.cpp
     src/ExactTruePeak.cpp
+    src/OfflineDynamics.cpp
     src/OfflineLimiter.cpp
     src/Resampler.cpp
     src/Stft.cpp
@@ -36,6 +37,7 @@ if(SA_BUILD_TESTS)
         tests/LinearPredictionTests.cpp
         tests/ParametricEqTests.cpp
         tests/ExactTruePeakTests.cpp
+        tests/OfflineDynamicsTests.cpp
         tests/OfflineLimiterTests.cpp
         tests/ResamplerTests.cpp
         tests/StereoLinkTests.cpp

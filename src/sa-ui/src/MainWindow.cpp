@@ -16,6 +16,7 @@
 #include <sa/io/AudioFile.h>
 #include <sa/io/WavWriter.h>
 #include <sa/spectral/SpectralEdit.h>
+#include <sa/ui/FieldDialog.h>
 #include <sa/ui/MainWindow.h>
 #include <sa/ui/ViewGeometry.h>
 
@@ -305,6 +306,8 @@ void MainWindow::buildMenus() {
         (void)applyChannelOp(dsp::ChannelOp::SumToMono, tr("sum to mono"));
     });
     process->addSeparator();
+    process->addAction(tr("Co&mpressor…"), this, &MainWindow::chooseCompressor);
+    process->addAction(tr("&Gate…"), this, &MainWindow::chooseGate);
     process->addAction(tr("&Time stretch…"), this, &MainWindow::chooseTimeStretch);
     process->addAction(tr("&Pitch shift…"), this, &MainWindow::choosePitchShift);
     normaliseAction_ =
@@ -1561,6 +1564,115 @@ void MainWindow::applyFilter(int filterType, double frequency, double q, double 
     });
 }
 
+bool MainWindow::applyOverRange(
+    const QString& label, double attackSeconds, double releaseSeconds,
+    const std::function<Status(AudioBufferView, SampleCount, SampleCount)>& apply) {
+    const TimeSelection range = targetRange();
+    if (range.isEmpty() || !documentSource_) {
+        return false;
+    }
+
+    // Audio before the selection for the envelope to settle on, and a blend at
+    // each end so the gain the processor settled on does not meet the untouched
+    // audio as a step. Both are the processor's own time constants: a slow
+    // release needs a longer run-up and leaves a bigger step to spread.
+    const SampleRate rate = document_.sampleRate();
+    const SampleCount runUp =
+        std::min(dsp::dynamicsRunUp(rate, attackSeconds, releaseSeconds), range.start);
+    const auto blend = std::min<SampleCount>(
+        static_cast<SampleCount>(std::max(0.010, releaseSeconds) * rate.hz()), range.length() / 4);
+
+    AudioBuffer span{document_.layout(), runUp + range.length()};
+    if (!documentSource_->read(range.start - runUp, span.view())) {
+        status_->setText(tr("Could not read the selection"));
+        return false;
+    }
+
+    if (const Status status = apply(span.view(), runUp, blend); !status) {
+        status_->setText(QString::fromUtf8(status.error().what()));
+        return false;
+    }
+
+    // Only the selection is written back. The run-up was there to settle the
+    // envelope, not to be applied to audio nobody selected.
+    AudioBuffer applied{document_.layout(), range.length()};
+    for (int channel = 0; channel < applied.channelCount(); ++channel) {
+        std::copy_n(span.channel(channel) + runUp, applied.frames(), applied.channel(channel));
+    }
+
+    return applyEdit(label, [this, &range, &applied] {
+        return engine::replaceRange(document_, range.start, std::move(applied)).ok();
+    });
+}
+
+void MainWindow::chooseCompressor() {
+    if (!hasDocument()) {
+        return;
+    }
+    dsp::CompressorSettings settings;
+    const std::vector<double> values = FieldDialog::ask(
+        this, tr("Compressor"),
+        {{tr("Threshold"), settings.thresholdDb, -80.0, 0.0, 1, 1.0, tr("dB")},
+         {tr("Ratio"), settings.ratio, 1.0, 100.0, 1, 0.5, tr(": 1")},
+         {tr("Attack"), settings.attackSeconds * 1000.0, 0.1, 500.0, 1, 1.0, tr("ms")},
+         {tr("Release"), settings.releaseSeconds * 1000.0, 1.0, 5000.0, 0, 10.0, tr("ms")},
+         {tr("Knee"), settings.kneeDb, 0.0, 24.0, 1, 1.0, tr("dB")},
+         {tr("Makeup gain"), settings.makeupGainDb, -24.0, 24.0, 1, 0.5, tr("dB")}});
+    if (values.size() != 6) {
+        return;
+    }
+
+    settings.thresholdDb = values[0];
+    settings.ratio = values[1];
+    settings.attackSeconds = values[2] / 1000.0;
+    settings.releaseSeconds = values[3] / 1000.0;
+    settings.kneeDb = values[4];
+    settings.makeupGainDb = values[5];
+
+    const SampleRate rate = document_.sampleRate();
+    (void)applyOverRange(
+        tr("compress %1:1 at %2 dB")
+            .arg(settings.ratio, 0, 'f', 1)
+            .arg(settings.thresholdDb, 0, 'f', 1),
+        settings.attackSeconds, settings.releaseSeconds,
+        [rate, settings](AudioBufferView audio, SampleCount runUp, SampleCount blend) {
+            return dsp::compressOffline(audio, rate, settings, runUp, blend);
+        });
+}
+
+void MainWindow::chooseGate() {
+    if (!hasDocument()) {
+        return;
+    }
+    dsp::GateSettings settings;
+    const std::vector<double> values = FieldDialog::ask(
+        this, tr("Gate"),
+        {{tr("Threshold"), settings.thresholdDb, -100.0, 0.0, 1, 1.0, tr("dB")},
+         {tr("Hysteresis"), settings.hysteresisDb, 0.0, 24.0, 1, 1.0, tr("dB")},
+         {tr("Attack"), settings.attackSeconds * 1000.0, 0.1, 200.0, 1, 0.5, tr("ms")},
+         {tr("Hold"), settings.holdSeconds * 1000.0, 0.0, 2000.0, 0, 10.0, tr("ms")},
+         {tr("Release"), settings.releaseSeconds * 1000.0, 1.0, 5000.0, 0, 10.0, tr("ms")},
+         {tr("Depth"), settings.rangeDb, -120.0, 0.0, 1, 3.0, tr("dB")}});
+    if (values.size() != 6) {
+        return;
+    }
+
+    settings.thresholdDb = values[0];
+    settings.hysteresisDb = values[1];
+    settings.attackSeconds = values[2] / 1000.0;
+    settings.holdSeconds = values[3] / 1000.0;
+    settings.releaseSeconds = values[4] / 1000.0;
+    settings.rangeDb = values[5];
+
+    const SampleRate rate = document_.sampleRate();
+    (void)applyOverRange(
+        tr("gate at %1 dB").arg(settings.thresholdDb, 0, 'f', 1), settings.attackSeconds,
+        settings.releaseSeconds,
+        [rate, settings](AudioBufferView audio, SampleCount runUp, SampleCount blend) {
+            return dsp::gateOffline(audio, rate, settings, runUp, blend);
+        });
+}
+
 void MainWindow::chooseDeclick() {
     if (!hasDocument()) {
         return;
@@ -2332,6 +2444,62 @@ bool MainWindow::applyOperation(const QString& name) {
         limitTo(ceiling);
         return true;
     }
+    // compress:threshold/ratio[/attack_ms/release_ms] and
+    // gate:threshold[/depth_dB]. Positional rather than named, because a batch
+    // verb is a line in a script rather than a form, and the first two are the
+    // ones that decide what the processor does.
+    //
+    // Slashes rather than commas: the verb list itself is comma-separated, so
+    // a comma inside a verb is a verb boundary and compress:-30,8 arrives as
+    // two operations, the second of them nonsense.
+    if (name.startsWith("compress:") || name.startsWith("gate:")) {
+        const bool compressing = name.startsWith("compress:");
+        const QStringList parts =
+            name.mid(compressing ? 9 : 5).split(QLatin1Char{'/'}, Qt::SkipEmptyParts);
+        if (parts.isEmpty()) {
+            return false;
+        }
+        std::vector<double> numbers;
+        for (const QString& part : parts) {
+            bool ok = false;
+            numbers.push_back(part.toDouble(&ok));
+            if (!ok) {
+                return false;
+            }
+        }
+
+        const SampleRate rate = document_.sampleRate();
+        if (compressing) {
+            dsp::CompressorSettings settings;
+            settings.thresholdDb = numbers[0];
+            if (numbers.size() > 1) {
+                settings.ratio = numbers[1];
+            }
+            if (numbers.size() > 2) {
+                settings.attackSeconds = numbers[2] / 1000.0;
+            }
+            if (numbers.size() > 3) {
+                settings.releaseSeconds = numbers[3] / 1000.0;
+            }
+            return applyOverRange(
+                QStringLiteral("compress"), settings.attackSeconds, settings.releaseSeconds,
+                [rate, settings](AudioBufferView audio, SampleCount runUp, SampleCount blend) {
+                    return dsp::compressOffline(audio, rate, settings, runUp, blend);
+                });
+        }
+
+        dsp::GateSettings settings;
+        settings.thresholdDb = numbers[0];
+        if (numbers.size() > 1) {
+            settings.rangeDb = numbers[1];
+        }
+        return applyOverRange(
+            QStringLiteral("gate"), settings.attackSeconds, settings.releaseSeconds,
+            [rate, settings](AudioBufferView audio, SampleCount runUp, SampleCount blend) {
+                return dsp::gateOffline(audio, rate, settings, runUp, blend);
+            });
+    }
+
     if (name == "reference") {
         captureSpectrumReference();
         return spectrum_ != nullptr && spectrum_->hasReference();

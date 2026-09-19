@@ -14,6 +14,7 @@ set(CMAKE_AUTOMOC ON)
 # by itself when it sits next to its .cpp, and ours live under include/.
 add_library(sa-ui STATIC
     src/Colourmap.cpp
+    src/FieldDialog.cpp
     src/LoudnessPanel.cpp
     src/MainWindow.cpp
     src/SpectrogramView.cpp
@@ -22,6 +23,7 @@ add_library(sa-ui STATIC
     src/TimeRuler.cpp
     src/ViewGeometry.cpp
     src/WaveformView.cpp
+    include/sa/ui/FieldDialog.h
     include/sa/ui/LoudnessPanel.h
     include/sa/ui/MainWindow.h
     include/sa/ui/SpectrogramView.h

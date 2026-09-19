@@ -347,6 +347,52 @@ def main() -> int:
         # bit-exactness: at 16 the average of two 16-bit samples is a half-step
         # that has to be rounded, and the test would be measuring the writer
         # rather than the operation.
+        # Dynamics, on a file that is loud then quiet, so the distance
+        # between the two halves is the one number that says what happened.
+        print("dynamics:")
+        steps = workspace / "loud-then-quiet.wav"
+        write_wav(
+            steps,
+            [
+                (0.5 if i < 4 * SAMPLE_RATE else 0.02)
+                * math.sin(2.0 * math.pi * 440.0 * i / SAMPLE_RATE)
+                for i in range(8 * SAMPLE_RATE)
+            ],
+        )
+
+        def halves(path: Path) -> tuple[float, float]:
+            values, _ = read_wav(path)
+
+            def peak_db(start: int, stop: int) -> float:
+                loudest = max((abs(v) for v in values[start:stop]), default=0.0)
+                return 20.0 * math.log10(max(loudest, 1e-12))
+
+            return peak_db(2 * SAMPLE_RATE, 3 * SAMPLE_RATE), peak_db(
+                6 * SAMPLE_RATE, 7 * SAMPLE_RATE
+            )
+
+        loud0, quiet0 = halves(steps)
+        compressed = workspace / "compressed.wav"
+        result = run("compress", str(steps), str(compressed),
+                     "--threshold", "-30", "--ratio", "8")
+        check("compress exits cleanly", result.returncode == 0, result.stderr)
+        if result.returncode == 0 and compressed.exists():
+            loud, quiet = halves(compressed)
+            check("compress closes the gap", (loud - quiet) < (loud0 - quiet0) - 10.0,
+                  f"{loud0 - quiet0:.1f} -> {loud - quiet:.1f} dB")
+            check("and leaves what is under the threshold alone", abs(quiet - quiet0) < 1.0,
+                  f"{quiet0:.1f} -> {quiet:.1f} dB")
+
+        gated = workspace / "gated.wav"
+        result = run("gate", str(steps), str(gated), "--threshold", "-30", "--depth", "60")
+        check("gate exits cleanly", result.returncode == 0, result.stderr)
+        if result.returncode == 0 and gated.exists():
+            loud, quiet = halves(gated)
+            check("gate widens the gap", (loud - quiet) > (loud0 - quiet0) + 30.0,
+                  f"{loud0 - quiet0:.1f} -> {loud - quiet:.1f} dB")
+            check("and leaves what is over the threshold alone", abs(loud - loud0) < 1.0,
+                  f"{loud0:.1f} -> {loud:.1f} dB")
+
         print("channels:")
         stereo = workspace / "stereo.wav"
         write_stereo(
@@ -397,6 +443,10 @@ def main() -> int:
         check("an impossible stretch fails",
               run("stretch", str(source), str(workspace / "x.wav"),
                   "--length", "5000").returncode != 0)
+        check("compress with no output fails",
+              run("compress", str(source)).returncode != 0)
+        check("gate on a missing file fails",
+              run("gate", str(workspace / "nope.wav"), str(workspace / "x.wav")).returncode != 0)
         check("channels with no --op fails",
               run("channels", str(source), str(workspace / "x.wav")).returncode != 0)
         check("an unknown channel operation fails",

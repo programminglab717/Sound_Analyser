@@ -83,7 +83,8 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | Declipping: restoring peaks a converter took off | ✅ Done |
 | De-humming: finding a mains harmonic series and subtracting it | ✅ Done |
 | Mastering: filters, true-peak limiting, normalisation | ✅ Done |
-| `sa-cli`: headless batch driver | ✅ Done — eleven commands, tested end to end |
+| Compressor and noise gate | ✅ Done — stereo-linked, with a run-up so a selection does not open uncompressed |
+| `sa-cli`: headless batch driver | ✅ Done — thirteen commands, tested end to end |
 | Time-stretch and pitch-shift | ✅ Done — phase vocoder with identity phase locking |
 | Markers and regions in the interface | ✅ Done — add, name, navigate, saved in sessions |
 | Reverse, invert polarity, swap channels, sum to mono | ✅ Done — exact to the sample, and obeys the selection |

@@ -17,9 +17,9 @@ run `sound-analyser.exe`. Qt ships beside it, so there is nothing to install.
 It is about 12.6 MB and it is built and tested by the same run that produces it:
 every CI job green -- both MSVC configurations, AddressSanitizer and
 ThreadSanitizer among them -- before the package is uploaded. `sa-cli.exe` is
-in the folder beside it: the headless driver, with eleven commands: analyse,
-convert, normalise, denoise, declick, declip, dehum, channels, render, stretch
-and pitch.
+in the folder beside it: the headless driver, with thirteen commands: analyse,
+convert, normalise, denoise, declick, declip, dehum, compress, gate, channels,
+render, stretch and pitch.
 
 Then open something real — a recording of your own, not a test tone — and try:
 
@@ -34,6 +34,7 @@ Then open something real — a recording of your own, not a test tone — and tr
 | Fix the level | Process ▸ Normalise to target, after picking a target in the panel |
 | Filter | Process ▸ Filter, or Ctrl+F. High-pass at 80 Hz is the one to try first on anything with rumble in it |
 | Limit | Process ▸ Limiter. It holds a true-peak ceiling rather than approaching it |
+| Even it out | Process ▸ Compressor, or Process ▸ Gate for the quiet between phrases. Both obey the selection, and both get a run-up over the audio before it so the passage does not open with a burst of the untreated signal |
 | Stretch | Process ▸ Time stretch. Asked for as a percentage of the current length, so 200 is twice as long. Pitch stays put |
 | Retune | Process ▸ Pitch shift. Semitones, and fractions of one — 0.01 is a cent, which is what a tuning fix actually needs |
 | Repair | Draw a box round a hum or a click, then Repair ▸ Attenuate or Heal |
@@ -125,6 +126,12 @@ Not blocked, but a person's judgement would be better than mine.
   stretched to 130%, because a phase vocoder smears transients by construction
   and no number I can produce here says whether that is acceptable or
   embarrassing. Try it on something percussive and tell me.
+- **Whether the compressor and gate defaults are close to useful.** -20 dB
+  at 4:1 with 10 and 100 ms, and a gate opening at -40 dB with 80 dB of
+  depth. Those are textbook starting points rather than anything tuned on
+  real material, and the first thing a person notices about a compressor is
+  whether its defaults are in the right country.
+
 - **The repair defaults.** Noise reduction defaults to 12 dB with 1.5x
   oversubtraction. Those produce clean results on my synthetic tests, but
   synthetic noise is stationary and real noise is not. Try it on a real bad
