@@ -210,7 +210,40 @@ branch unnoticed.
 | True-peak filter conformance | BS.1770-4 Annex 2 Table 3, transcribed from the published standard rather than memory. |
 | Platform compliance targets | Checking against live platform documentation before they ship as presets. |
 | Product name, pricing, licence sign-off | A person. |
-| Code-signing certificate | A person and about $10/month. |
+| Code-signing certificate | ~~A person and about $10/month.~~ **Decided: no.** Ruled out by the no-spending constraint; see below. |
+
+## Decided: shipping unsigned
+
+The blocked list used to carry "code-signing certificate, about $10/month".
+That is struck out, because this project does not spend money and no amount of
+looking changes what is available.
+
+**There is no free code-signing certificate authority.** Let's Encrypt signs
+TLS and not code. Since 2023 code-signing keys must live on a hardware token
+or in an HSM, which raised the floor rather than lowering it. SignPath's
+foundation tier does sign for free but requires the project to be open source,
+and this one is not. A self-signed certificate is worse than nothing: the same
+warning plus an explicit "unknown publisher".
+
+**What shipping unsigned actually costs.** Windows SmartScreen shows
+"prevented an unrecognised app from starting" with *Don't run* as the default
+button, and a good share of people stop there. The subtler cost is that
+SmartScreen's reputation attaches to the file hash for an unsigned binary and
+to the certificate for a signed one -- so every release starts from zero
+warnings again, where a signed product would inherit the trust already earned.
+That compounding is the real thing being given up, and it gets worse the more
+often the product ships.
+
+**So: ship unsigned, and get onto winget.** `winget install` is Microsoft's
+own package manager, free to publish to, and an install through it does not
+put the download warning in front of anyone. Scoop and Chocolatey are the
+same bargain with smaller audiences. The download page says plainly what
+warning to expect and why, because a user who was warned in advance clicks
+through and a user who was not closes the tab.
+
+This is a decision rather than a deferral. Revisit it only if the licensing
+model changes -- an open-source release would qualify for free signing, and
+that is a product decision, not a build one.
 
 ## Standing rules for unattended work
 
