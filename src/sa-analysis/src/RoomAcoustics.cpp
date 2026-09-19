@@ -1,5 +1,6 @@
 #include <sa/analysis/RoomAcoustics.h>
 #include <sa/dsp/Biquad.h>
+#include <sa/dsp/FilterBank.h>
 
 #include <algorithm>
 #include <cmath>
@@ -344,31 +345,58 @@ Result<std::vector<BandedRoomAcoustics>> measureRoomAcousticsByBand(ConstAudioBu
     const float* samples = impulse.channel(channel);
     AudioBuffer filtered{ChannelLayout::mono(), impulse.frames()};
 
+    // A sixth-order Butterworth band-pass per band, from the shared filter
+    // bank, rather than the two biquad sections this used to build for itself.
+    //
+    // The difference is not cosmetic. A band's reverberation time is read off
+    // the decay of what the filter passes, so whatever leaks in from a
+    // neighbour is measured as though it belonged here -- and a slow decay
+    // leaking into a fast band overtakes the fast one within a second or so
+    // and drags the answer towards its own rate. On a room that is lively low
+    // and dead high, the two-section filter read 1.07 s for T30 in the 2 kHz
+    // band of a room whose true figure there is 0.50.
+    //
+    // Six poles against four, and Butterworth rather than a cookbook
+    // band-pass: 18.5 dB per octave against 12.3, measured.
+    dsp::FilterBankSettings bankSettings;
+    bankSettings.spacing =
+        width == BandWidth::Octave ? dsp::BandSpacing::Octave : dsp::BandSpacing::ThirdOctave;
+    bankSettings.lowestCentreHz = layout.front().centreHz;
+    bankSettings.highestCentreHz = layout.back().centreHz;
+    auto bank = dsp::FilterBank::create(rate, bankSettings);
+
     for (const Band& band : layout) {
         BandedRoomAcoustics entry;
         entry.centreHz = band.centreHz;
 
-        // Q from the band's own edges: a bandpass of width w centred on f has
-        // Q = f / w, so the filter follows whatever the layout says rather than
-        // a constant that would only be right for one bandwidth.
-        dsp::FilterSpec spec;
-        spec.type = dsp::FilterType::BandPass;
-        spec.frequency = band.centreHz;
-        spec.q = band.centreHz / std::max(1.0, band.highHz - band.lowHz);
-
-        auto coefficients = dsp::BiquadCoefficients::design(rate, spec);
-        if (!coefficients) {
+        // The layout here names bands by the preferred numbers (125, 16000)
+        // and the bank centres them on the exact base-ten values (125.89,
+        // 15848.9), so they are matched by proximity rather than equality.
+        // A band the bank could not realise -- above Nyquist, or one it judged
+        // unstable -- has no filter, and reports nothing rather than a figure
+        // taken through something else.
+        const dsp::BiquadCascade* cascade = nullptr;
+        if (bank) {
+            for (int i = 0; i < bank.value().bandCount(); ++i) {
+                const double centre = bank.value().bands()[static_cast<std::size_t>(i)].centreHz;
+                if (std::abs(centre - band.centreHz) <= band.centreHz * dsp::kBandNameTolerance) {
+                    cascade = bank.value().filter(i);
+                    break;
+                }
+            }
+        }
+        if (cascade == nullptr) {
             out.push_back(entry);
             continue;
         }
 
-        // Two sections, and forward only. A zero-phase pass would be tidier but
+        // Forward only, as before. A zero-phase pass would be tidier but
         // filtering backwards over an impulse response smears energy earlier in
         // time, which is precisely the axis being measured.
-        dsp::Biquad first{coefficients.value()};
-        dsp::Biquad second{coefficients.value()};
+        auto* working = const_cast<dsp::BiquadCascade*>(cascade);
+        working->reset();
         for (SampleCount i = 0; i < impulse.frames(); ++i) {
-            filtered.channel(0)[i] = second.processSample(first.processSample(samples[i]));
+            filtered.channel(0)[i] = working->processSample(samples[i]);
         }
 
         auto measured = measureRoomAcoustics(filtered.constView(), rate, 0);

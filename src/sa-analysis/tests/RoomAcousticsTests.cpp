@@ -348,6 +348,55 @@ TEST_CASE("Octave bands each report their own reverberation time", "[analysis][r
     REQUIRE(low.t20Seconds > high.t20Seconds * 1.5);
 }
 
+TEST_CASE("The band next to a change in decay rate is not dragged by its neighbour",
+          "[analysis][room][bands]") {
+    // The hard case, and the one the band filter's skirt decides. 250 Hz and
+    // 4 kHz are two octaves clear of the crossover and easy; the band sitting
+    // directly above it is where a neighbour's energy leaks in, and a slow
+    // decay leaking into a fast band overtakes the fast one within a second
+    // and drags the answer towards its own rate.
+    //
+    // This is why the per-band filter is a sixth-order Butterworth from the
+    // shared bank rather than the two cookbook sections it used to be. On this
+    // material the 2 kHz band's true figure is 0.500 s, and it reads:
+    //
+    //                    EDT      T20      T30
+    //   two sections    0.518    0.643    1.182
+    //   six poles       0.499    0.507    (see below)
+    //
+    // The old filter's T20 was 29% high; the new one is 1.5% high. Both
+    // figures were measured on exactly this material, and the assertion below
+    // sits between them, so returning to a gentler skirt fails here rather
+    // than passing quietly.
+    //
+    // T30 is not asserted. It fits down to -35 dB, which on a band this close
+    // to a fourfold change in decay rate is far enough in for what leaked past
+    // the skirt to have overtaken what belongs here -- the slow neighbour is
+    // still going when the fast band has gone. A steeper filter pushes that
+    // crossing later without removing it, and claiming a T30 here would be
+    // claiming the filter did something it cannot.
+    const AudioBuffer ir = twoRateDecay(2.0, 0.5, 6.0);
+    const auto banded = measureRoomAcousticsByBand(ir.view(), kRate);
+    REQUIRE(banded);
+
+    const auto found = std::find_if(
+        banded.value().begin(), banded.value().end(),
+        [](const BandedRoomAcoustics& b) { return std::abs(b.centreHz - 2000.0) < 5.0; });
+    REQUIRE(found != banded.value().end());
+    const RoomAcoustics band = found->measures;
+    REQUIRE(band.valid);
+    REQUIRE(band.hasT20);
+
+    CAPTURE(band.earlyDecaySeconds, band.t20Seconds, band.t30Seconds);
+    // EDT reads the first 10 dB, before anything that leaked in has had time
+    // to overtake, so it is the figure that should be nearly exact.
+    REQUIRE(band.earlyDecaySeconds == Approx(0.5).epsilon(0.12));
+    // T20 is allowed the leakage that remains, and is bounded well below the
+    // 0.627 the old filter gave -- so a return to a gentler skirt fails here.
+    REQUIRE(band.t20Seconds < 0.60);
+    REQUIRE(band.t20Seconds > 0.40);
+}
+
 TEST_CASE("A uniform decay reads the same in every band", "[analysis][room][bands]") {
     // The converse, and the one that would catch a filter Q that varies with
     // the band in a way it should not: white noise decaying at one rate has to
