@@ -82,6 +82,7 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | Click detection and repair, by linear prediction | ✅ Done |
 | Declipping: restoring peaks a converter took off | ✅ Done |
 | De-humming: finding a mains harmonic series and subtracting it | ✅ Done |
+| De-essing: compressing the sibilance band alone | ✅ Done — the voice underneath is untouched to a fifth of a decibel |
 | Mastering: filters, true-peak limiting, normalisation | ✅ Done |
 | Compressor and noise gate | ✅ Done — stereo-linked, with a run-up so a selection does not open uncompressed |
 | Stereo field: correlation, width, balance, mono-sum loss | ✅ Done — in the panel, the analysis output and the batch driver |
@@ -89,7 +90,7 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | Provenance: encoder cutoff and true bit depth | ✅ Done — reads what a file has been through, not what its header claims |
 | Octave and third-octave bands | ✅ Done — window-noise-bandwidth corrected; not an IEC 61260 filter bank, and does not claim to be |
 | Batch report export | ✅ Done — JSON per file, or CSV across a folder |
-| `sa-cli`: headless batch driver | ✅ Done — fifteen commands, tested end to end |
+| `sa-cli`: headless batch driver | ✅ Done — sixteen commands, tested end to end |
 | Time-stretch and pitch-shift | ✅ Done — phase vocoder with identity phase locking |
 | Markers and regions in the interface | ✅ Done — add, name, navigate, saved in sessions |
 | Reverse, invert polarity, swap channels, sum to mono | ✅ Done — exact to the sample, and obeys the selection |

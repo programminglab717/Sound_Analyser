@@ -6,6 +6,7 @@ add_library(sa-dsp STATIC
     src/Declick.cpp
     src/Dither.cpp
     src/Declip.cpp
+    src/Deess.cpp
     src/Dehum.cpp
     src/Fft.cpp
     src/LinearPrediction.cpp
@@ -34,6 +35,7 @@ if(SA_BUILD_TESTS)
         tests/DeclickTests.cpp
         tests/DitherTests.cpp
         tests/DeclipTests.cpp
+        tests/DeessTests.cpp
         tests/DehumTests.cpp
         tests/FftTests.cpp
         tests/LinearPredictionTests.cpp

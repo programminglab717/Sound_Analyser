@@ -236,6 +236,64 @@ def main() -> int:
             check("the noise floor drops", floor_change < -8.0, f"{floor_change:.1f} dB")
             check("the tone survives", tone_change > -1.0, f"{tone_change:.2f} dB")
 
+        # De-essing. Speech-shaped material: a low tone for the voice and
+        # bursts of high-frequency noise for the sibilants, so the two bands
+        # can be checked separately.
+        print("deess:")
+        sibilant = workspace / "sibilant.wav"
+        rng_ess = random.Random(3)
+        voice: list[float] = []
+        state = previous = 0.0
+        for i in range(3 * SAMPLE_RATE):
+            t = i / SAMPLE_RATE
+            if (t % 0.4) < 0.1:
+                raw = rng_ess.gauss(0.0, 1.0)
+                state = 0.85 * (state + raw - previous)
+                previous = raw
+                noise = 0.1 * state
+            else:
+                state = previous = 0.0
+                noise = 0.0
+            voice.append(0.3 * math.sin(2.0 * math.pi * 220.0 * t) + noise)
+        write_wav(sibilant, voice)
+
+        def band_energy(values: list[float], above: bool, hz: float = 5000.0) -> float:
+            angle = 2.0 * math.pi * hz / SAMPLE_RATE
+            alpha = math.sin(angle) / (1.0 + math.cos(angle))
+            low = 0.0
+            total = 0.0
+            for value in values:
+                low += alpha * (value - low)
+                part = (value - low) if above else low
+                total += part * part
+            return total
+
+        deessed = workspace / "deessed.wav"
+        result = run("deess", str(sibilant), str(deessed))
+        check("deess exits cleanly", result.returncode == 0, result.stderr)
+        check("and says what it took", "dB off" in result.stdout, result.stdout)
+        if result.returncode == 0 and deessed.exists():
+            before, _ = read_wav(sibilant)
+            after, _ = read_wav(deessed)
+            high_change = 10.0 * math.log10(
+                max(band_energy(after, True), 1e-30) / max(band_energy(before, True), 1e-30))
+            low_change = 10.0 * math.log10(
+                max(band_energy(after, False), 1e-30) / max(band_energy(before, False), 1e-30))
+            check("the sibilance band comes down", high_change < -3.0, f"{high_change:.1f} dB")
+            # The property that makes it a de-esser rather than a low-pass.
+            check("and the voice underneath does not", abs(low_change) < 0.3,
+                  f"{low_change:.2f} dB")
+
+        # A tone with nothing above the split is left alone, and the report
+        # says so rather than claiming work it did not do.
+        quiet_result = run("deess", str(source), str(workspace / "deessed-clean.wav"))
+        check("clean material is left alone", "0.0 dB off on 0%" in quiet_result.stdout,
+              quiet_result.stdout)
+
+        check("an impossible split frequency is refused",
+              run("deess", str(sibilant), str(workspace / "x.wav"),
+                  "--frequency", "40000").returncode != 0)
+
         print("declick:")
         clicked = workspace / "clicked.wav"
         clean_samples, _ = read_wav(source)

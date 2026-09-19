@@ -2,6 +2,7 @@
 
 #include <sa/core/Cancellation.h>
 #include <sa/dsp/ChannelOps.h>
+#include <sa/dsp/Deess.h>
 #include <sa/dsp/Dither.h>
 #include <sa/dsp/OfflineDynamics.h>
 #include <sa/engine/Clip.h>
@@ -251,6 +252,7 @@ private:
     applyOverRange(const QString& label, double attackSeconds, double releaseSeconds,
                    const std::function<Status(AudioBufferView, SampleCount, SampleCount)>& apply);
 
+    void chooseDeess();
     void chooseDeclick();
     void restoreClipping();
     bool removeHum();

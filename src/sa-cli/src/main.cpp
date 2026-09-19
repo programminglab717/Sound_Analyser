@@ -19,6 +19,7 @@
 #include <sa/dsp/ChannelOps.h>
 #include <sa/dsp/Declick.h>
 #include <sa/dsp/Declip.h>
+#include <sa/dsp/Deess.h>
 #include <sa/dsp/Dehum.h>
 #include <sa/dsp/Dither.h>
 #include <sa/dsp/OfflineDynamics.h>
@@ -421,6 +422,13 @@ void usage() {
   declip <in> <out> [--keep-level] [--format 16|24|float]
       Restore clipped peaks. The result is brought down to fit them unless
       --keep-level says otherwise, and the gain applied is printed.
+
+  deess <in> <out> [--frequency <hz>] [--threshold <dB>] [--ratio <n>]
+        [--max <dB>] [--format 16|24|float]
+      Compress the sibilance band and leave the rest of the voice alone.
+      Defaults are 5000 Hz, -30 dB, 6:1 and at most 12 dB off. Prints how
+      much it took and how much of the file it acted on, which is what says
+      whether the threshold is anywhere near right.
 
   declick <in> <out> [--sensitivity <n>] [--format 16|24|float]
       Find and repair clicks. Prints how many it found, and how many stretches
@@ -1139,6 +1147,49 @@ int channels(const Options& options) {
     return 0;
 }
 
+int deessFile(const Options& options) {
+    if (options.positional.size() != 3) {
+        return fail("deess needs an input and an output");
+    }
+
+    sa::dsp::DeessSettings settings;
+    settings.frequencyHz = options.number("frequency", settings.frequencyHz);
+    settings.thresholdDb = options.number("threshold", settings.thresholdDb);
+    settings.ratio = options.number("ratio", settings.ratio);
+    settings.maximumReductionDb = options.number("max", settings.maximumReductionDb);
+
+    std::string error;
+    const auto source = open(options.positional[1], error);
+    if (!source) {
+        return fail(error);
+    }
+    const sa::io::AudioFileInfo& info = source->info();
+
+    sa::AudioBuffer audio{info.layout, info.frameCount};
+    if (const auto read = source->read(0, audio.view()); !read) {
+        return fail(std::string{read.error().what()});
+    }
+
+    // No run-up: the range is the file, so there is nothing before it to
+    // settle on and the first moments of a file are the first moments of the
+    // programme.
+    const auto report = sa::dsp::deess(audio.view(), info.sampleRate, settings, 0);
+    if (!report) {
+        return fail(std::string{report.error().what()});
+    }
+
+    const sa::engine::BufferSource processed{std::move(audio), info.sampleRate};
+    if (!write(processed, options.positional[2], formatFrom(options, info.format), error)) {
+        return fail(error);
+    }
+    std::printf("%s: de-essed above %.0f Hz, up to %.1f dB off on %.0f%% of it -> %s\n",
+                std::filesystem::path{options.positional[1]}.filename().string().c_str(),
+                settings.frequencyHz, report.value().peakReductionDb,
+                100.0 * report.value().fractionReduced,
+                std::filesystem::path{options.positional[2]}.filename().string().c_str());
+    return 0;
+}
+
 int dehumFile(const Options& options) {
     if (options.positional.size() != 3) {
         return fail("dehum needs an input and an output");
@@ -1366,6 +1417,9 @@ int main(int argc, char** argv) {
     }
     if (command == "denoise") {
         return denoise(options);
+    }
+    if (command == "deess") {
+        return deessFile(options);
     }
     if (command == "dehum") {
         return dehumFile(options);

@@ -14,11 +14,11 @@ Ordered by how much it would unblock.
 artefacts (Actions → the run → Artifacts at the bottom), unzip it anywhere, and
 run `sound-analyser.exe`. Qt ships beside it, so there is nothing to install.
 
-It is about 12.6 MB and it is built and tested by the same run that produces it:
+It is about 13.3 MB and it is built and tested by the same run that produces it:
 every CI job green -- both MSVC configurations, AddressSanitizer and
 ThreadSanitizer among them -- before the package is uploaded. `sa-cli.exe` is
-in the folder beside it: the headless driver, with fifteen commands: analyse,
-bands, provenance, convert, normalise, denoise, declick, declip, dehum,
+in the folder beside it: the headless driver, with sixteen commands: analyse,
+bands, provenance, convert, normalise, denoise, declick, declip, dehum, deess,
 compress, gate, channels, render, stretch and pitch. `analyse --csv` gives one
 row per file, which is what to point at a folder of deliverables.
 
@@ -44,10 +44,11 @@ Then open something real — a recording of your own, not a test tone — and tr
 | Declick | Repair ▸ Remove clicks. It says how many it found. On a clean recording the right answer is none, and it gives that answer |
 | Declip | Repair ▸ Restore clipped peaks. It says how many it put back, and how far it had to bring the file down so they fit |
 | Dehum | Repair ▸ Remove mains hum. It finds the frequency itself — 50 or 60, and to a hundredth of a Hertz — and says what it found |
+| De-ess | Repair ▸ De-ess, on anything spoken. It compresses only the band the sibilance is in and says how much it took and on what fraction of the selection — which is the number that tells you whether the threshold is near right |
 | Mark | Ctrl+M drops a marker at the caret, or over the selection if there is one. Alt+Left and Alt+Right walk between them, and landing on a region selects it |
 | Flip it about | Process ▸ Reverse, Invert polarity, Swap channels, Sum to mono. Each one obeys the selection, so they work on a passage as well as the whole file |
 | Fade | Process ▸ Fade in or Fade out over a selection. Process ▸ Fade shape picks the curve: linear unless you change it, and equal power is the one that does not leave a hole when two fades meet |
-| Compare | Select a passage you like, Ctrl+R to keep its spectrum, then select another. The dashed line is the one you kept, and hovering gives the difference in dB. It survives opening a different file, so you can chase a reference record |
+| Compare | Select a passage you like, Ctrl+Shift+R to keep its spectrum, then select another. The dashed line is the one you kept, and hovering gives the difference in dB. It survives opening a different file, so you can chase a reference record |
 | Deliver | File ▸ Export format picks 16-bit, 24-bit or float, and File ▸ Dither says what to do about the bits a 16-bit export drops. Triangular is on by default and is the right answer almost always. A 24-bit or float export is never dithered, so a file exported untouched comes back byte for byte |
 | Save | File ▸ Save session, reopen it, check nothing was lost |
 
@@ -129,6 +130,14 @@ Not blocked, but a person's judgement would be better than mine.
   stretched to 130%, because a phase vocoder smears transients by construction
   and no number I can produce here says whether that is acceptable or
   embarrassing. Try it on something percussive and tell me.
+- **Whether the de-esser is set about right on a real voice.** It defaults
+  to 5 kHz, -30 dB and 6:1, with a stop at 12 dB so it cannot remove the
+  consonant altogether. On synthetic material it takes 10 dB off the
+  sibilants and leaves the voice underneath within a fifth of a decibel, but
+  synthetic sibilance is filtered noise and a real one is not. Try it on
+  something spoken; the split frequency is the control to move first, and
+  lower is what a bright voice wants.
+
 - **Where the band display should live.** `sa-cli bands` prints thirty-one
   third-octaves, or ten octaves with --octave, and nothing in the window
   shows them. The spectrum panel already has the space and the axis, so bars

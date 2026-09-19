@@ -395,6 +395,7 @@ void MainWindow::buildMenus() {
                       &MainWindow::learnNoiseProfile);
     denoiseAction_ = repair->addAction(tr("Reduce &noise…"), QKeySequence{Qt::CTRL | Qt::Key_D},
                                        this, &MainWindow::chooseDenoise);
+    repair->addAction(tr("De-&ess…"), this, &MainWindow::chooseDeess);
     repair->addAction(tr("Remove &clicks…"), QKeySequence{Qt::CTRL | Qt::SHIFT | Qt::Key_C}, this,
                       &MainWindow::chooseDeclick);
     repair->addAction(tr("Restore clipped &peaks"), this, &MainWindow::restoreClipping);
@@ -450,8 +451,11 @@ void MainWindow::buildMenus() {
     addMap(tr("Greyscale"), Colourmap::Grey, false);
 
     view->addSeparator();
-    view->addAction(tr("Set spectrum &reference"), QKeySequence{Qt::CTRL | Qt::Key_R}, this,
-                    &MainWindow::captureSpectrumReference);
+    // Ctrl+Shift+R, because Ctrl+R is Repair > Attenuate. Two actions on one
+    // shortcut is not a smaller problem than none: Qt resolves an ambiguous
+    // shortcut by firing neither, so both keys silently stop working.
+    view->addAction(tr("Set spectrum &reference"), QKeySequence{Qt::CTRL | Qt::SHIFT | Qt::Key_R},
+                    this, &MainWindow::captureSpectrumReference);
     clearReferenceAction_ =
         view->addAction(tr("Clear spectrum reference"), this, &MainWindow::clearSpectrumReference);
 }
@@ -1704,6 +1708,50 @@ void MainWindow::chooseGate() {
         });
 }
 
+void MainWindow::chooseDeess() {
+    if (!hasDocument()) {
+        return;
+    }
+    dsp::DeessSettings settings;
+    const std::vector<double> values = FieldDialog::ask(
+        this, tr("De-ess"),
+        {{tr("Sibilance above"), settings.frequencyHz, 1000.0, document_.sampleRate().hz() * 0.45,
+          0, 250.0, tr("Hz")},
+         {tr("Threshold"), settings.thresholdDb, -80.0, 0.0, 1, 1.0, tr("dB")},
+         {tr("Ratio"), settings.ratio, 1.0, 40.0, 1, 0.5, tr(": 1")},
+         {tr("Most it may remove"), settings.maximumReductionDb, 0.0, 30.0, 1, 1.0, tr("dB")}});
+    if (values.size() != 4) {
+        return;
+    }
+    settings.frequencyHz = values[0];
+    settings.thresholdDb = values[1];
+    settings.ratio = values[2];
+    settings.maximumReductionDb = values[3];
+
+    const SampleRate rate = document_.sampleRate();
+    // Its report is worth showing: "nothing happened" and "it worked" look the
+    // same in a waveform, and the fraction acted on is what says whether the
+    // threshold is anywhere near right.
+    dsp::DeessReport report;
+    const bool applied = applyOverRange(
+        tr("de-ess above %1 Hz").arg(settings.frequencyHz, 0, 'f', 0), settings.attackSeconds,
+        settings.releaseSeconds,
+        [rate, settings, &report](AudioBufferView audio, SampleCount runUp, SampleCount blend) {
+            (void)blend;
+            auto made = dsp::deess(audio, rate, settings, runUp);
+            if (!made) {
+                return Status{made.error()};
+            }
+            report = made.value();
+            return Status{};
+        });
+    if (applied) {
+        status_->setText(tr("De-essed: up to %1 dB off the top band, on %2% of the selection")
+                             .arg(report.peakReductionDb, 0, 'f', 1)
+                             .arg(100.0 * report.fractionReduced, 0, 'f', 0));
+    }
+}
+
 void MainWindow::chooseDeclick() {
     if (!hasDocument()) {
         return;
@@ -2483,6 +2531,39 @@ bool MainWindow::applyOperation(const QString& name) {
     // Slashes rather than commas: the verb list itself is comma-separated, so
     // a comma inside a verb is a verb boundary and compress:-30,8 arrives as
     // two operations, the second of them nonsense.
+    // deess:frequency[/threshold/ratio], with slashes for the same reason the
+    // dynamics verbs use them.
+    if (name.startsWith("deess:")) {
+        const QStringList parts = name.mid(6).split(QLatin1Char{'/'}, Qt::SkipEmptyParts);
+        if (parts.isEmpty()) {
+            return false;
+        }
+        std::vector<double> numbers;
+        for (const QString& part : parts) {
+            bool ok = false;
+            numbers.push_back(part.toDouble(&ok));
+            if (!ok) {
+                return false;
+            }
+        }
+        dsp::DeessSettings settings;
+        settings.frequencyHz = numbers[0];
+        if (numbers.size() > 1) {
+            settings.thresholdDb = numbers[1];
+        }
+        if (numbers.size() > 2) {
+            settings.ratio = numbers[2];
+        }
+        const SampleRate rate = document_.sampleRate();
+        return applyOverRange(
+            QStringLiteral("de-ess"), settings.attackSeconds, settings.releaseSeconds,
+            [rate, settings](AudioBufferView audio, SampleCount runUp, SampleCount blend) {
+                (void)blend;
+                auto made = dsp::deess(audio, rate, settings, runUp);
+                return made ? Status{} : Status{made.error()};
+            });
+    }
+
     if (name.startsWith("compress:") || name.startsWith("gate:")) {
         const bool compressing = name.startsWith("compress:");
         const QStringList parts =
