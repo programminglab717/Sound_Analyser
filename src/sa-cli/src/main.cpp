@@ -40,7 +40,9 @@
 #include <sa/engine/Edits.h>
 #include <sa/engine/SessionFile.h>
 #include <sa/engine/StreamingConvert.h>
+#include <sa/io/AiffWriter.h>
 #include <sa/io/AudioFile.h>
+#include <sa/io/FlacWriter.h>
 #include <sa/io/WavWriter.h>
 #include <sa/spectral/Denoise.h>
 #include <sa/spectral/Dereverb.h>
@@ -129,21 +131,237 @@ int fail(const std::string& message) {
     return opened.value();
 }
 
-/// Write a source out blockwise, so a long file costs one block of memory.
-[[nodiscard]] bool write(const sa::io::AudioSource& source, const std::filesystem::path& path,
-                         sa::io::SampleFormat format, std::string& error) {
-    std::ofstream stream{path, std::ios::binary};
-    if (!stream) {
-        error = "could not write " + path.string();
+/// Dither a buffer for the format it is about to be written as, if the user
+/// asked for any and the format actually drops bits.
+///
+/// --dither defaults to none rather than to triangular, which is the opposite
+/// of the window. The reason is that this tool's job is often to convert or
+/// repair a file that is going on to something else, and adding noise at every
+/// step of a chain is how a file ends up with four layers of it. The window
+/// exports a delivery master; this writes an intermediate unless told
+/// otherwise.
+/// Build the ditherer a conversion should use, if any.
+///
+/// Hands back an object rather than processing a buffer, because a streamed
+/// conversion never has the whole buffer: noise shaping carries an error term
+/// from one sample to the next and the same ditherer has to see every block in
+/// order. Returns false only when the request itself was wrong.
+[[nodiscard]] bool ditherFor(std::optional<sa::dsp::Ditherer>& out, sa::io::SampleFormat format,
+                             int channelCount, const Options& options, std::string& error) {
+    out.reset();
+    const auto named = options.value("dither");
+    if (!named || *named == "none") {
+        return true;
+    }
+    sa::dsp::DitherSettings settings;
+    if (*named == "tpdf") {
+        settings.type = sa::dsp::DitherType::Tpdf;
+    } else if (*named == "shaped") {
+        settings.type = sa::dsp::DitherType::TpdfNoiseShaped;
+    } else {
+        error = "unknown dither '" + *named + "'; try none, tpdf or shaped";
         return false;
     }
-    sa::io::WavOptions options;
-    options.format = format;
 
+    settings.bits = format == sa::io::SampleFormat::PcmInt16
+                        ? 16
+                        : (format == sa::io::SampleFormat::PcmInt24 ? 24 : 0);
+    if (settings.bits == 0) {
+        // Not an error. Asking for dither on a float export is a reasonable
+        // thing to type, and the right response is to write the float file
+        // rather than to refuse it or to add noise to it.
+        return true;
+    }
+
+    auto ditherer = sa::dsp::Ditherer::create(settings, channelCount);
+    if (!ditherer) {
+        error = std::string{ditherer.error().what()};
+        return false;
+    }
+    out.emplace(std::move(ditherer).value());
+    return true;
+}
+
+/// Containers this tool can write, chosen by the output file's extension.
+///
+/// Readers here identify a file by its content and never by its name, because a
+/// file already exists to look inside. A writer has the opposite problem: there
+/// is nothing yet, and the extension the user typed is the only statement of
+/// intent there is. Anything unrecognised is written as WAV, which is what the
+/// tool did before there was a choice.
+enum class OutputContainer { Wave, Aiff, Flac };
+
+[[nodiscard]] OutputContainer containerFor(const std::filesystem::path& path) {
+    std::string extension = path.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(), [](char character) {
+        return static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+    });
+    if (extension == ".aif" || extension == ".aiff" || extension == ".aifc") {
+        return OutputContainer::Aiff;
+    }
+    if (extension == ".flac") {
+        return OutputContainer::Flac;
+    }
+    return OutputContainer::Wave;
+}
+
+/// Narrow a requested sample format to one the container can actually hold.
+///
+/// FLAC stores integers and nothing else, and AIFF here is integer PCM, so
+/// `--format float` against either of them has to become something. It becomes
+/// 24 bits rather than a refusal: the request the user is really making is "put
+/// this file in that container", and 24 bits is the widest depth both of them
+/// share.
+///
+/// This is also the single place where it is decided that bits are about to be
+/// dropped, which is why the format it returns -- not the one that was asked
+/// for -- is what ditherFor() is asked about. Two places deciding that is how a
+/// file ends up quantised by one rule and dithered for another.
+[[nodiscard]] sa::io::SampleFormat storableFormat(OutputContainer container,
+                                                  sa::io::SampleFormat wanted) {
+    switch (container) {
+    case OutputContainer::Wave:
+        // WAV holds everything this program has, including float and 8-bit, so
+        // there is nothing to narrow.
+        return wanted;
+    case OutputContainer::Aiff:
+        switch (wanted) {
+        case sa::io::SampleFormat::PcmInt16:
+        case sa::io::SampleFormat::PcmInt24:
+        case sa::io::SampleFormat::PcmInt32:
+            return wanted;
+        default:
+            return sa::io::SampleFormat::PcmInt24;
+        }
+    case OutputContainer::Flac:
+        return wanted == sa::io::SampleFormat::PcmInt16 ? sa::io::SampleFormat::PcmInt16
+                                                        : sa::io::SampleFormat::PcmInt24;
+    }
+    return sa::io::SampleFormat::PcmInt24;
+}
+
+/// An open output file, whichever of the three writers its extension chose.
+///
+/// A dispatch here rather than a common base class in sa::io. The three writers
+/// are concrete types with the same shape by convention, not by inheritance,
+/// and giving them a virtual base would be a change to the library made to suit
+/// one caller of it.
+///
+/// Non-copyable and non-movable on purpose: each writer holds a pointer to the
+/// stream below, so moving this would leave that pointer addressing the old
+/// object's storage.
+class OutputFile {
+public:
+    OutputFile() = default;
+    OutputFile(const OutputFile&) = delete;
+    OutputFile& operator=(const OutputFile&) = delete;
+    OutputFile(OutputFile&&) = delete;
+    OutputFile& operator=(OutputFile&&) = delete;
+    ~OutputFile() = default;
+
+    [[nodiscard]] bool open(const std::filesystem::path& path, sa::SampleRate rate,
+                            sa::ChannelLayout layout, sa::io::SampleFormat format,
+                            std::string& error) {
+        stream_.open(path, std::ios::binary | std::ios::trunc);
+        if (!stream_) {
+            error = "could not write " + path.string();
+            return false;
+        }
+
+        switch (containerFor(path)) {
+        case OutputContainer::Aiff: {
+            sa::io::AiffOptions options;
+            options.format = format;
+            auto writer = sa::io::AiffWriter::create(stream_, rate, layout, std::move(options));
+            if (!writer) {
+                error = std::string{writer.error().what()};
+                return false;
+            }
+            aiff_.emplace(std::move(writer.value()));
+            return true;
+        }
+        case OutputContainer::Flac: {
+            sa::io::FlacOptions options;
+            options.format = format;
+            auto writer = sa::io::FlacWriter::create(stream_, rate, layout, std::move(options));
+            if (!writer) {
+                error = std::string{writer.error().what()};
+                return false;
+            }
+            flac_.emplace(std::move(writer.value()));
+            return true;
+        }
+        case OutputContainer::Wave:
+            break;
+        }
+
+        sa::io::WavOptions options;
+        options.format = format;
+        auto writer = sa::io::WavWriter::create(stream_, rate, layout, std::move(options));
+        if (!writer) {
+            error = std::string{writer.error().what()};
+            return false;
+        }
+        wav_.emplace(std::move(writer.value()));
+        return true;
+    }
+
+    [[nodiscard]] bool write(sa::ConstAudioBufferView frames) {
+        if (wav_) {
+            return wav_->write(frames).ok();
+        }
+        if (aiff_) {
+            return aiff_->write(frames).ok();
+        }
+        if (flac_) {
+            return flac_->write(frames).ok();
+        }
+        return false;
+    }
+
+    /// Nothing calls this on a failed job, and that is the point: a file whose
+    /// sizes were never patched does not read as a complete one, which is what
+    /// a failure should leave behind rather than a plausible short file.
+    [[nodiscard]] bool finish() {
+        if (wav_) {
+            return wav_->finish().ok();
+        }
+        if (aiff_) {
+            return aiff_->finish().ok();
+        }
+        if (flac_) {
+            return flac_->finish().ok();
+        }
+        return false;
+    }
+
+private:
+    std::ofstream stream_;
+    std::optional<sa::io::WavWriter> wav_;
+    std::optional<sa::io::AiffWriter> aiff_;
+    std::optional<sa::io::FlacWriter> flac_;
+};
+
+/// Write a source out blockwise, so a long file costs one block of memory.
+///
+/// The container follows the output path's extension and the sample format
+/// follows what that container can hold, so `denoise in.wav out.flac` really
+/// does write a FLAC rather than a WAV wearing the wrong name. Where that
+/// narrowing drops bits it goes through the same ditherFor() the convert
+/// command uses, so there is exactly one rule in this program about how bits
+/// are dropped.
+[[nodiscard]] bool write(const sa::io::AudioSource& source, const std::filesystem::path& path,
+                         sa::io::SampleFormat wanted, const Options& options, std::string& error) {
     const sa::io::AudioFileInfo& info = source.info();
-    auto writer = sa::io::WavWriter::create(stream, info.sampleRate, info.layout, options);
-    if (!writer) {
-        error = std::string{writer.error().what()};
+    const sa::io::SampleFormat format = storableFormat(containerFor(path), wanted);
+
+    std::optional<sa::dsp::Ditherer> ditherer;
+    if (!ditherFor(ditherer, format, info.channelCount(), options, error)) {
+        return false;
+    }
+
+    OutputFile output;
+    if (!output.open(path, info.sampleRate, info.layout, format, error)) {
         return false;
     }
 
@@ -159,13 +377,19 @@ int fail(const std::string& message) {
         if (read.value() <= 0) {
             break;
         }
-        if (!writer.value().write(view.subRange(0, read.value()))) {
+        sa::AudioBufferView filled = view.subRange(0, read.value());
+        if (ditherer) {
+            // In place, because this block is ours: it was filled from the
+            // source a moment ago and nothing else can see it.
+            ditherer->process(filled);
+        }
+        if (!output.write(filled)) {
             error = "the write failed partway through";
             return false;
         }
         cursor += read.value();
     }
-    if (!writer.value().finish()) {
+    if (!output.finish()) {
         error = "could not finish " + path.string();
         return false;
     }
@@ -412,6 +636,12 @@ void usage() {
       this tool is usually on its way somewhere else and dither belongs at the
       end of a chain rather than at every step of one.
 
+      The output container follows <out>'s extension, for this command and for
+      every other command that writes audio: .flac writes FLAC, .aif/.aiff
+      writes AIFF, anything else writes WAV. FLAC is 16- or 24-bit and AIFF is
+      16-, 24- or 32-bit, so --format float against either of them writes 24
+      bits -- and --dither, if asked for, applies to exactly that narrowing.
+
   normalise <in> <out> --target <name> [--format 16|24|float]
       Measure, apply the gain that meets the target without breaching its true
       peak ceiling, and write. Targets: )");
@@ -640,57 +870,6 @@ void usage() {
 Every command returns 0 on success and 1 on failure, and writes nothing to
 stdout on failure, so it composes in a script.
 )");
-}
-
-/// Dither a buffer for the format it is about to be written as, if the user
-/// asked for any and the format actually drops bits.
-///
-/// --dither defaults to none rather than to triangular, which is the opposite
-/// of the window. The reason is that this tool's job is often to convert or
-/// repair a file that is going on to something else, and adding noise at every
-/// step of a chain is how a file ends up with four layers of it. The window
-/// exports a delivery master; this writes an intermediate unless told
-/// otherwise.
-/// Build the ditherer a conversion should use, if any.
-///
-/// Hands back an object rather than processing a buffer, because a streamed
-/// conversion never has the whole buffer: noise shaping carries an error term
-/// from one sample to the next and the same ditherer has to see every block in
-/// order. Returns false only when the request itself was wrong.
-[[nodiscard]] bool ditherFor(std::optional<sa::dsp::Ditherer>& out, sa::io::SampleFormat format,
-                             int channelCount, const Options& options, std::string& error) {
-    out.reset();
-    const auto named = options.value("dither");
-    if (!named || *named == "none") {
-        return true;
-    }
-    sa::dsp::DitherSettings settings;
-    if (*named == "tpdf") {
-        settings.type = sa::dsp::DitherType::Tpdf;
-    } else if (*named == "shaped") {
-        settings.type = sa::dsp::DitherType::TpdfNoiseShaped;
-    } else {
-        error = "unknown dither '" + *named + "'; try none, tpdf or shaped";
-        return false;
-    }
-
-    settings.bits = format == sa::io::SampleFormat::PcmInt16
-                        ? 16
-                        : (format == sa::io::SampleFormat::PcmInt24 ? 24 : 0);
-    if (settings.bits == 0) {
-        // Not an error. Asking for dither on a float export is a reasonable
-        // thing to type, and the right response is to write the float file
-        // rather than to refuse it or to add noise to it.
-        return true;
-    }
-
-    auto ditherer = sa::dsp::Ditherer::create(settings, channelCount);
-    if (!ditherer) {
-        error = std::string{ditherer.error().what()};
-        return false;
-    }
-    out.emplace(std::move(ditherer).value());
-    return true;
 }
 
 int analyse(const Options& options) {
@@ -1459,7 +1638,7 @@ int sweep(const Options& options) {
     // no reason.
     const sa::engine::BufferSource source{std::move(generated.value()), rate};
     if (!write(source, options.positional[1], formatFrom(options, sa::io::SampleFormat::Float32),
-               error)) {
+               options, error)) {
         return fail(error);
     }
 
@@ -1518,7 +1697,7 @@ int deconvolve(const Options& options) {
 
     const sa::engine::BufferSource result{std::move(impulse.value()), info.sampleRate};
     if (!write(result, options.positional[2], formatFrom(options, sa::io::SampleFormat::Float32),
-               error)) {
+               options, error)) {
         return fail(error);
     }
 
@@ -1642,7 +1821,7 @@ int provenance(const Options& options) {
 /// leave a periodic artefact at the block rate.
 class WriterSink final : public sa::engine::AudioSink {
 public:
-    WriterSink(sa::io::WavWriter& writer, sa::ChannelLayout layout, sa::dsp::Ditherer* ditherer)
+    WriterSink(OutputFile& writer, sa::ChannelLayout layout, sa::dsp::Ditherer* ditherer)
         : writer_{writer}, layout_{layout}, ditherer_{ditherer} {}
 
     [[nodiscard]] sa::Status write(sa::ConstAudioBufferView frames) override {
@@ -1671,7 +1850,7 @@ public:
     }
 
 private:
-    sa::io::WavWriter& writer_;
+    OutputFile& writer_;
     sa::ChannelLayout layout_;
     sa::dsp::Ditherer* ditherer_ = nullptr;
     sa::AudioBuffer scratch_;
@@ -1689,45 +1868,46 @@ int convert(const Options& options) {
 
     const sa::io::AudioFileInfo& info = source->info();
     const auto wanted = options.number("rate", info.sampleRate.hz());
-    const auto format = formatFrom(options, info.format);
     const sa::SampleRate outputRate{wanted};
+
+    // The container comes from the output's extension and the depth from what
+    // that container can hold, so `convert take.wav take.flac` writes a FLAC
+    // and `--format float` against one gets 24 bits rather than an error.
+    const auto format =
+        storableFormat(containerFor(options.positional[2]), formatFrom(options, info.format));
 
     // A ditherer, if one was asked for and the format has bits to drop. Built
     // here rather than inside the sink so that an unknown --dither name is
-    // reported before anything is written.
+    // reported before anything is written, and built from the format above --
+    // the one the file will really be -- so that a float source landing in a
+    // FLAC is dithered on its way to 24 bits rather than rounded there.
     std::optional<sa::dsp::Ditherer> ditherer;
     if (!ditherFor(ditherer, format, info.channelCount(), options, error)) {
         return fail(error);
     }
 
-    std::ofstream stream{options.positional[2], std::ios::binary};
-    if (!stream) {
-        return fail("could not write " + options.positional[2]);
-    }
-    sa::io::WavOptions wavOptions;
-    wavOptions.format = format;
-    auto writer = sa::io::WavWriter::create(stream, outputRate, info.layout, wavOptions);
-    if (!writer) {
-        return fail(std::string{writer.error().what()});
+    OutputFile output;
+    if (!output.open(options.positional[2], outputRate, info.layout, format, error)) {
+        return fail(error);
     }
 
     // Streamed, a block at a time, so a file's length costs disk rather than
     // memory. This used to pull the whole thing in and refuse outright past
     // two gigabytes of samples, which for a concert recording or an archive
     // transfer is a wall rather than an inconvenience.
-    WriterSink sink{writer.value(), info.layout, ditherer ? &ditherer.value() : nullptr};
+    WriterSink sink{output, info.layout, ditherer ? &ditherer.value() : nullptr};
     sa::engine::ConversionSpec spec;
     spec.outputRate = outputRate;
     spec.quality = sa::dsp::ResamplerQuality::Best;
 
     const auto converted = sa::engine::convertStreaming(*source, sink, spec);
     if (!converted) {
-        // Deliberately not finishing the writer: a WAV whose header was never
-        // patched does not read as a complete file, which is what a failed
-        // conversion should leave behind rather than a plausible short one.
+        // Deliberately not finishing the writer: a file whose sizes were never
+        // patched does not read as a complete one, which is what a failed
+        // conversion should leave behind rather than a plausible short file.
         return fail(std::string{converted.error().what()});
     }
-    if (!writer.value().finish()) {
+    if (!output.finish()) {
         return fail("could not finish " + options.positional[2]);
     }
 
@@ -1802,7 +1982,7 @@ int normalise(const Options& options) {
     }
 
     const sa::engine::DocumentSource rendered{document};
-    if (!write(rendered, options.positional[2], formatFrom(options, source->info().format),
+    if (!write(rendered, options.positional[2], formatFrom(options, source->info().format), options,
                error)) {
         return fail(error);
     }
@@ -1860,7 +2040,7 @@ int denoise(const Options& options) {
     }
 
     const sa::engine::BufferSource cleaned{std::move(audio), info.sampleRate};
-    if (!write(cleaned, options.positional[2], formatFrom(options, info.format), error)) {
+    if (!write(cleaned, options.positional[2], formatFrom(options, info.format), options, error)) {
         return fail(error);
     }
     std::printf("%s: learned from %.2f-%.2f s, reduced by %.1f dB -> %s\n",
@@ -1894,7 +2074,7 @@ int reshape(const Options& options,
 
     const double seconds = sa::samplesToSeconds(reshaped.value().frames(), info.sampleRate);
     const sa::engine::BufferSource result{std::move(reshaped.value()), info.sampleRate};
-    if (!write(result, options.positional[2], formatFrom(options, info.format), error)) {
+    if (!write(result, options.positional[2], formatFrom(options, info.format), options, error)) {
         return fail(error);
     }
     std::printf("%s: %s -> %s (%.2f s)\n",
@@ -1963,7 +2143,8 @@ int dynamics(const Options& options, bool compressing) {
     }
 
     const sa::engine::BufferSource processed{std::move(audio), info.sampleRate};
-    if (!write(processed, options.positional[2], formatFrom(options, info.format), error)) {
+    if (!write(processed, options.positional[2], formatFrom(options, info.format), options,
+               error)) {
         return fail(error);
     }
     std::printf("%s: %s %s -> %s\n",
@@ -2020,7 +2201,7 @@ int channels(const Options& options) {
     }
 
     const sa::engine::BufferSource edited{std::move(audio), info.sampleRate};
-    if (!write(edited, options.positional[2], formatFrom(options, info.format), error)) {
+    if (!write(edited, options.positional[2], formatFrom(options, info.format), options, error)) {
         return fail(error);
     }
     std::printf(
@@ -2057,7 +2238,7 @@ int dereverbFile(const Options& options) {
     }
 
     const sa::engine::BufferSource result{std::move(audio), info.sampleRate};
-    if (!write(result, options.positional[2], formatFrom(options, info.format), error)) {
+    if (!write(result, options.positional[2], formatFrom(options, info.format), options, error)) {
         return fail(error);
     }
 
@@ -2106,7 +2287,8 @@ int deessFile(const Options& options) {
     }
 
     const sa::engine::BufferSource processed{std::move(audio), info.sampleRate};
-    if (!write(processed, options.positional[2], formatFrom(options, info.format), error)) {
+    if (!write(processed, options.positional[2], formatFrom(options, info.format), options,
+               error)) {
         return fail(error);
     }
     std::printf("%s: de-essed above %.0f Hz, up to %.1f dB off on %.0f%% of it -> %s\n",
@@ -2144,7 +2326,7 @@ int dehumFile(const Options& options) {
     }
 
     const sa::engine::BufferSource cleaned{std::move(audio), info.sampleRate};
-    if (!write(cleaned, options.positional[2], formatFrom(options, info.format), error)) {
+    if (!write(cleaned, options.positional[2], formatFrom(options, info.format), options, error)) {
         return fail(error);
     }
     if (report.value().found) {
@@ -2187,7 +2369,7 @@ int declipFile(const Options& options) {
     }
 
     const sa::engine::BufferSource restored{std::move(audio), info.sampleRate};
-    if (!write(restored, options.positional[2], formatFrom(options, info.format), error)) {
+    if (!write(restored, options.positional[2], formatFrom(options, info.format), options, error)) {
         return fail(error);
     }
     std::printf("%s: %d clipped peak%s restored, %lld samples, %.2f dB applied to fit, "
@@ -2226,7 +2408,7 @@ int declickFile(const Options& options) {
     }
 
     const sa::engine::BufferSource repaired{std::move(audio), info.sampleRate};
-    if (!write(repaired, options.positional[2], formatFrom(options, info.format), error)) {
+    if (!write(repaired, options.positional[2], formatFrom(options, info.format), options, error)) {
         return fail(error);
     }
     std::printf("%s: %d click%s repaired, %lld samples, %d left as too long -> %s\n",
@@ -2306,7 +2488,7 @@ int render(const Options& options) {
     const sa::engine::DocumentSource rendered{loaded.value().document};
     std::string error;
     if (!write(rendered, options.positional[2], formatFrom(options, sa::io::SampleFormat::PcmInt24),
-               error)) {
+               options, error)) {
         return fail(error);
     }
     std::printf("%s -> %s (%.2f s)\n",

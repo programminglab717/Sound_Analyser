@@ -11,6 +11,7 @@ No third-party imports: `wave` reads everything we write.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import random
@@ -107,6 +108,77 @@ def read_channels(path: Path) -> list[list[float]]:
         ]
         for c in range(channels)
     ]
+
+
+def write_wav_codes(path: Path, channels: list[list[int]], width: int,
+                    rate: int = SAMPLE_RATE) -> None:
+    """A WAV built from exact integer sample codes, one list per channel.
+
+    Exactness is the whole point of it. A lossless round trip has to be checked
+    as equality, and equality only means something if what went in sat on a code
+    to begin with -- otherwise the test is measuring float rounding rather than
+    the writer.
+    """
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(len(channels))
+        handle.setsampwidth(width)
+        handle.setframerate(rate)
+        data = bytearray()
+        for i in range(len(channels[0])):
+            for channel in channels:
+                data += int(channel[i]).to_bytes(width, "little", signed=True)
+        handle.writeframes(bytes(data))
+
+
+def raw_frames(path: Path) -> tuple[bytes, int, int, int]:
+    """(payload, channels, bytes per sample, rate) straight out of a WAV."""
+    with wave.open(str(path), "rb") as handle:
+        return (
+            handle.readframes(handle.getnframes()),
+            handle.getnchannels(),
+            handle.getsampwidth(),
+            handle.getframerate(),
+        )
+
+
+def flac_stream_info(path: Path) -> dict:
+    """The 34 bytes of STREAMINFO, unpacked.
+
+    Read here rather than taken from the tool that wrote it, because a writer
+    agreeing with itself about what it wrote proves nothing.
+    """
+    raw = path.read_bytes()
+    if raw[:4] != b"fLaC":
+        raise ValueError("not a native FLAC stream")
+    body = raw[8 : 8 + 34]
+    packed = int.from_bytes(body[10:18], "big")
+    return {
+        "minBlock": int.from_bytes(body[0:2], "big"),
+        "maxBlock": int.from_bytes(body[2:4], "big"),
+        "minFrame": int.from_bytes(body[4:7], "big"),
+        "maxFrame": int.from_bytes(body[7:10], "big"),
+        "rate": packed >> 44,
+        "channels": ((packed >> 41) & 0x7) + 1,
+        "bits": ((packed >> 36) & 0x1F) + 1,
+        "samples": packed & 0xFFFFFFFFF,
+        "md5": body[18:34].hex(),
+    }
+
+
+def aiff_chunks(path: Path) -> tuple[str, int, dict[str, tuple[int, int]]]:
+    """(form type, declared FORM size, {chunk id: (body offset, declared size)})."""
+    raw = path.read_bytes()
+    if raw[:4] != b"FORM":
+        raise ValueError("not a FORM container")
+    form_size = int.from_bytes(raw[4:8], "big")
+    chunks: dict[str, tuple[int, int]] = {}
+    offset = 12
+    while offset + 8 <= len(raw):
+        identifier = raw[offset : offset + 4].decode("ascii", "replace")
+        size = int.from_bytes(raw[offset + 4 : offset + 8], "big")
+        chunks[identifier] = (offset + 8, size)
+        offset += 8 + size + (size & 1)
+    return raw[8:12].decode("ascii", "replace"), form_size, chunks
 
 
 def rms(values: list[float]) -> float:
@@ -1214,6 +1286,258 @@ def main() -> int:
         check("dither on a float output is accepted and ignored",
               run("convert", str(quiet_path), str(workspace / "x.wav"),
                   "--format", "float", "--dither", "tpdf").returncode == 0)
+
+        # -------------------------------------------------------------------
+        # Output formats
+        #
+        # The editor reads WAV, AIFF, FLAC and MP3, and for a long time wrote
+        # only WAV, so a FLAC opened for a two-second edit came back five times
+        # the size. What is checked here is not that the files exist but that
+        # they are the files they claim to be: a lossless format that does not
+        # give the samples back is worse than no lossless format at all.
+        # -------------------------------------------------------------------
+        print("output formats:")
+
+        # A 24-bit stereo source on exact codes, so equality is meaningful.
+        exact_frames = 3 * SAMPLE_RATE
+        left = [int(round(0.6 * 8388607 * math.sin(2.0 * math.pi * 440.0 * i / SAMPLE_RATE)))
+                for i in range(exact_frames)]
+        right = [int(round(0.35 * 8388607 * math.sin(2.0 * math.pi * 661.0 * i / SAMPLE_RATE)))
+                 for i in range(exact_frames)]
+        exact_source = workspace / "exact24.wav"
+        write_wav_codes(exact_source, [left, right], 3)
+        original, channels, width, rate = raw_frames(exact_source)
+
+        as_flac = workspace / "exact.flac"
+        result = run("convert", str(exact_source), str(as_flac))
+        check("convert writes a FLAC when asked for one", result.returncode == 0, result.stderr)
+        check("the FLAC starts with the FLAC magic",
+              as_flac.exists() and as_flac.read_bytes()[:4] == b"fLaC")
+
+        if as_flac.exists():
+            info = flac_stream_info(as_flac)
+            check("STREAMINFO states the rate", info["rate"] == rate, str(info["rate"]))
+            check("STREAMINFO states the channels", info["channels"] == channels,
+                  str(info["channels"]))
+            check("STREAMINFO states the depth", info["bits"] == width * 8, str(info["bits"]))
+            check("STREAMINFO states the length", info["samples"] == exact_frames,
+                  str(info["samples"]))
+            check("STREAMINFO carries frame-size extremes",
+                  0 < info["minFrame"] <= info["maxFrame"],
+                  f"{info['minFrame']}..{info['maxFrame']}")
+            # The signature FLAC specifies is an MD5 of the samples as they
+            # would be laid out uncompressed, which is exactly the WAV payload.
+            # hashlib has nothing to do with our MD5, so this checks both the
+            # digest and the layout it was taken over.
+            check("STREAMINFO's MD5 matches the audio it covers",
+                  info["md5"] == hashlib.md5(original).hexdigest(), info["md5"])
+            check("the FLAC is materially smaller than the WAV",
+                  as_flac.stat().st_size < exact_source.stat().st_size * 0.75,
+                  f"{as_flac.stat().st_size} vs {exact_source.stat().st_size}")
+
+            # The claim in full: decode it again and it is the same file.
+            from_flac = workspace / "from-flac.wav"
+            result = run("convert", str(as_flac), str(from_flac))
+            check("the FLAC opens again", result.returncode == 0, result.stderr)
+            if from_flac.exists():
+                back, back_channels, back_width, back_rate = raw_frames(from_flac)
+                check("FLAC round-trips bit-identically", back == original,
+                      f"{len(back)} vs {len(original)} bytes")
+                check("FLAC keeps the shape",
+                      (back_channels, back_width, back_rate) == (channels, width, rate))
+
+        as_aiff = workspace / "exact.aiff"
+        result = run("convert", str(exact_source), str(as_aiff))
+        check("convert writes an AIFF when asked for one", result.returncode == 0, result.stderr)
+        if as_aiff.exists():
+            form_type, form_size, chunks = aiff_chunks(as_aiff)
+            check("the AIFF is a FORM of type AIFF", form_type == "AIFF", form_type)
+            check("the FORM size matches the file",
+                  form_size == as_aiff.stat().st_size - 8,
+                  f"{form_size} vs {as_aiff.stat().st_size - 8}")
+            check("the AIFF has COMM and SSND", "COMM" in chunks and "SSND" in chunks)
+
+            if "COMM" in chunks and "SSND" in chunks:
+                comm_at = chunks["COMM"][0]
+                body = as_aiff.read_bytes()
+                check("COMM states the channels",
+                      int.from_bytes(body[comm_at : comm_at + 2], "big") == channels)
+                check("COMM states the length",
+                      int.from_bytes(body[comm_at + 2 : comm_at + 6], "big") == exact_frames)
+                check("COMM states the depth",
+                      int.from_bytes(body[comm_at + 6 : comm_at + 8], "big") == width * 8)
+
+                # Big-endian is where AIFF writers break, so the first sample is
+                # compared against the source's own bytes reversed rather than
+                # against a round trip, which would agree either way round.
+                samples_at = chunks["SSND"][0] + 8
+                check("AIFF samples are big-endian",
+                      body[samples_at : samples_at + width] == original[0:width][::-1],
+                      body[samples_at : samples_at + width].hex())
+
+            from_aiff = workspace / "from-aiff.wav"
+            result = run("convert", str(as_aiff), str(from_aiff))
+            check("the AIFF opens again", result.returncode == 0, result.stderr)
+            if from_aiff.exists():
+                back, back_channels, back_width, back_rate = raw_frames(from_aiff)
+                check("AIFF round-trips bit-identically", back == original,
+                      f"{len(back)} vs {len(original)} bytes")
+                check("AIFF keeps the shape",
+                      (back_channels, back_width, back_rate) == (channels, width, rate))
+
+        # An odd number of payload bytes: 24-bit mono at an odd frame count is
+        # 3 * odd, which is odd, so IFF wants a pad byte after the chunk and the
+        # FORM size has to count it. Getting this wrong leaves a file that only
+        # some readers can parse.
+        odd_source = workspace / "odd.wav"
+        write_wav_codes(odd_source, [[(i * 5077) % 8388607 - 4194304 for i in range(1001)]], 3)
+        odd_payload = raw_frames(odd_source)[0]
+        check("the odd source really is odd", len(odd_payload) % 2 == 1, str(len(odd_payload)))
+
+        odd_aiff = workspace / "odd.aiff"
+        result = run("convert", str(odd_source), str(odd_aiff))
+        check("an odd-length AIFF is written", result.returncode == 0, result.stderr)
+        if odd_aiff.exists():
+            _, form_size, chunks = aiff_chunks(odd_aiff)
+            check("the odd AIFF ends on an even boundary",
+                  odd_aiff.stat().st_size % 2 == 0, str(odd_aiff.stat().st_size))
+            check("SSND's declared size excludes the pad",
+                  chunks["SSND"][1] == len(odd_payload) + 8, str(chunks["SSND"][1]))
+            check("the FORM size includes the pad",
+                  form_size == odd_aiff.stat().st_size - 8, str(form_size))
+            odd_back = workspace / "odd-back.wav"
+            result = run("convert", str(odd_aiff), str(odd_back))
+            check("the odd AIFF opens again", result.returncode == 0, result.stderr)
+            if odd_back.exists():
+                check("the odd AIFF round-trips bit-identically",
+                      raw_frames(odd_back)[0] == odd_payload)
+
+        odd_flac = workspace / "odd.flac"
+        result = run("convert", str(odd_source), str(odd_flac))
+        check("an odd-length FLAC is written", result.returncode == 0, result.stderr)
+        if odd_flac.exists():
+            check("the odd FLAC's MD5 covers the odd payload",
+                  flac_stream_info(odd_flac)["md5"] == hashlib.md5(odd_payload).hexdigest())
+            odd_back = workspace / "odd-back-flac.wav"
+            result = run("convert", str(odd_flac), str(odd_back))
+            check("the odd FLAC opens again", result.returncode == 0, result.stderr)
+            if odd_back.exists():
+                check("the odd FLAC round-trips bit-identically",
+                      raw_frames(odd_back)[0] == odd_payload)
+
+        # Mono and more than two channels, because the stereo path decorrelates
+        # and the others do not, so they are different code.
+        for count in (1, 2, 6):
+            wide_source = workspace / f"wide{count}.wav"
+            write_wav_codes(
+                wide_source,
+                [[((i * (7 + c * 13)) % 65535) - 32768 for i in range(4000)]
+                 for c in range(count)],
+                2,
+            )
+            payload = raw_frames(wide_source)[0]
+            wide_flac = workspace / f"wide{count}.flac"
+            wide_back = workspace / f"wide{count}-back.wav"
+            ok = run("convert", str(wide_source), str(wide_flac)).returncode == 0
+            ok = ok and run("convert", str(wide_flac), str(wide_back)).returncode == 0
+            check(f"{count}-channel FLAC round-trips bit-identically",
+                  ok and raw_frames(wide_back)[0] == payload)
+
+            wide_aiff = workspace / f"wide{count}.aiff"
+            wide_back_aiff = workspace / f"wide{count}-back-aiff.wav"
+            ok = run("convert", str(wide_source), str(wide_aiff)).returncode == 0
+            ok = ok and run("convert", str(wide_aiff), str(wide_back_aiff)).returncode == 0
+            check(f"{count}-channel AIFF round-trips bit-identically",
+                  ok and raw_frames(wide_back_aiff)[0] == payload)
+
+        # Sample rates other than the one everything else here uses, because
+        # FLAC codes the common ones in the frame header and escapes the rest.
+        for other_rate in (44100, 22050, 37000, 64000):
+            rate_source = workspace / f"rate{other_rate}.wav"
+            write_wav_codes(rate_source, [[(i % 30000) - 15000 for i in range(2000)]], 2,
+                            other_rate)
+            payload = raw_frames(rate_source)[0]
+            rate_flac = workspace / f"rate{other_rate}.flac"
+            rate_back = workspace / f"rate{other_rate}-back.wav"
+            ok = run("convert", str(rate_source), str(rate_flac)).returncode == 0
+            ok = ok and run("convert", str(rate_flac), str(rate_back)).returncode == 0
+            got = raw_frames(rate_back) if rate_back.exists() else (b"", 0, 0, 0)
+            check(f"a FLAC at {other_rate} Hz round-trips bit-identically",
+                  ok and got[0] == payload and got[3] == other_rate, str(got[3]))
+
+        # FLAC holds integers only, so a float request has to land somewhere.
+        # It lands at 24 bits rather than failing, and --dither is honoured on
+        # the way there -- the same ditherer the WAV path uses, not a second
+        # one that rounds instead.
+        float_flac = workspace / "from-float.flac"
+        result = run("convert", str(quiet_path), str(float_flac), "--format", "float")
+        check("a float request to FLAC is accepted", result.returncode == 0, result.stderr)
+        if float_flac.exists():
+            check("and becomes 24 bits", flac_stream_info(float_flac)["bits"] == 24,
+                  str(flac_stream_info(float_flac)["bits"]))
+
+        for name, extra in (("f-none", []), ("f-tpdf", ["--dither", "tpdf"])):
+            target = workspace / f"{name}.flac"
+            result = run("convert", str(quiet_path), str(target), "--format", "16", *extra)
+            check(f"convert to FLAC {name} exits cleanly", result.returncode == 0, result.stderr)
+            decoded = workspace / f"{name}-decoded.wav"
+            if target.exists():
+                run("convert", str(target), str(decoded))
+
+        if (workspace / "f-none-decoded.wav").exists() and (
+            workspace / "f-tpdf-decoded.wav"
+        ).exists():
+            def flac_worst_ratio(path: Path) -> float:
+                values, _ = read_wav(path)
+                fundamental = goertzel(values, 997.0)
+                worst = max(goertzel(values, 997.0 * k) for k in (3, 5, 7, 9))
+                return 20.0 * math.log10(max(worst, 1e-15) / max(fundamental, 1e-15))
+
+            plain = flac_worst_ratio(workspace / "f-none-decoded.wav")
+            dithered = flac_worst_ratio(workspace / "f-tpdf-decoded.wav")
+            check("dither reaches the FLAC path too",
+                  plain - dithered > 6.0, f"{plain:.1f} -> {dithered:.1f} dB")
+
+        # AIFF is integer PCM here, so a float request narrows the same way.
+        float_aiff = workspace / "from-float.aiff"
+        result = run("convert", str(quiet_path), str(float_aiff), "--format", "float")
+        check("a float request to AIFF is accepted", result.returncode == 0, result.stderr)
+        if float_aiff.exists():
+            body = float_aiff.read_bytes()
+            comm_at = aiff_chunks(float_aiff)[2]["COMM"][0]
+            check("and becomes 24 bits",
+                  int.from_bytes(body[comm_at + 6 : comm_at + 8], "big") == 24)
+
+        # The extension steers every command that writes audio, not only
+        # convert -- otherwise `normalise in.wav out.flac` writes a WAV under a
+        # name that says otherwise, which is worse than refusing.
+        normalised_flac = workspace / "normalised.flac"
+        result = run("normalise", str(exact_source), str(normalised_flac), "--target", "EBU R128")
+        check("normalise honours a .flac output", result.returncode == 0, result.stderr)
+        check("and really writes a FLAC",
+              normalised_flac.exists() and normalised_flac.read_bytes()[:4] == b"fLaC")
+
+        compressed_aiff = workspace / "compressed.aiff"
+        result = run("compress", str(exact_source), str(compressed_aiff))
+        check("compress honours an .aiff output", result.returncode == 0, result.stderr)
+        check("and really writes an AIFF",
+              compressed_aiff.exists() and compressed_aiff.read_bytes()[:4] == b"FORM")
+
+        # An unrecognised extension is still a WAV, which is what this tool did
+        # before it had a choice.
+        plain_output = workspace / "no-extension"
+        result = run("convert", str(exact_source), str(plain_output))
+        check("an unknown extension still writes a WAV",
+              result.returncode == 0 and plain_output.exists()
+              and plain_output.read_bytes()[:4] == b"RIFF", result.stderr)
+
+        # Upper case, because a file dialog on Windows hands back .FLAC as
+        # readily as .flac.
+        shouted = workspace / "SHOUTED.FLAC"
+        result = run("convert", str(exact_source), str(shouted))
+        check("the extension match ignores case",
+              result.returncode == 0 and shouted.exists()
+              and shouted.read_bytes()[:4] == b"fLaC", result.stderr)
 
         print("stereo field:")
         cases = {
