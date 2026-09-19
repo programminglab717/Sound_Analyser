@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import random
 import struct
 import subprocess
 import sys
@@ -110,6 +111,13 @@ def butterworth_db(frequency: float, corner: float, high_pass: bool) -> float:
     """
     ratio = (frequency / corner) ** 2
     return 20.0 * math.log10((ratio if high_pass else 1.0) / math.sqrt(1.0 + ratio**2))
+
+
+def error_db(actual: list[float], wanted: list[float]) -> float:
+    """Error energy of one signal against another, relative to the signal."""
+    error = sum((a - b) ** 2 for a, b in zip(actual, wanted))
+    signal = sum(b * b for b in wanted)
+    return 10.0 * math.log10(error / signal) if error > 0.0 and signal > 0.0 else -200.0
 
 
 def main() -> int:
@@ -485,6 +493,91 @@ def main() -> int:
                         f"  ok  stretching a selection: {len(result)} frames, and what was "
                         "outside it is untouched"
                     )
+
+        # Declicking. Two claims, and the second matters more: it takes the
+        # damage out, and it leaves undamaged audio exactly alone. A
+        # restoration tool that quietly rewrites clean material is worse than
+        # none, because nobody hears what it did until the master has shipped.
+        print("\ndeclick:")
+        rng = random.Random(4)
+        clean_samples: list[float] = []
+        for i in range(SAMPLE_RATE * 4):
+            t_seconds = i / SAMPLE_RATE
+            clean_samples.append(
+                0.35 * math.sin(2.0 * math.pi * 220.0 * t_seconds)
+                + 0.20 * math.sin(2.0 * math.pi * 553.0 * t_seconds)
+                + 0.10 * math.sin(2.0 * math.pi * 1310.0 * t_seconds)
+                + rng.gauss(0.0, 0.01)
+            )
+        damaged_samples = list(clean_samples)
+        clicks = list(range(5000, len(clean_samples) - 5000, 4300))
+        for place in clicks:
+            height = rng.uniform(0.4, 0.9) * rng.choice([1.0, -1.0])
+            for k in range(rng.randint(1, 4)):
+                damaged_samples[place + k] += height
+
+        def write_samples(path: Path, values: list[float]) -> None:
+            raw = bytearray()
+            for value in values:
+                scaled = max(-8388608, min(8388607, int(value * 8388607)))
+                raw += (scaled & 0xFFFFFF).to_bytes(3, "little")
+            with wave.open(str(path), "wb") as handle:
+                handle.setnchannels(1)
+                handle.setsampwidth(3)
+                handle.setframerate(SAMPLE_RATE)
+                handle.writeframes(bytes(raw))
+
+        clean_file = workspace / "clean.wav"
+        damaged_file = workspace / "damaged.wav"
+        write_samples(clean_file, clean_samples)
+        write_samples(damaged_file, damaged_samples)
+        reference = load(clean_file)
+
+        def declicked(source_file: Path, operations: str, name: str) -> list[float] | None:
+            output = workspace / f"{name}.wav"
+            completed = subprocess.run(
+                [
+                    str(arguments.binary),
+                    str(source_file),
+                    "--apply",
+                    operations,
+                    "--export",
+                    str(output),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+            if completed.returncode != 0 or not output.exists():
+                failures.append(f"{name}: exited {completed.returncode} -- {completed.stderr}")
+                return None
+            return load(output)
+
+        before = error_db(load(damaged_file), reference)
+        repaired = declicked(damaged_file, "declick", "declicked")
+        if repaired is not None:
+            after = error_db(repaired, reference)
+            if after > before - 25.0:
+                failures.append(
+                    f"declick: {len(clicks)} clicks, error {before:.1f} dB -> {after:.1f} dB, "
+                    "wanted at least 25 dB better"
+                )
+            else:
+                print(
+                    f"  ok  declick: {len(clicks)} clicks, error {before:.1f} dB -> "
+                    f"{after:.1f} dB"
+                )
+
+        untouched = declicked(clean_file, "declick", "declicked-clean")
+        if untouched is not None:
+            moved = max((abs(a - b) for a, b in zip(untouched, reference)), default=0.0)
+            if moved > 0.0:
+                failures.append(
+                    f"declick: clean material moved by {moved:.6f} -- it found damage that "
+                    "was not there"
+                )
+            else:
+                print("  ok  declick: clean material comes back bit-identical")
 
         # Playback, against the null device. That device runs a real thread on a
         # real clock, so this exercises the ring, the render worker, the

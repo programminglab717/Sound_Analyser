@@ -175,6 +175,8 @@ private:
     void chooseFilter();
     void applyFilter(int filterType, double frequency, double q, double gainDb,
                      const QString& label);
+    void chooseDeclick();
+    bool applyDeclick(double threshold, const QString& label);
     void chooseTimeStretch();
     void choosePitchShift();
     bool applyTimeStretch(double factor, const QString& label);

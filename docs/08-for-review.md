@@ -17,8 +17,8 @@ run `sound-analyser.exe`. Qt ships beside it, so there is nothing to install.
 It is about 12.6 MB and it is built and tested by the same run that produces it:
 all ten CI jobs green, including both MSVC configurations, before the package is
 uploaded. `sa-cli.exe` is not in the package yet -- say if you want it and it is
-a one-line change. It now has seven commands: analyse, convert, normalise,
-denoise, render, stretch and pitch.
+a one-line change. It now has eight commands: analyse, convert, normalise,
+denoise, declick, render, stretch and pitch.
 
 Then open something real — a recording of your own, not a test tone — and try:
 
@@ -36,6 +36,7 @@ Then open something real — a recording of your own, not a test tone — and tr
 | Retune | Process ▸ Pitch shift. Semitones, and fractions of one — 0.01 is a cent, which is what a tuning fix actually needs |
 | Repair | Draw a box round a hum or a click, then Repair ▸ Attenuate or Heal |
 | Denoise | Select a passage of noise alone ▸ Repair ▸ Learn noise profile, then select the whole thing ▸ Repair ▸ Reduce noise |
+| Declick | Repair ▸ Remove clicks. It says how many it found. On a clean recording the right answer is none, and it gives that answer |
 | Save | File ▸ Save session, reopen it, check nothing was lost |
 
 **What I need back.** Not a bug list — impressions. Where did you expect
@@ -79,6 +80,14 @@ that becomes exact.
 ## 4. Things I would want a second opinion on
 
 Not blocked, but a person's judgement would be better than mine.
+
+- **Whether the declicker is finding the right things.** On synthetic damage
+  it takes the error down by 32 dB and leaves clean material bit-identical,
+  which is the strongest statement I can make from inside a container. What I
+  cannot tell you is how it behaves on a real vinyl transfer, where the clicks
+  are not impulses and the music is not three sine waves. If you have anything
+  with real surface noise on it, that is the test. The sensitivity control is
+  the one to move: lower finds more and repairs more that did not need it.
 
 - **How a stretch sounds to you.** The measurements say a stretched tone is
   the same tone and a shifted one has moved by exactly the right ratio, and

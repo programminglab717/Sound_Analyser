@@ -13,6 +13,7 @@
 #include <sa/analysis/LoudnessMeter.h>
 #include <sa/analysis/SignalStatistics.h>
 #include <sa/analysis/TruePeakMeter.h>
+#include <sa/dsp/Declick.h>
 #include <sa/dsp/Resampler.h>
 #include <sa/dsp/TimeStretch.h>
 #include <sa/engine/BufferSource.h>
@@ -307,6 +308,10 @@ void usage() {
   denoise <in> <out> --noise <from>-<to> [--amount <dB>] [--format 16|24|float]
       Learn a noise profile from <from>-<to> in seconds, then clean the file.
 
+  declick <in> <out> [--sensitivity <n>] [--format 16|24|float]
+      Find and repair clicks. Prints how many it found, and how many stretches
+      of damage were too long to be clicks and were left alone.
+
   stretch <in> <out> --length <percent> [--format 16|24|float]
       Change how long it lasts without changing its pitch. 200 is twice as
       long, 50 is half.
@@ -596,6 +601,43 @@ int reshape(const Options& options,
     return 0;
 }
 
+int declickFile(const Options& options) {
+    if (options.positional.size() != 3) {
+        return fail("declick needs an input and an output");
+    }
+
+    sa::dsp::DeclickSettings settings;
+    settings.threshold = options.number("sensitivity", settings.threshold);
+
+    std::string error;
+    const auto source = open(options.positional[1], error);
+    if (!source) {
+        return fail(error);
+    }
+    const sa::io::AudioFileInfo& info = source->info();
+
+    sa::AudioBuffer audio{info.layout, info.frameCount};
+    if (const auto read = source->read(0, audio.view()); !read) {
+        return fail(std::string{read.error().what()});
+    }
+
+    const auto report = sa::dsp::declick(audio.view(), settings);
+    if (!report) {
+        return fail(std::string{report.error().what()});
+    }
+
+    const sa::engine::BufferSource repaired{std::move(audio), info.sampleRate};
+    if (!write(repaired, options.positional[2], formatFrom(options, info.format), error)) {
+        return fail(error);
+    }
+    std::printf("%s: %d click%s repaired, %lld samples, %d left as too long -> %s\n",
+                std::filesystem::path{options.positional[1]}.filename().string().c_str(),
+                report.value().clicks, report.value().clicks == 1 ? "" : "s",
+                static_cast<long long>(report.value().samplesRepaired), report.value().tooLong,
+                std::filesystem::path{options.positional[2]}.filename().string().c_str());
+    return 0;
+}
+
 int stretch(const Options& options) {
     if (options.positional.size() != 3) {
         return fail("stretch needs an input and an output");
@@ -697,6 +739,9 @@ int main(int argc, char** argv) {
     }
     if (command == "denoise") {
         return denoise(options);
+    }
+    if (command == "declick") {
+        return declickFile(options);
     }
     if (command == "stretch") {
         return stretch(options);

@@ -3,7 +3,9 @@ add_library(sa-dsp STATIC
     src/BiquadCascade.cpp
     src/Dynamics.cpp
     src/EnvelopeFollower.cpp
+    src/Declick.cpp
     src/Fft.cpp
+    src/LinearPrediction.cpp
     src/ParametricEq.cpp
     src/ExactTruePeak.cpp
     src/OfflineLimiter.cpp
@@ -24,7 +26,9 @@ if(SA_BUILD_TESTS)
     add_executable(sa-dsp-tests
         tests/BiquadTests.cpp
         tests/DynamicsTests.cpp
+        tests/DeclickTests.cpp
         tests/FftTests.cpp
+        tests/LinearPredictionTests.cpp
         tests/ParametricEqTests.cpp
         tests/ExactTruePeakTests.cpp
         tests/OfflineLimiterTests.cpp

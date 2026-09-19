@@ -69,7 +69,7 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | Build, presets, warnings-as-errors, CI on Windows and Linux | ✅ Done — ASan, UBSan and TSan all gate every commit |
 | Licence allowlist gate (`tools/check_licences.py`) | ✅ Done, negative-tested three ways |
 | `sa-core`: buffers, channel layouts, time types, `Result`, RT instrumentation | ✅ Done |
-| `sa-dsp`: FFT, windows, STFT, biquads, EQ, dynamics | ✅ Done — STFT round trip is a CI gate |
+| `sa-dsp`: FFT, windows, STFT, biquads, EQ, dynamics, resampling | ✅ Done — STFT round trip is a CI gate |
 | `sa-io`: WAV, AIFF, FLAC, MP3, peak pyramid, WAV writer | ✅ Done |
 | `sa-analysis`: LUFS, true peak, statistics, compliance targets | ✅ Done — see the caveat below |
 | `sa-spectral`: spectrogram pyramid, attenuate and heal | ✅ Done |
@@ -79,13 +79,14 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | `sa-ui`: waveform, spectrogram, rulers, meters, editing, repair | ✅ Done |
 | Resampling: any ratio, streaming, real-time safe | ✅ Done |
 | Noise profile learning and spectral denoise | ✅ Done |
+| Click detection and repair, by linear prediction | ✅ Done |
 | Mastering: filters, true-peak limiting, normalisation | ✅ Done |
-| `sa-cli`: headless batch driver | ✅ Done — seven commands, tested end to end |
+| `sa-cli`: headless batch driver | ✅ Done — eight commands, tested end to end |
 | Time-stretch and pitch-shift | ✅ Done — phase vocoder with identity phase locking |
 | Markers and regions in the interface; a draggable EQ curve | ⬜ Next |
 | GPU shader renderer | ⬜ An optimisation, not a requirement — the CPU path fits in the frame budget |
 
-**559 tests passing on GCC 13, under ASan/UBSan with leak detection, and under
+**573 tests passing on GCC 13, under ASan/UBSan with leak detection, and under
 ThreadSanitizer.** CI runs the same suite on MSVC 19 (Visual Studio 18), and
 the most recent run was green on every job -- both Windows configurations
 included -- and produced a packaged Windows build as an artifact.

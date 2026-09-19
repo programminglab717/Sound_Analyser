@@ -1,5 +1,6 @@
 #include <sa/device/AudioDeviceManager.h>
 #include <sa/device/NullAudioDevice.h>
+#include <sa/dsp/Declick.h>
 #include <sa/dsp/Dynamics.h>
 #include <sa/dsp/OfflineLimiter.h>
 #include <sa/dsp/ParametricEq.h>
@@ -256,6 +257,8 @@ void MainWindow::buildMenus() {
                       &MainWindow::learnNoiseProfile);
     denoiseAction_ = repair->addAction(tr("Reduce &noise…"), QKeySequence{Qt::CTRL | Qt::Key_D},
                                        this, &MainWindow::chooseDenoise);
+    repair->addAction(tr("Remove &clicks…"), QKeySequence{Qt::CTRL | Qt::SHIFT | Qt::Key_C}, this,
+                      &MainWindow::chooseDeclick);
     repair->addSeparator();
     repair->addAction(tr("Select all &frequencies"), this,
                       [this] { selectFrequencyBand(0.0, document_.sampleRate().hz() * 0.5); });
@@ -1115,6 +1118,88 @@ void MainWindow::applyFilter(int filterType, double frequency, double q, double 
     });
 }
 
+void MainWindow::chooseDeclick() {
+    if (!hasDocument()) {
+        return;
+    }
+    bool accepted = false;
+    const double threshold = QInputDialog::getDouble(
+        this, tr("Remove clicks"),
+        tr("Sensitivity — how far above the passage's own noise a sample has to be\n"
+           "before it counts as damage. Lower finds more, and repairs more that\n"
+           "did not need it:"),
+        5.0, 2.0, 20.0, 1, &accepted);
+    if (!accepted) {
+        return;
+    }
+    (void)applyDeclick(threshold, tr("remove clicks"));
+}
+
+bool MainWindow::applyDeclick(double threshold, const QString& label) {
+    const TimeSelection range = targetRange();
+    if (range.isEmpty() || !documentSource_) {
+        return false;
+    }
+
+    dsp::DeclickSettings settings;
+    settings.threshold = threshold;
+
+    // A run-up of exactly the model's order on each side, which is what makes
+    // the selection's own first and last samples judgeable: the detector
+    // ignores the first and last `order` samples of whatever it is given,
+    // because their residual has no history behind it, and the repair needs
+    // that much context either side to interpolate at all.
+    const auto context = static_cast<SampleCount>(settings.order);
+    const SampleIndex spanStart = std::max<SampleIndex>(0, range.start - context);
+    const SampleIndex spanEnd = std::min<SampleIndex>(document_.duration(), range.end + context);
+
+    AudioBuffer span{document_.layout(), spanEnd - spanStart};
+    if (!documentSource_->read(spanStart, span.view())) {
+        status_->setText(tr("Could not read the selection"));
+        return false;
+    }
+
+    status_->setText(tr("Looking for clicks…"));
+    status_->repaint();
+
+    const auto report = dsp::declick(span.view(), settings);
+    if (!report) {
+        status_->setText(tr("Could not remove clicks: %1")
+                             .arg(QString::fromStdString(std::string{report.error().what()})));
+        return false;
+    }
+    if (report.value().clicks == 0 && report.value().tooLong == 0) {
+        // Finding nothing is the right answer on undamaged audio, not a
+        // failure. Returning false here failed a whole batch run on a clean
+        // file, which is exactly the file a pipeline is most likely to hand it.
+        status_->setText(tr("No clicks found"));
+        return true;
+    }
+
+    AudioBuffer applied{document_.layout(), range.length()};
+    const SampleCount offset = range.start - spanStart;
+    for (int channel = 0; channel < document_.layout().count(); ++channel) {
+        std::copy_n(span.channel(channel) + offset, applied.frames(), applied.channel(channel));
+    }
+
+    const bool changed = applyEdit(label, [this, &range, &applied] {
+        return engine::replaceRange(document_, range.start, std::move(applied)).ok();
+    });
+    if (changed) {
+        // The count is the point. A user needs to know whether it found three
+        // clicks or three thousand, because those call for different next
+        // steps, and whether it passed over anything too long to repair --
+        // which is a dropout, and wants a different tool.
+        QString note = tr("Removed %n click(s)", nullptr, report.value().clicks);
+        if (report.value().tooLong > 0) {
+            note += tr(" — %n stretch(es) were too long to repair and were left alone", nullptr,
+                       report.value().tooLong);
+        }
+        status_->setText(note);
+    }
+    return changed;
+}
+
 void MainWindow::chooseTimeStretch() {
     if (!hasDocument()) {
         return;
@@ -1613,6 +1698,17 @@ bool MainWindow::applyOperation(const QString& name) {
         applyFilter(static_cast<int>(dsp::FilterType::LowPass), frequency, dsp::kButterworthQ, 0.0,
                     QStringLiteral("low-pass"));
         return true;
+    }
+    if (name == "declick") {
+        return applyDeclick(5.0, QStringLiteral("remove clicks"));
+    }
+    if (name.startsWith("declick:")) {
+        bool ok = false;
+        const double threshold = name.mid(8).toDouble(&ok);
+        if (!ok) {
+            return false;
+        }
+        return applyDeclick(threshold, QStringLiteral("remove clicks"));
     }
     if (name.startsWith("stretch:")) {
         bool ok = false;

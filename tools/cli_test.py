@@ -180,6 +180,33 @@ def main() -> int:
             check("the noise floor drops", floor_change < -8.0, f"{floor_change:.1f} dB")
             check("the tone survives", tone_change > -1.0, f"{tone_change:.2f} dB")
 
+        print("declick:")
+        clicked = workspace / "clicked.wav"
+        clean_samples, _ = read_wav(source)
+        damaged_samples = list(clean_samples)
+        places = list(range(4000, len(clean_samples) - 4000, 4300))
+        for index, place in enumerate(places):
+            height = 0.5 if index % 2 == 0 else -0.6
+            damaged_samples[place] += height
+            damaged_samples[place + 1] += height
+        write_wav(clicked, damaged_samples)
+
+        repaired_file = workspace / "declicked.wav"
+        result = run("declick", str(clicked), str(repaired_file))
+        check("exits cleanly", result.returncode == 0, result.stderr)
+        check("says what it found", "click" in result.stdout, result.stdout)
+        if repaired_file.exists():
+            repaired_samples, _ = read_wav(repaired_file)
+
+            def error_db(actual: list[float], wanted: list[float]) -> float:
+                error = sum((a - b) ** 2 for a, b in zip(actual, wanted))
+                signal = sum(b * b for b in wanted)
+                return 10.0 * math.log10(error / signal) if error > 0 and signal > 0 else -200.0
+
+            before = error_db(damaged_samples, clean_samples)
+            after = error_db(repaired_samples, clean_samples)
+            check("the clicks are gone", after < before - 20.0, f"{before:.1f} -> {after:.1f} dB")
+
         print("stretch:")
         longer = workspace / "longer.wav"
         result = run("stretch", str(source), str(longer), "--length", "175")
