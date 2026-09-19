@@ -69,6 +69,26 @@ Result<SpectrogramTiles> SpectrogramTiles::create(std::shared_ptr<const io::Audi
                             probe.value().frameCount()};
 }
 
+int SpectrogramTiles::coarseLevelFor(SampleCount sourceFrames, const SpectrogramConfig& config,
+                                     std::size_t budgetBytes) noexcept {
+    if (sourceFrames <= 0 || config.hopSize <= 0 || config.fftSize <= 0) {
+        return 0;
+    }
+    const auto bins = static_cast<std::size_t>(config.fftSize / 2 + 1);
+    const auto fineFrames = static_cast<std::size_t>(sourceFrames / config.hopSize + 1);
+
+    for (int level = 0; level < 24; ++level) {
+        const std::size_t frames = fineFrames >> level;
+        // Level 0 plus the levels above it, which roughly double it: each level
+        // halves the one below, so the series sums to about twice the base.
+        const std::size_t bytes = frames * bins * 2;
+        if (bytes <= budgetBytes) {
+            return level;
+        }
+    }
+    return 24;
+}
+
 Status SpectrogramTiles::buildOverview(const JobMonitor& monitor) {
     auto built = SpectrogramPyramid::buildDecimated(*source_, channel_, settings_.config,
                                                     settings_.coarseLevel, monitor);

@@ -21,9 +21,9 @@ SpectrogramView::SpectrogramView(QWidget* parent) : TimeAxisView(parent) {
     setMinimumHeight(140);
 }
 
-void SpectrogramView::setPyramid(std::shared_ptr<const spectral::SpectrogramPyramid> pyramid,
-                                 SampleRate rate, SampleCount totalFrames) {
-    pyramid_ = std::move(pyramid);
+void SpectrogramView::setTiles(std::shared_ptr<const spectral::SpectrogramTiles> tiles,
+                               SampleRate rate, SampleCount totalFrames) {
+    tiles_ = std::move(tiles);
     imageDirty_ = true;
     lowHz_ = 0.0;
     highHz_ = rate.hz() * 0.5;
@@ -101,7 +101,7 @@ void SpectrogramView::hover(const QPoint& position) {
     const int x = position.x() - kGutterWidth;
     const int y = position.y();
 
-    if (!pyramid_ || viewLength_ <= 0 || plot.width() <= 0 || x < 0 || x >= plot.width() || y < 0 ||
+    if (!tiles_ || viewLength_ <= 0 || plot.width() <= 0 || x < 0 || x >= plot.width() || y < 0 ||
         y >= height()) {
         emit cursorMoved(0.0, -1.0, 0.0);
         return;
@@ -116,13 +116,13 @@ void SpectrogramView::hover(const QPoint& position) {
     // Read the level straight off the rendered tile rather than re-querying the
     // pyramid: the tile is what the user is looking at, so the number and the
     // colour under the pointer can never disagree.
-    double decibels = pyramid_->config().minimumDecibels;
+    double decibels = tiles_->config().minimumDecibels;
     const int sourceRow = height() - 1 - y;
     const auto index =
         static_cast<std::size_t>(sourceRow) * static_cast<std::size_t>(plot.width()) +
         static_cast<std::size_t>(x);
     if (index < tile_.size()) {
-        decibels = pyramid_->toDecibels(tile_[index]);
+        decibels = tiles_->toDecibels(tile_[index]);
     }
     emit cursorMoved(seconds, hz, decibels);
 }
@@ -134,7 +134,7 @@ void SpectrogramView::leaveEvent(QEvent*) {
 void SpectrogramView::rebuildImage() {
     const int w = plotWidth();
     const int h = height();
-    if (!pyramid_ || pyramid_->isEmpty() || w <= 0 || h <= 0 || viewLength_ <= 0) {
+    if (!tiles_ || !tiles_->hasOverview() || w <= 0 || h <= 0 || viewLength_ <= 0) {
         image_ = QImage{};
         tile_.clear();
         imageDirty_ = false;
@@ -144,7 +144,7 @@ void SpectrogramView::rebuildImage() {
     // One edge per row boundary, bottom row first. The pyramid combines
     // whatever bins fall inside each row by maximum, so a narrow peak survives
     // the squeeze at the top of a log axis.
-    const auto bins = static_cast<double>(pyramid_->binCount());
+    const auto bins = static_cast<double>(tiles_->binCount());
     const double nyquist = rate_.hz() * 0.5;
     rowBinEdges_.resize(static_cast<std::size_t>(h) + 1);
     for (int row = 0; row <= h; ++row) {
@@ -155,7 +155,7 @@ void SpectrogramView::rebuildImage() {
     }
 
     tile_.resize(static_cast<std::size_t>(w) * static_cast<std::size_t>(h));
-    pyramid_->render(viewStart_, viewStart_ + viewLength_, rowBinEdges_.data(), h, w, tile_.data());
+    tiles_->render(viewStart_, viewStart_ + viewLength_, rowBinEdges_.data(), h, w, tile_.data());
 
     image_ = QImage{w, h, QImage::Format_RGB32};
     const auto& table = colourmapTable(colourmap_);
@@ -163,8 +163,8 @@ void SpectrogramView::rebuildImage() {
     // The pyramid stores magnitude quantised across its own configured dB
     // range. The display floor is applied here rather than at analysis time, so
     // dragging the contrast does not require re-running any STFT.
-    const float pyramidFloor = pyramid_->config().minimumDecibels;
-    const float pyramidCeiling = pyramid_->config().maximumDecibels;
+    const float pyramidFloor = tiles_->config().minimumDecibels;
+    const float pyramidCeiling = tiles_->config().maximumDecibels;
     const float pyramidSpan = pyramidCeiling - pyramidFloor;
     const float displaySpan = pyramidCeiling - floorDb_;
 
@@ -239,7 +239,7 @@ void SpectrogramView::paintPlot(QPainter& painter, const QRect& plot) {
         painter.fillRect(rect(), kEmpty);
         painter.setPen(kText);
         painter.drawText(rect(), Qt::AlignCenter,
-                         pyramid_ ? tr("No audio loaded") : tr("Spectrogram not available"));
+                         tiles_ ? tr("No audio loaded") : tr("Spectrogram not available"));
         return;
     }
     painter.drawImage(plot.left(), 0, image_);

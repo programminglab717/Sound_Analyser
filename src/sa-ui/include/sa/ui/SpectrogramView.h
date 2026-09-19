@@ -1,6 +1,6 @@
 #pragma once
 
-#include <sa/spectral/SpectrogramPyramid.h>
+#include <sa/spectral/SpectrogramTiles.h>
 #include <sa/ui/Colourmap.h>
 #include <sa/ui/TimeAxisView.h>
 
@@ -27,8 +27,15 @@ class SpectrogramView : public TimeAxisView {
 public:
     explicit SpectrogramView(QWidget* parent = nullptr);
 
-    void setPyramid(std::shared_ptr<const spectral::SpectrogramPyramid> pyramid, SampleRate rate,
-                    SampleCount totalFrames);
+    /// The spectrogram to draw.
+    ///
+    /// A tiled cache rather than a whole pyramid, because a whole pyramid of a
+    /// three-hour recording does not fit in memory. The view does not know or
+    /// care which parts of it are resident: render() draws detail where there
+    /// is detail and the overview where there is not, so a part-built picture
+    /// is coarse in places rather than blank.
+    void setTiles(std::shared_ptr<const spectral::SpectrogramTiles> tiles, SampleRate rate,
+                  SampleCount totalFrames);
     void setColourmap(Colourmap map);
 
     [[nodiscard]] Colourmap colourmap() const noexcept { return colourmap_; }
@@ -72,7 +79,7 @@ protected:
 private:
     void rebuildImage();
 
-    std::shared_ptr<const spectral::SpectrogramPyramid> pyramid_;
+    std::shared_ptr<const spectral::SpectrogramTiles> tiles_;
     Colourmap colourmap_ = Colourmap::Magma;
     FrequencyScale scale_ = FrequencyScale::Logarithmic;
     float floorDb_ = -96.0f;

@@ -10,6 +10,7 @@
 #include <sa/engine/DocumentSource.h>
 #include <sa/engine/UndoHistory.h>
 #include <sa/spectral/Denoise.h>
+#include <sa/spectral/SpectrogramTiles.h>
 #include <sa/transport/Player.h>
 #include <sa/ui/Colourmap.h>
 #include <sa/ui/LoudnessPanel.h>
@@ -174,6 +175,15 @@ private:
     /// Called before anything that replaces the document source the worker is
     /// reading from. That is a lifetime rule, not politeness.
     void cancelSpectrogramBuild();
+
+    /// Ask the tiled spectrogram for detail covering what is on screen.
+    ///
+    /// Deferred behind a timer, because the view range changes on every step of
+    /// a scroll and a fetch per step would queue hundreds of builds for ranges
+    /// nobody is looking at any more.
+    void requestSpectrogramDetailSoon();
+    void requestSpectrogramDetail();
+    void cancelDetailFetch();
     void refreshViews();
     void refreshActions();
     void updateStatus();
@@ -328,7 +338,17 @@ private:
     std::optional<engine::UndoHistory> history_;
     std::shared_ptr<const engine::DocumentSource> documentSource_;
     std::shared_ptr<const io::PeakPyramid> peaks_;
-    std::shared_ptr<const spectral::SpectrogramPyramid> spectra_;
+    /// The spectrogram, as a tiled cache rather than a whole pyramid.
+    ///
+    /// Non-const because the window is what asks it for detail as the view
+    /// moves; the view is handed a const pointer to the same object and only
+    /// reads. Both are safe concurrently -- see SpectrogramTiles.
+    std::shared_ptr<spectral::SpectrogramTiles> spectra_;
+
+    /// Fetches detail for wherever the view has scrolled to.
+    std::thread detailWorker_;
+    CancellationToken detailCancellation_;
+    QTimer* detailTimer_ = nullptr;
 
     std::thread spectrogramWorker_;
     /// True from the moment a build is requested until its result has been

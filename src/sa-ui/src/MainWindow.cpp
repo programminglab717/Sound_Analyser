@@ -84,20 +84,6 @@ const FadeShapeEntry kFadeShapes[] = {
     return MainWindow::tr("unknown");
 }
 
-/// Ceiling on the spectrogram cache itself.
-///
-/// The build streams now, so the decoded audio is no longer the constraint --
-/// what is left is the pyramid, which is the picture and cannot be smaller
-/// without being a worse picture. At the display settings below it costs about
-/// four bytes per frame of the document, so this allows roughly an hour and a
-/// half of stereo at 48 kHz.
-///
-/// Past that the waveform is still drawn and everything else still works; only
-/// the spectrogram is withheld, and the status bar says so with the number. The
-/// real fix is generating tiles on demand and evicting them, which is tracked
-/// in docs/07-autonomous-queue.md.
-constexpr std::size_t kMaximumPyramidBytes = 1'200'000'000;
-
 /// Display analysis settings. 4096 at 48 kHz is an 11.7 Hz bin and a 21 ms hop.
 /// A log axis stretches the bottom two octaves over half the display, and 2048
 /// gives them four bins to fill it with; this gives them eight, at a time
@@ -174,6 +160,8 @@ MainWindow::MainWindow() {
     connect(spectrogram_, &TimeAxisView::viewRangeChanged, waveform_, &TimeAxisView::setViewRange);
     connect(waveform_, &TimeAxisView::viewRangeChanged, ruler_, &TimeRuler::setViewRange);
     connect(spectrogram_, &TimeAxisView::viewRangeChanged, ruler_, &TimeRuler::setViewRange);
+    connect(spectrogram_, &TimeAxisView::viewRangeChanged, this,
+            [this](SampleIndex, SampleCount) { requestSpectrogramDetailSoon(); });
 
     connect(waveform_, &TimeAxisView::selectionChanged, this, &MainWindow::selectionChanged);
     connect(spectrogram_, &TimeAxisView::selectionChanged, this, &MainWindow::selectionChanged);
@@ -195,6 +183,14 @@ MainWindow::MainWindow() {
     analysisTimer_->setSingleShot(true);
     analysisTimer_->setInterval(250);
     connect(analysisTimer_, &QTimer::timeout, this, &MainWindow::reanalyseNow);
+
+    // Shorter than the analysis timer, because this one is about the picture
+    // sharpening under the cursor rather than about numbers settling, and a
+    // quarter of a second of blur after every scroll step is felt.
+    detailTimer_ = new QTimer{this};
+    detailTimer_->setSingleShot(true);
+    detailTimer_->setInterval(80);
+    connect(detailTimer_, &QTimer::timeout, this, &MainWindow::requestSpectrogramDetail);
 
     // 30 Hz: fast enough that the playhead looks continuous, slow enough that
     // it costs nothing. The position it reads is frames the callback has
@@ -225,6 +221,9 @@ MainWindow::~MainWindow() {
     // back to this object. Joining here is what makes both safe; a detached
     // worker would outlive the thing it reports to.
     cancelSpectrogramBuild();
+    // Same reasoning for the detail fetcher, which also holds a token pointing
+    // into this window and posts back to it.
+    cancelDetailFetch();
     stopPlayback();
 }
 
@@ -796,43 +795,16 @@ void MainWindow::rebuildCaches() {
     // What the cache will cost, before paying for it: one byte per bin per
     // frame at level 0, and the levels above it are a geometric series that
     // roughly doubles that.
-    spectrogramConfig_ = displayConfig();
-    const auto bins = static_cast<std::size_t>(spectrogramConfig_.fftSize / 2 + 1);
-    const auto cost = [&] {
-        const auto frames =
-            static_cast<std::size_t>(document_.duration() / spectrogramConfig_.hopSize + 1);
-        return frames * bins * 2;
-    };
-
-    // A long file gets a coarser hop rather than no spectrogram.
+    // No length limit and no coarsening any more.
     //
-    // Refusing outright was the first answer and it was the wrong one: a
-    // three-hour lecture is exactly the material somebody wants an overview of,
-    // and at that length they are looking at the whole thing at once anyway,
-    // where a 21 ms column and an 85 ms column look the same. Doubling the hop
-    // halves the cache, and stopping at the window length is where the analysis
-    // would start leaving gaps between frames rather than merely spacing them.
-    const int finestHop = spectrogramConfig_.hopSize;
-    while (cost() > kMaximumPyramidBytes &&
-           spectrogramConfig_.hopSize < spectrogramConfig_.fftSize) {
-        spectrogramConfig_.hopSize *= 2;
-    }
-
-    if (cost() > kMaximumPyramidBytes) {
-        spectrogramNote_ = tr("too long for a spectrogram in this build (it would need %1 GB); "
-                              "the waveform and the meters are unaffected")
-                               .arg(static_cast<double>(cost()) / 1e9, 0, 'f', 1);
-        spectrogramConfig_ = displayConfig();
-        return;
-    }
+    // Both existed because the whole pyramid had to be resident: a three-hour
+    // recording needed more than a gigabyte, so the window first refused it and
+    // then, less badly, analysed it at a coarser hop and said so. The tiled
+    // cache holds a decimated overview plus whatever detail the view is
+    // actually over, so the resident cost no longer grows with the file and the
+    // picture is at full resolution wherever the user is looking.
+    spectrogramConfig_ = displayConfig();
     spectrogramResolutionNote_.clear();
-    if (spectrogramConfig_.hopSize != finestHop) {
-        spectrogramResolutionNote_ =
-            tr("spectrogram at %1 ms per column rather than %2, because the file is long")
-                .arg(1000.0 * spectrogramConfig_.hopSize / document_.sampleRate().hz(), 0, 'f', 0)
-                .arg(1000.0 * finestHop / document_.sampleRate().hz(), 0, 'f', 0);
-        spectrogramNote_ = spectrogramResolutionNote_;
-    }
 
     startSpectrogramBuild();
 }
@@ -853,6 +825,9 @@ void MainWindow::startSpectrogramBuild() {
         return;
     }
 
+    // Whatever detail was being fetched belongs to the previous document.
+    cancelDetailFetch();
+
     const std::uint64_t mine = spectrogramGeneration_->load();
     spectrogramBusy_ = true;
     spectrogramNote_ = tr("building the spectrogram…");
@@ -865,34 +840,110 @@ void MainWindow::startSpectrogramBuild() {
         JobMonitor monitor;
         monitor.cancellation = &spectrogramCancellation_;
 
-        auto built = spectral::SpectrogramPyramid::buildStreaming(*source, 0, config, monitor);
+        spectral::SpectrogramTiles::Settings settings;
+        settings.config = config;
+        // Decimate only as much as the length requires. A short file comes out
+        // at decimation zero, where the overview is the ordinary pyramid and
+        // the picture is exactly what it was before the cache existed.
+        constexpr std::size_t kOverviewBudgetBytes = 96u << 20;
+        settings.coarseLevel = spectral::SpectrogramTiles::coarseLevelFor(
+            source->info().frameCount, config, kOverviewBudgetBytes);
+        // Tile boundaries have to land on overview-frame boundaries.
+        settings.tileFrames = std::max<SampleCount>(SampleCount{1} << settings.coarseLevel, 1024);
+        auto made = spectral::SpectrogramTiles::create(source, 0, settings);
+        Result<spectral::SpectrogramTiles> built = std::move(made);
+        if (built) {
+            // Only the overview here. Detail follows the view, and asking for
+            // all of it would be the eager pyramid again under another name.
+            if (const Status status = built.value().buildOverview(monitor); !status) {
+                built = status.error();
+            }
+        }
         if (generation->load() != mine) {
             return;
         }
 
         QMetaObject::invokeMethod(
             this,
-            [this, built = std::make_shared<Result<spectral::SpectrogramPyramid>>(std::move(built)),
+            [this, built = std::make_shared<Result<spectral::SpectrogramTiles>>(std::move(built)),
              mine, generation] {
                 if (generation->load() != mine) {
                     return;
                 }
                 if (*built) {
-                    spectra_ = std::make_shared<const spectral::SpectrogramPyramid>(
-                        std::move(*built).value());
-                    spectrogramNote_ = spectrogramResolutionNote_;
+                    spectra_ =
+                        std::make_shared<spectral::SpectrogramTiles>(std::move(*built).value());
+                    spectrogramNote_.clear();
                 } else {
+                    spectra_.reset();
                     spectrogramNote_ =
                         tr("spectrogram analysis failed: %1")
                             .arg(QString::fromStdString(std::string{built->error().what()}));
                 }
                 spectrogramBusy_ = false;
-                spectrogram_->setPyramid(spectra_, document_.sampleRate(), document_.duration());
+                spectrogram_->setTiles(spectra_, document_.sampleRate(), document_.duration());
                 spectrogram_->setViewRange(waveform_->viewStart(), waveform_->viewLength());
                 spectrogram_->setSelection(selection());
+                requestSpectrogramDetail();
                 updateStatus();
             },
             Qt::QueuedConnection);
+    }};
+}
+
+void MainWindow::cancelDetailFetch() {
+    detailCancellation_.cancel();
+    if (detailWorker_.joinable()) {
+        detailWorker_.join();
+    }
+    detailCancellation_.reset();
+}
+
+void MainWindow::requestSpectrogramDetailSoon() {
+    if (detailTimer_ != nullptr) {
+        detailTimer_->start();
+    }
+}
+
+void MainWindow::requestSpectrogramDetail() {
+    if (detailTimer_ != nullptr) {
+        detailTimer_->stop();
+    }
+    if (!spectra_ || !spectra_->hasOverview()) {
+        return;
+    }
+
+    const SampleIndex start = spectrogram_->viewStart();
+    const SampleCount length = spectrogram_->viewLength();
+    if (length <= 0) {
+        return;
+    }
+    // Nothing to fetch when a column is already wider than the overview's own
+    // hop: detail would be folded away in the drawing.
+    const int columns = std::max(1, spectrogram_->width());
+    if (!spectra_->detailWorthwhile(length / columns)) {
+        return;
+    }
+
+    // Half a screen either side, so a scroll of less than that lands on tiles
+    // that are already there.
+    const SampleCount margin = length / 2;
+    const SampleIndex from = std::max<SampleIndex>(0, start - margin);
+    const SampleIndex to = std::min<SampleIndex>(document_.duration(), start + length + margin);
+
+    // One fetch at a time. Superseding the previous one is the point: the range
+    // it was working on is not the range being looked at any more.
+    cancelDetailFetch();
+
+    detailWorker_ = std::thread{[this, tiles = spectra_, from, to] {
+        JobMonitor monitor;
+        monitor.cancellation = &detailCancellation_;
+        // The result is deliberately ignored. A cancelled fetch is the normal
+        // case, and a failed one leaves the overview on screen, which is what
+        // the display falls back to anyway.
+        (void)tiles->ensureDetail(from, to, monitor);
+
+        QMetaObject::invokeMethod(this, [this] { spectrogram_->update(); }, Qt::QueuedConnection);
     }};
 }
 
@@ -901,9 +952,9 @@ void MainWindow::refreshViews() {
 
     ruler_->setSampleRate(document_.sampleRate());
     waveform_->setPyramid(peaks_, document_.sampleRate());
-    spectrogram_->setPyramid(spectra_, document_.sampleRate(), document_.duration());
+    spectrogram_->setTiles(spectra_, document_.sampleRate(), document_.duration());
 
-    // setPyramid resets the view to the whole document, which is right on open
+    // setTiles resets the view to the whole document, which is right on open
     // and wrong after an edit. Put the range and the selection back.
     const TimeSelection clamped{std::min(previous.start, document_.duration()),
                                 std::min(previous.end, document_.duration())};

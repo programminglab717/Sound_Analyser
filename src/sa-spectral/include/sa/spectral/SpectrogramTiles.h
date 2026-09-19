@@ -61,6 +61,19 @@ public:
     [[nodiscard]] static Result<SpectrogramTiles>
     create(std::shared_ptr<const io::AudioSource> source, int channel, Settings settings);
 
+    /// The least decimation whose overview fits in `budgetBytes`.
+    ///
+    /// Zero for anything short enough that the full pyramid fits, and that case
+    /// matters more than it looks: at decimation zero the overview *is* the
+    /// ordinary pyramid, so a six-second file is drawn exactly as it was before
+    /// any of this existed. Fixing the decimation at a constant instead made
+    /// short files blocky -- the first version drew a six-second probe from
+    /// nine overview frames across nine hundred columns, which the render test
+    /// noticed as the picture losing more than half its distinct colours.
+    [[nodiscard]] static int coarseLevelFor(SampleCount sourceFrames,
+                                            const SpectrogramConfig& config,
+                                            std::size_t budgetBytes) noexcept;
+
     SpectrogramTiles(SpectrogramTiles&&) noexcept;
     SpectrogramTiles& operator=(SpectrogramTiles&&) noexcept;
     ~SpectrogramTiles();

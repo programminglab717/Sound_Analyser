@@ -72,7 +72,7 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | `sa-dsp`: FFT, windows, STFT, biquads, EQ, dynamics, resampling, dither, channel ops | ✅ Done — STFT round trip is a CI gate |
 | `sa-io`: WAV, AIFF, FLAC, MP3, peak pyramid, WAV writer | ✅ Done |
 | `sa-analysis`: LUFS, true peak, statistics, compliance targets, average spectrum, stereo field, octave bands, provenance | ✅ Done — see the caveat below |
-| `sa-spectral`: spectrogram pyramid, attenuate and heal | ✅ Done |
+| `sa-spectral`: spectrogram pyramid, tiled cache, attenuate and heal | ✅ Done — no length limit; a decimated overview plus detail tiles under an LRU budget |
 | `sa-engine`: non-destructive document, edits, undo, sessions | ✅ Done |
 | `sa-device`: WASAPI, ALSA, null backend | ✅ Done — never run on real hardware |
 | `sa-transport`: playback with a playhead | ✅ Done |

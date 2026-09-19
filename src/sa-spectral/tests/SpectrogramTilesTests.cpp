@@ -429,3 +429,72 @@ TEST_CASE("Rendering while a worker builds and evicts is safe", "[tiles][threads
     tiles.value().render(0, buffer.frames(), edges.data(), kRows, kColumns, out.data());
     REQUIRE(std::any_of(out.begin(), out.end(), [](std::uint8_t v) { return v > 0; }));
 }
+
+TEST_CASE("Decimation is chosen from the length, and is none when none is needed",
+          "[spectral][tiles]") {
+    SpectrogramConfig config; // 2048-point, 512 hop: 1025 bins.
+    constexpr std::size_t kBudget = 96u << 20;
+
+    // A six-second file is about a megabyte of pyramid, so it needs no
+    // decimating at all and is drawn exactly as the ordinary pyramid draws it.
+    REQUIRE(SpectrogramTiles::coarseLevelFor(48000 * 6, config, kBudget) == 0);
+    // A minute is 11.5 MB and still fits.
+    REQUIRE(SpectrogramTiles::coarseLevelFor(48000 * 60, config, kBudget) == 0);
+    // Ten minutes is 115 MB and does not, so it gets one level. I asserted zero
+    // here first without doing the arithmetic; the code was right and the
+    // assertion was wrong. One level means the zoomed-all-the-way-out picture
+    // is 43 ms a column instead of 21, and detail fills in wherever the view
+    // actually is, which is the trade this whole class exists to make.
+    REQUIRE(SpectrogramTiles::coarseLevelFor(48000 * 600, config, kBudget) == 1);
+
+    // A three-hour recording does not, and gets decimated until it does.
+    const int longFile = SpectrogramTiles::coarseLevelFor(48000LL * 3600 * 3, config, kBudget);
+    REQUIRE(longFile > 0);
+
+    // Whatever it chose has to actually fit, which is the property rather than
+    // the number: the arithmetic here is the same arithmetic the function does,
+    // so this checks the answer against the budget instead of against itself.
+    const auto bins = static_cast<std::size_t>(config.fftSize / 2 + 1);
+    const auto frames = static_cast<std::size_t>(48000LL * 3600 * 3 / config.hopSize + 1);
+    REQUIRE((frames >> longFile) * bins * 2 <= kBudget);
+    // And one level less would not fit, or it decimated further than it needed.
+    REQUIRE((frames >> (longFile - 1)) * bins * 2 > kBudget);
+}
+
+TEST_CASE("Decimation never decreases as a file gets longer", "[spectral][tiles]") {
+    SpectrogramConfig config;
+    constexpr std::size_t kBudget = 8u << 20; // Small, so the steps are visible.
+    int previous = -1;
+    for (const SampleCount seconds : {1, 10, 60, 600, 3600, 3600 * 4}) {
+        const int level = SpectrogramTiles::coarseLevelFor(48000 * seconds, config, kBudget);
+        REQUIRE(level >= previous);
+        previous = level;
+    }
+    REQUIRE(previous > 0);
+}
+
+TEST_CASE("At decimation zero the overview is the ordinary pyramid", "[spectral][tiles]") {
+    // What makes a short file identical to how it was drawn before the cache
+    // existed, rather than merely similar.
+    const AudioBuffer buffer = material(40000);
+    const auto eager = SpectrogramPyramid::build(buffer.constView(), 0);
+    REQUIRE(eager);
+
+    SpectrogramTiles::Settings settings;
+    settings.coarseLevel = 0;
+    settings.tileFrames = 256;
+    auto tiles = SpectrogramTiles::create(sourceOf(buffer), 0, settings);
+    REQUIRE(tiles);
+    REQUIRE(tiles.value().buildOverview());
+
+    const SpectrogramPyramid& overview = tiles.value().overview();
+    REQUIRE(overview.frameCountAt(0) == eager.value().frameCountAt(0));
+    REQUIRE(overview.hopAt(0) == eager.value().hopAt(0));
+    for (SampleCount frame = 0; frame < overview.frameCountAt(0); ++frame) {
+        const std::uint8_t* got = overview.frameData(0, frame);
+        const std::uint8_t* want = eager.value().frameData(0, frame);
+        REQUIRE(got != nullptr);
+        REQUIRE(want != nullptr);
+        REQUIRE(std::equal(got, got + tiles.value().binCount(), want));
+    }
+}

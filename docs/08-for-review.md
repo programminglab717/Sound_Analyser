@@ -94,12 +94,20 @@ that becomes exact.
 
 Not blocked, but a person's judgement would be better than mine.
 
-- **How a long recording feels.** A file past about ninety minutes used to get
-  no spectrogram at all -- it would have needed more than a gigabyte of cache.
-  It now gets a coarser one instead, at 42 or 85 ms per column rather than 21,
-  and says so. Whether that reads as a sensible trade or as a blurry picture is
-  a judgement I cannot make from here. The real answer is building the picture
-  in tiles as you scroll, which is a day of work and is on the list.
+- **How a long recording feels.** This changed, and the change is the one
+  worth pushing on. A file past about ninety minutes used to get no
+  spectrogram at all, then a coarser one; it now gets a decimated overview
+  plus full-resolution tiles wherever you are actually looking, fetched as
+  you scroll and thrown away again when the memory is needed elsewhere. There
+  is no length limit any more.
+
+  What I cannot judge from here is how the *seam* reads. Scroll somewhere new
+  and for a moment that part of the picture is the coarse overview, sharpening
+  when the tiles arrive. On this machine that is a fraction of a second on a
+  short file; on a three-hour recording off a slow disk it might be a second,
+  and it might look like the display is broken rather than busy. If it does,
+  the fix is a visible "sharpening" indication rather than a faster fetch, and
+  I would rather hear that it reads badly than guess at it.
 
 - **Whether the de-hummer is cautious enough, or too cautious.** It only
   removes a partial where a steady sinusoid clearly dominates, and leaves the
