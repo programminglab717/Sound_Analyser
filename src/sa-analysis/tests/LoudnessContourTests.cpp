@@ -121,6 +121,12 @@ TEST_CASE("A steady tone gives a flat contour at its own level", "[analysis][con
 
     const LoudnessContour contour = contourOrFail(buffer, rate);
 
+    // And the contour's own integrated figure is LoudnessMeter's, on this same
+    // calibration signal, to the last bit -- see the test below for why that is
+    // an equality rather than a tolerance.
+    CHECK(contour.integratedLufs == measureOrFail(buffer, rate).integratedLufs);
+    CHECK(contour.integratedLufs == Approx(-23.0).margin(0.1));
+
     int momentaryPoints = 0;
     int shortTermPoints = 0;
     for (const LoudnessPoint& point : contour.points) {
