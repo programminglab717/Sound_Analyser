@@ -9,14 +9,16 @@ sa-analysis has its own tests for that -- but "did the window draw what the
 library found, in the right place, and did it keep quiet about what the library
 refused".
 
-Four claims, none of which the other drivers can make:
+Five claims, none of which the other drivers can make:
 
   1. The beat grid over the waveform falls on the transients. A tempo is the
      one number in this product a reader can check by eye, and it is checked
      twice here: the drawn columns are compared against the beat times the
      window reports, and those beat times are compared against the clicks that
      are actually in the file. Either alone would pass on a grid that was
-     consistently wrong.
+     consistently wrong. The grid is drawn dashed where the tracker barely
+     found the tempo at all, and there is a probe played badly enough to get
+     that answer.
   2. The pitch contour is drawn at the height its frequency maps to on the
      panel's own axis, and it *breaks* across the silence rather than ruling a
      line through it.
@@ -26,6 +28,11 @@ Four claims, none of which the other drivers can make:
      number. This is checked as a rule rather than a set of examples: across
      every probe, a key is named exactly when the strength and contrast allow
      it, and a room figure is a number exactly when its flag is true.
+  5. An analysis that stopped short of the file admits it, in the panel's words
+     and with a line across the waveform where it stopped. That needs a file
+     longer than the two minutes the window reads, so it is the one probe here
+     that costs real time; it runs at 8 kHz, because the bound is two minutes
+     of time and nothing under test depends on the rate.
 
 No third-party imports: the PNG decoder below is forty lines and Pillow is not
 worth adding to a CI image for it.
@@ -95,6 +102,29 @@ KEY_REFUSED_BELOW = 0.20
 KEY_FIRM_AT = 0.50
 TUNING_FAR_CENTS = 25.0
 TEMPO_DOUBTFUL_BELOW = 0.35
+# TempoTrack's own floor: below this there is no tempo at all, so the band a
+# doubtful one has to land in runs from here up to the threshold above.
+TEMPO_VALID_AT = 0.15
+
+# The unsteady click track. The same 120 BPM idea, played badly: every click is
+# up to 60 ms from where it should be and three in ten are missing. That is
+# still a tempo -- the onset envelope repeats -- and it repeats weakly enough
+# that the panel is meant to hedge, which no other probe here produces.
+UNSTEADY_JITTER = 0.060
+UNSTEADY_DROP = 0.30
+UNSTEADY_SEED = 6
+
+# The file that is longer than the window will read. AnalysisPanel bounds one
+# run at two minutes, so a longer file is the only way to reach the case where
+# the analysis stops short of what was asked about -- and the picture then has
+# to say where it stopped rather than looking like an analysis that failed.
+#
+# At 8 kHz rather than 48, which is the whole reason this probe is affordable:
+# the bound is two minutes of *time*, so a sixth of the sample rate is a sixth
+# of the work, and the answer under test does not depend on the rate.
+BOUND_RATE = 8000
+BOUND_SECONDS = 130.0
+BOUND_LIMIT_SECONDS = 120.0  # AnalysisPanel::kMostSeconds
 
 
 # ----------------------------------------------------------------------------
@@ -102,14 +132,14 @@ TEMPO_DOUBTFUL_BELOW = 0.35
 # ----------------------------------------------------------------------------
 
 
-def write_wav(path: Path, samples: list[float]) -> None:
+def write_wav(path: Path, samples: list[float], rate: int = SAMPLE_RATE) -> None:
     data = bytearray()
     for value in samples:
         data += struct.pack("<h", max(-32767, min(32767, int(value * 32767))))
     with wave.open(str(path), "wb") as handle:
         handle.setnchannels(1)
         handle.setsampwidth(2)
-        handle.setframerate(SAMPLE_RATE)
+        handle.setframerate(rate)
         handle.writeframes(bytes(data))
 
 
@@ -130,6 +160,55 @@ def write_clicks(path: Path) -> None:
             continue
         samples.append(0.8 * math.exp(-phase * 90.0) * math.sin(2.0 * math.pi * 1000.0 * t))
     write_wav(path, samples)
+
+
+def click_at(samples: list[float], at: float, amplitude: float, rate: int) -> None:
+    """Lay one decaying tone burst into `samples`, starting at `at` seconds."""
+    start = int(at * rate)
+    for i in range(int(0.04 * rate)):
+        if start + i >= len(samples) or start + i < 0:
+            continue
+        phase = i / rate
+        samples[start + i] += (
+            amplitude * math.exp(-phase * 90.0) * math.sin(2.0 * math.pi * 1000.0 * phase)
+        )
+
+
+def write_unsteady_clicks(path: Path) -> None:
+    """A click track played badly: jittered, patchy, and still a tempo.
+
+    The case nothing else here reaches. Every probe above is either perfectly
+    rhythmic, which the tracker is sure of, or not rhythmic at all, which it
+    refuses -- and the panel's third answer, a tempo it will name but not
+    vouch for, was drawn by code no test ran. The jitter and the dropped
+    clicks are what put the confidence between TempoTrack's floor and the
+    threshold the window hedges below; the seed is fixed so that the probe
+    either keeps landing there or says it has stopped.
+    """
+    rng = random.Random(UNSTEADY_SEED)
+    samples = [0.0] * int(SAMPLE_RATE * CLICK_SECONDS)
+    at = 0.0
+    while at < CLICK_SECONDS:
+        when = at + rng.uniform(-UNSTEADY_JITTER, UNSTEADY_JITTER)
+        at += CLICK_PERIOD
+        if rng.random() < UNSTEADY_DROP:
+            continue
+        click_at(samples, when, 0.8 * rng.uniform(0.3, 1.0), SAMPLE_RATE)
+    write_wav(path, samples)
+
+
+def write_long_clicks(path: Path) -> None:
+    """Two minutes and ten seconds of steady clicks, at 8 kHz.
+
+    Longer than the window will analyse in one go, which is the point: what is
+    being checked is that the picture admits where it stopped.
+    """
+    samples = [0.0] * int(BOUND_RATE * BOUND_SECONDS)
+    at = 0.0
+    while at < BOUND_SECONDS:
+        click_at(samples, at, 0.6, BOUND_RATE)
+        at += CLICK_PERIOD
+    write_wav(path, samples, BOUND_RATE)
 
 
 def write_tone(path: Path, hz: float, gap: bool) -> None:
@@ -304,14 +383,29 @@ def away_from_zero(value: float) -> int:
     return int(math.floor(value + 0.5)) if value >= 0 else -int(math.floor(-value + 0.5))
 
 
-def time_column(seconds: float, total_frames: int, width: int) -> int:
+def sample_column(sample: int, total_frames: int, width: int) -> int:
+    """The column a sample falls in on a view showing the whole document."""
+    return away_from_zero(sample / total_frames * width)
+
+
+def time_column(seconds: float, total_frames: int, width: int, rate: int = SAMPLE_RATE) -> int:
     """The column an instant falls in on a view showing the whole document.
 
     Through the sample it belongs to first, which is what the window does: it
     rounds a time to the nearest sample and a sample to the nearest column.
     """
-    sample = away_from_zero(seconds * SAMPLE_RATE)
-    return away_from_zero(sample / total_frames * width)
+    return sample_column(away_from_zero(seconds * rate), total_frames, width)
+
+
+def is_boundary_colour(pixel: tuple[int, int, int]) -> bool:
+    """Whether a pixel belongs to the line marking where the analysis stopped.
+
+    A flat grey that nothing else on the waveform uses: the audio is blue, the
+    grid magenta, the contour green and the centre line far darker. Exact
+    rather than a range, because the line is drawn without antialiasing and the
+    only near misses are the edges of the caption beside it.
+    """
+    return pixel == (0x6D, 0x73, 0x82)
 
 
 def pitch_row(hz: float, plot_height: int) -> int:
@@ -484,12 +578,16 @@ def main() -> int:  # noqa: C901 - one long script of checks, in the order they 
         shots.mkdir(parents=True, exist_ok=True)
 
         clicks = workspace / "clicks.wav"
+        unsteady = workspace / "unsteady.wav"
+        long_clicks = workspace / "long.wav"
         tone = workspace / "tone.wav"
         detuned = workspace / "detuned.wav"
         noise = workspace / "noise.wav"
         quiet_room = workspace / "room-quiet.wav"
         noisy_room = workspace / "room-noisy.wav"
         write_clicks(clicks)
+        write_unsteady_clicks(unsteady)
+        write_long_clicks(long_clicks)
         write_tone(tone, TONE_HZ, gap=True)
         write_tone(detuned, DETUNED_HZ, gap=False)
         write_noise(noise)
@@ -497,6 +595,7 @@ def main() -> int:  # noqa: C901 - one long script of checks, in the order they 
         write_impulse(noisy_room, IR_NOISY_FLOOR)
 
         click_frames = int(SAMPLE_RATE * CLICK_SECONDS)
+        unsteady_frames = click_frames
         tone_frames = int(SAMPLE_RATE * TONE_SECONDS)
 
         # ------------------------------------------------------------------
@@ -596,6 +695,84 @@ def main() -> int:  # noqa: C901 - one long script of checks, in the order they 
             print(f"FAIL: only {len(full)} beats were drawn over {CLICK_SECONDS:.0f} s at "
                   f"{bpm:.1f} BPM")
             return 1
+
+        # ------------------------------------------------------------------
+        # A tempo the window will name but not vouch for is drawn dashed.
+        #
+        # The third answer, and the one nothing here used to produce. The probe
+        # above is perfectly rhythmic and the noise below is not rhythmic at
+        # all, so between them they exercised the solid grid and the absent one
+        # and left the hedged one to be drawn by code no test ran.
+        # ------------------------------------------------------------------
+        unsteady_shot = shots / "unsteady-grid.png"
+        done = run(arguments.binary, unsteady, "beatgrid",
+                   screenshot_waveform=unsteady_shot, print_musical=None)
+        if done.returncode != 0 or not unsteady_shot.exists():
+            print(f"FAIL: rendering the unsteady grid exited {done.returncode} -- {done.stderr}")
+            return 1
+        unsteady_values = reported(done.stdout)
+        check_key_rule(unsteady_values, "the unsteady click track")
+        check_tempo_rule(unsteady_values, "the unsteady click track")
+
+        unsteady_confidence = number(unsteady_values, "tempo_confidence")
+        if unsteady_values["tempo_valid"] != "1":
+            print(
+                f"FAIL: the unsteady click track was refused a tempo at confidence "
+                f"{unsteady_confidence:.2f}, so this probe no longer reaches the drawing it was "
+                f"written for"
+            )
+            return 1
+        if not TEMPO_VALID_AT <= unsteady_confidence < TEMPO_DOUBTFUL_BELOW:
+            print(
+                f"FAIL: the unsteady click track came out at confidence "
+                f"{unsteady_confidence:.2f}, which is not between {TEMPO_VALID_AT} and "
+                f"{TEMPO_DOUBTFUL_BELOW}, so this probe no longer tests a doubtful tempo"
+            )
+            return 1
+        if int(unsteady_values["tempo_certainty"]) != DOUBTFUL:
+            print(
+                f"FAIL: a tempo at confidence {unsteady_confidence:.2f} was shown as certainty "
+                f"{unsteady_values['tempo_certainty']}"
+            )
+            return 1
+
+        unsteady_width, unsteady_height, unsteady_rows = read_png(unsteady_shot)
+        unsteady_drawn = marked_columns(unsteady_rows, unsteady_width, unsteady_height,
+                                        is_beat_colour)
+        # A dash is still a line down the plot, so the column is found the same
+        # way; what has changed is how much of it is ink. Qt's dash leaves a
+        # gap in every third of the pattern, so two thirds is what a dashed
+        # beat line covers and the whole height is what a solid one covers.
+        dashed = sorted(x for x, ys in unsteady_drawn.items()
+                        if len(ys) > unsteady_height // 3)
+        unsteady_first = number(unsteady_values, "tempo_first_beat")
+        unsteady_period = 60.0 / number(unsteady_values, "tempo_bpm")
+        unsteady_expected = [
+            time_column(unsteady_first + n * unsteady_period, unsteady_frames, unsteady_width)
+            for n in range(int(unsteady_values["tempo_beats"]))
+        ]
+        unsteady_expected = [x for x in unsteady_expected if 0 <= x < unsteady_width]
+        if dashed != unsteady_expected:
+            print(
+                f"FAIL: the doubtful grid was drawn in columns {dashed[:8]}... where the times "
+                f"the window reports put it in {unsteady_expected[:8]}..."
+            )
+            return 1
+        if len(dashed) < 8:
+            print(f"FAIL: only {len(dashed)} beats were drawn over {CLICK_SECONDS:.0f} s")
+            return 1
+        solid_enough = [x for x in dashed if len(unsteady_drawn[x]) > unsteady_height * 0.8]
+        if solid_enough:
+            print(
+                f"FAIL: a tempo at confidence {unsteady_confidence:.2f} is below "
+                f"{TEMPO_DOUBTFUL_BELOW} and should be drawn dashed, but "
+                f"{len(solid_enough)} of its {len(dashed)} beat lines run the whole "
+                f"{unsteady_height} rows of the plot"
+            )
+            return 1
+        # And the difference is the pen and not the picture: the same check run
+        # over the confident grid above found every line full height.
+        dashed_ink = max(len(unsteady_drawn[x]) for x in dashed)
 
         # ------------------------------------------------------------------
         # A refused tempo leaves the waveform bare.
@@ -879,7 +1056,87 @@ def main() -> int:  # noqa: C901 - one long script of checks, in the order they 
             )
             return 1
 
-        # The sections nobody asked for are not on screen at all, rather than
+        # ------------------------------------------------------------------
+        # An analysis that stopped short says where, in words and in the
+        # picture.
+        #
+        # AnalysisPanel reads two minutes at most, so a longer file is the only
+        # way to reach this at all -- which is why it had been confirmed by
+        # hand and by nothing else. The file is at 8 kHz so that two minutes of
+        # it is a sixth of the work; what is under test is where the line is
+        # drawn, and that does not depend on the sample rate.
+        # ------------------------------------------------------------------
+        bound_shot = shots / "bounded-analysis.png"
+        done = run(arguments.binary, long_clicks, "beatgrid",
+                   screenshot_waveform=bound_shot, print_musical=None)
+        if done.returncode != 0 or not bound_shot.exists():
+            print(f"FAIL: analysing the long file exited {done.returncode} -- {done.stderr}")
+            return 1
+        bounded = reported(done.stdout)
+        check_key_rule(bounded, "the long click track")
+        check_tempo_rule(bounded, "the long click track")
+
+        analysed = int(bounded["analysed_frames"])
+        requested = int(bounded["requested_frames"])
+        if analysed >= requested:
+            print(
+                f"FAIL: the window read all {requested} frames of a {BOUND_SECONDS:.0f} s file, "
+                f"so this probe no longer reaches the bounded case it was written for"
+            )
+            return 1
+        if analysed != int(BOUND_LIMIT_SECONDS * BOUND_RATE):
+            print(
+                f"FAIL: the window read {analysed} frames, where its own two-minute bound at "
+                f"{BOUND_RATE} Hz is {int(BOUND_LIMIT_SECONDS * BOUND_RATE)}"
+            )
+            return 1
+        # The words first: the panel has to say what it did not look at.
+        if bounded["coverage_note"] != "first 2:00 of 2:10":
+            print(
+                f"FAIL: a two-minute read of a 2:10 file was described as "
+                f"'{bounded['coverage_note']}'"
+            )
+            return 1
+        if not bounded["shown_coverage"].startswith("read the "):
+            print(f"FAIL: the coverage row reads '{bounded['shown_coverage']}'")
+            return 1
+        if bounded["visible_coverage"] != "1":
+            print("FAIL: the window read less than it was asked about and hid the row saying so")
+            return 1
+
+        # Then the picture. A grid that simply stopped two thirds of the way
+        # along reads as an analysis that failed; the dotted line is what makes
+        # it read as one that was bounded.
+        bound_width, bound_height, bound_rows = read_png(bound_shot)
+        boundary = marked_columns(bound_rows, bound_width, bound_height, is_boundary_colour)
+        # The caption sits beside the line in the same colour, so a column is
+        # the line only if the colour runs down a real part of the plot. Qt's
+        # dot pattern is ink in one third of it.
+        boundary_columns = sorted(x for x, ys in boundary.items()
+                                  if len(ys) > bound_height // 5)
+        want_boundary = sample_column(analysed, requested, bound_width)
+        if boundary_columns != [want_boundary]:
+            print(
+                f"FAIL: the analysis stopped at frame {analysed} of {requested}, which is column "
+                f"{want_boundary} of {bound_width}, but the boundary was drawn in "
+                f"{boundary_columns}"
+            )
+            return 1
+        boundary_ink = len(boundary[want_boundary])
+        if boundary_ink >= bound_height // 2:
+            print(
+                f"FAIL: the boundary is meant to be dotted, and it covers {boundary_ink} of "
+                f"{bound_height} rows"
+            )
+            return 1
+        # And a file the window read whole draws no such line, which is what
+        # makes the one above mean "bounded" rather than "always drawn".
+        stray = marked_columns(rows, width, height, is_boundary_colour)
+        if any(len(ys) > height // 5 for ys in stray.values()):
+            print("FAIL: a file the window read whole was given a boundary line anyway")
+            return 1
+
+                # The sections nobody asked for are not on screen at all, rather than
         # eight rows of dashes.
         if contour["visible_t30"] != "0" or beats["visible_pitch"] != "0":
             print("FAIL: a section nobody asked for is on screen")
@@ -894,7 +1151,11 @@ def main() -> int:  # noqa: C901 - one long script of checks, in the order they 
             f"{levels[-4] - levels[4]:.1f} dB; T20 {full_room['shown_t20']} and T30 "
             f"{full_room['shown_t30']} on a {IR_T60:.1f} s decay, T30 '{short_room['shown_t30']}' "
             f"on {number(short_room, 'room_usable_range_db'):.0f} dB of range; "
-            f"key refused on noise, doubted at {cents:+.0f} cents"
+            f"key refused on noise, doubted at {cents:+.0f} cents; "
+            f"{len(dashed)} beat lines dashed to {dashed_ink} of {unsteady_height} rows at "
+            f"confidence {unsteady_confidence:.2f}; the bounded analysis drawn as "
+            f"{boundary_ink} of {bound_height} rows in column {want_boundary}, over "
+            f"'{bounded['coverage_note']}'"
         )
         return 0
 

@@ -78,6 +78,7 @@ if(SA_BUILD_TESTS)
     # is not: Qt's headers do not survive this project's warning set.
     add_executable(sa-ui-widget-tests
         tests/widget/PanelHandoffTests.cpp
+        tests/widget/WaveformOverlayTests.cpp
         tests/widget/WidgetTestMain.cpp
     )
     target_link_libraries(sa-ui-widget-tests PRIVATE sa-ui Catch2::Catch2)
