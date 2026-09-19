@@ -9,6 +9,7 @@ add_library(sa-dsp STATIC
     src/Deess.cpp
     src/Dehum.cpp
     src/Fft.cpp
+    src/FilterBank.cpp
     src/LinearPrediction.cpp
     src/ParametricEq.cpp
     src/ExactTruePeak.cpp
@@ -38,6 +39,7 @@ if(SA_BUILD_TESTS)
         tests/DeessTests.cpp
         tests/DehumTests.cpp
         tests/FftTests.cpp
+        tests/FilterBankTests.cpp
         tests/LinearPredictionTests.cpp
         tests/ParametricEqTests.cpp
         tests/ExactTruePeakTests.cpp
