@@ -102,6 +102,10 @@ private:
     /// event a worker posts.
     void deliver(const analysis::ProgrammeAnalysis& result, const QString& what, bool ok);
 
+    /// Blank every figure without touching the worker or the generation. What
+    /// clear() does once it has stopped anything in flight.
+    void resetLabels();
+
     /// What a worker shares with the panel that started it.
     ///
     /// Two different questions live here, and conflating them was a

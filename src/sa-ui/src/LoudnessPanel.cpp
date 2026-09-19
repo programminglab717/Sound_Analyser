@@ -116,7 +116,7 @@ LoudnessPanel::LoudnessPanel(QWidget* parent)
     : QWidget(parent), session_(std::make_shared<Session>()) {
     session_->panel = this;
     buildLayout();
-    clear();
+    resetLabels();
 }
 
 void LoudnessPanel::stopWorker() {
@@ -246,6 +246,19 @@ void LoudnessPanel::buildLayout() {
 }
 
 void LoudnessPanel::clear() {
+    // Bump the generation and stop the worker, not merely blank the labels. A
+    // measurement in flight passes its generation check otherwise and delivers
+    // into the emptied panel a moment later, so closing a document while its
+    // meters were still running left figures on screen for a document that is
+    // no longer open. The three callers below that already hold the worker
+    // still -- the constructor, a finished delivery, and measure() past its own
+    // stopWorker -- want only the labels, and call resetLabels directly.
+    session_->generation.fetch_add(1);
+    stopWorker();
+    resetLabels();
+}
+
+void LoudnessPanel::resetLabels() {
     hasLatest_ = false;
     busy_ = false;
     heading_->setText(tr("nothing loaded"));
@@ -263,7 +276,7 @@ void LoudnessPanel::deliver(const analysis::ProgrammeAnalysis& result, const QSt
     if (ok) {
         show(result, what);
     } else {
-        clear();
+        resetLabels();
         heading_->setText(tr("could not measure %1").arg(what));
     }
     emit measurementFinished();
@@ -283,7 +296,7 @@ void LoudnessPanel::measure(std::shared_ptr<const io::AudioSource> source, Sampl
     stopWorker();
 
     if (!source || length <= 0) {
-        clear();
+        resetLabels();
         emit measurementFinished();
         return;
     }

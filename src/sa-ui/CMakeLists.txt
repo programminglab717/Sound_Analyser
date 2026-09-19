@@ -13,6 +13,9 @@ set(CMAKE_AUTOMOC ON)
 # The Q_OBJECT headers have to be listed as sources: AUTOMOC only finds a header
 # by itself when it sits next to its .cpp, and ours live under include/.
 add_library(sa-ui STATIC
+    src/AnalysisOverlay.cpp
+    src/AnalysisPanel.cpp
+    src/AnalysisReadout.cpp
     src/Colourmap.cpp
     src/EqCurve.cpp
     src/EqCurveView.cpp
@@ -25,6 +28,7 @@ add_library(sa-ui STATIC
     src/TimeRuler.cpp
     src/ViewGeometry.cpp
     src/WaveformView.cpp
+    include/sa/ui/AnalysisPanel.h
     include/sa/ui/EqCurveView.h
     include/sa/ui/FieldDialog.h
     include/sa/ui/LoudnessPanel.h
@@ -54,7 +58,10 @@ target_link_libraries(auscultate PRIVATE sa-ui)
 # that they do not need one.
 if(SA_BUILD_TESTS)
     add_executable(sa-ui-tests
+        tests/AnalysisOverlayTests.cpp
+        tests/AnalysisReadoutTests.cpp
         tests/EqCurveTests.cpp
+        tests/TimePlotTests.cpp
     )
     target_link_libraries(sa-ui-tests PRIVATE sa-ui sa-warnings Catch2::Catch2WithMain)
     catch_discover_tests(sa-ui-tests)

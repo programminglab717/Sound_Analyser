@@ -1,3 +1,4 @@
+#include <sa/ui/AnalysisOverlay.h>
 #include <sa/ui/SpectrumView.h>
 #include <sa/ui/ViewGeometry.h>
 
@@ -26,6 +27,11 @@ const QColor kCursorLine{220, 220, 230, 120};
 /// is context, and a dashed neutral line reads as "what it was" without
 /// fighting the thing being looked at.
 const QColor kReferenceLine{206, 210, 222, 190};
+/// A green that nothing else on this panel uses. The curves are blue and
+/// amber, the reference neutral and the EQ violet; bands answer a different
+/// question from all four and have to be told apart from them at a glance.
+const QColor kBandCap{63, 208, 127};
+const QColor kBandFill{63, 208, 127, 44};
 
 } // namespace
 
@@ -127,6 +133,11 @@ bool SpectrumView::captureReference() {
 void SpectrumView::clearReference() {
     reference_.clear();
     referenceFftSize_ = 0;
+    update();
+}
+
+void SpectrumView::setOctaveBands(std::vector<analysis::Band> bands) {
+    octaveBands_ = std::move(bands);
     update();
 }
 
@@ -233,6 +244,17 @@ void SpectrumView::paintEvent(QPaintEvent* /*event*/) {
         painter.drawPath(line);
     }
     painter.setRenderHint(QPainter::Antialiasing, false);
+
+    // Over the curves rather than behind them, and faint enough to see through.
+    // A band's level is a statement about the curve under it, so the two have
+    // to be readable together; bars behind the fill would be invisible exactly
+    // where the material is.
+    for (const BandBar& bar : bandBars(octaveBands_, this->plot())) {
+        painter.fillRect(
+            QRect{bar.left, bar.top, bar.right - bar.left + 1, plot.bottom() - bar.top}, kBandFill);
+        painter.setPen(kBandCap);
+        painter.drawLine(bar.left, bar.top, bar.right, bar.top);
+    }
 
     if (cursorX_ >= plot.left() && cursorX_ <= plot.right()) {
         painter.setPen(kCursorLine);

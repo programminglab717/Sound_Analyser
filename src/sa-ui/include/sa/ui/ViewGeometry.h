@@ -31,6 +31,42 @@ struct TimeSelection {
     }
 };
 
+/// The plotting area of a time-aligned view, and the arithmetic mapping it to
+/// the document's timeline.
+///
+/// The same idea as SpectrumPlot below, and there for the same reason. Three
+/// things are drawn on this axis now -- the waveform, the beat grid over it
+/// and the pitch contour over that -- and a beat drawn a pixel away from the
+/// transient it was fitted to is a beat nobody can judge by eye, which is the
+/// only thing a drawn beat grid is for. One copy of the mapping is what makes
+/// them agree, and a plain value is what lets it be checked without a window.
+///
+/// `width` counts columns, so the rightmost is `left + width - 1`. It excludes
+/// the gutter, exactly as TimeAxisView's plot does.
+struct TimePlot {
+    int left = kGutterWidth;
+    int width = 0;
+    SampleIndex viewStart = 0;
+    SampleCount viewLength = 0;
+
+    /// Column a sample falls in. Samples outside the visible range are *not*
+    /// clamped: something drawing a contour needs to know that a point is off
+    /// to the left rather than be handed the left edge, which would ruin a
+    /// line into the plot from nowhere.
+    [[nodiscard]] int xAtSample(SampleIndex sample) const noexcept;
+
+    /// Sample at a column, clamped to the visible range. Inverse of xAtSample
+    /// only to within the samples-per-pixel the view is showing.
+    [[nodiscard]] SampleIndex sampleAtX(int x) const noexcept;
+
+    /// Column an instant falls in. Rounded to the nearest sample first and to
+    /// the nearest column after that, so a time and the sample index of the
+    /// same time land in the same place.
+    [[nodiscard]] int xAtSeconds(double seconds, SampleRate rate) const noexcept;
+
+    [[nodiscard]] bool holds(int x) const noexcept { return x >= left && x < left + width; }
+};
+
 /// How the vertical axis of a spectrogram maps to frequency.
 enum class FrequencyScale {
     Logarithmic, ///< The default: matches how hearing works, and how music is built.
