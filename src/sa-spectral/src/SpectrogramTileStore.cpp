@@ -618,7 +618,25 @@ Result<StoredTile> SpectrogramTileStore::read(const ContentKey& key, std::uint64
         return Error{ErrorCode::NotFound, "no longer in the store"};
     }
 
+    // Declared before `discard` so that it can close the handle, and opened
+    // below once the size is known to be worth opening for.
+    std::ifstream stream;
+
     const auto discard = [&]() {
+        // Close before removing, and the order is load-bearing rather than
+        // tidy. POSIX unlinks a file with an open handle happily -- the name
+        // goes at once and the inode follows when the last handle shuts -- so
+        // on Linux this reads the same either way. Windows refuses: DeleteFile
+        // returns a sharing violation while any handle is open without
+        // FILE_SHARE_DELETE, which is not what an ifstream asks for. Removing
+        // first would therefore fail silently here, leave the useless entry on
+        // disk, and have the store pay for its bytes again on the next open.
+        //
+        // That difference is invisible to every test that runs on Linux, and
+        // it was CI on Windows that found it.
+        if (stream.is_open()) {
+            stream.close();
+        }
         std::error_code ignored;
         std::filesystem::remove(path, ignored);
         const auto gone = entries_.find(name);
@@ -633,7 +651,7 @@ Result<StoredTile> SpectrogramTileStore::read(const ContentKey& key, std::uint64
         return Error{ErrorCode::CorruptData, "stored entry is shorter than its header"};
     }
 
-    std::ifstream stream{path, std::ios::binary};
+    stream.open(path, std::ios::binary);
     if (!stream) {
         return Error{ErrorCode::NotFound, "could not open the stored entry"};
     }
