@@ -53,6 +53,25 @@ Then open something real — a recording of your own, not a test tone — and tr
 | Deliver | File ▸ Export format picks 16-bit, 24-bit or float, and File ▸ Dither says what to do about the bits a 16-bit export drops. Triangular is on by default and is the right answer almost always. A 24-bit or float export is never dithered, so a file exported untouched comes back byte for byte |
 | Save | File ▸ Save session, reopen it, check nothing was lost |
 
+None of the analysis added most recently has a place in the window yet, so it
+is all `sa-cli` for now. That gap is the biggest one left in the interface and
+it is next on my list. In the meantime, from the folder the package unzipped
+into:
+
+```
+sa-cli key      "track.wav"      what key it is in, and how sure
+sa-cli tempo    "track.wav"      the tempo, and --json for every beat time
+sa-cli pitch-of "vocal.wav"      the fundamental over time; --csv for the contour
+sa-cli null     "before.wav" "after.wav"    what a processing chain actually changed
+sa-cli room     "impulse.wav"    EDT, T20, T30, C50, C80, D50 from an impulse response
+sa-cli sweep    "sweep.wav"      a sweep to play into a room, then:
+sa-cli deconvolve "recording.wav" "impulse.wav" --seconds 5
+```
+
+`null` is the one I would try first, because it is the one with an answer you
+can check: null a file against an untouched copy of itself and it must come
+back at the float floor. If it does not, something is wrong and I want to know.
+
 **What I need back.** Not a bug list — impressions. Where did you expect
 something to be and not find it? What looked wrong before you could say why?
 What did you try that I have not built? Anything you had to think about for more
