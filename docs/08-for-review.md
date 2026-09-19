@@ -15,10 +15,11 @@ artefacts (Actions → the run → Artifacts at the bottom), unzip it anywhere, 
 run `sound-analyser.exe`. Qt ships beside it, so there is nothing to install.
 
 It is about 12.6 MB and it is built and tested by the same run that produces it:
-all ten CI jobs green, including both MSVC configurations, before the package is
-uploaded. `sa-cli.exe` is not in the package yet -- say if you want it and it is
-a one-line change. It now has ten commands: analyse, convert, normalise,
-denoise, declick, declip, dehum, render, stretch and pitch.
+every CI job green -- both MSVC configurations, AddressSanitizer and
+ThreadSanitizer among them -- before the package is uploaded. `sa-cli.exe` is
+in the folder beside it: the headless driver, with eleven commands: analyse,
+convert, normalise, denoise, declick, declip, dehum, channels, render, stretch
+and pitch.
 
 Then open something real — a recording of your own, not a test tone — and try:
 
@@ -40,6 +41,8 @@ Then open something real — a recording of your own, not a test tone — and tr
 | Declick | Repair ▸ Remove clicks. It says how many it found. On a clean recording the right answer is none, and it gives that answer |
 | Declip | Repair ▸ Restore clipped peaks. It says how many it put back, and how far it had to bring the file down so they fit |
 | Dehum | Repair ▸ Remove mains hum. It finds the frequency itself — 50 or 60, and to a hundredth of a Hertz — and says what it found |
+| Mark | Ctrl+M drops a marker at the caret, or over the selection if there is one. Alt+Left and Alt+Right walk between them, and landing on a region selects it |
+| Flip it about | Process ▸ Reverse, Invert polarity, Swap channels, Sum to mono. Each one obeys the selection, so they work on a passage as well as the whole file |
 | Save | File ▸ Save session, reopen it, check nothing was lost |
 
 **What I need back.** Not a bug list — impressions. Where did you expect
@@ -83,6 +86,13 @@ that becomes exact.
 ## 4. Things I would want a second opinion on
 
 Not blocked, but a person's judgement would be better than mine.
+
+- **How a long recording feels.** A file past about ninety minutes used to get
+  no spectrogram at all -- it would have needed more than a gigabyte of cache.
+  It now gets a coarser one instead, at 42 or 85 ms per column rather than 21,
+  and says so. Whether that reads as a sensible trade or as a blurry picture is
+  a judgement I cannot make from here. The real answer is building the picture
+  in tiles as you scroll, which is a day of work and is on the list.
 
 - **Whether the de-hummer is cautious enough, or too cautious.** It only
   removes a partial where a steady sinusoid clearly dominates, and leaves the

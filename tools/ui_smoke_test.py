@@ -272,6 +272,35 @@ def main() -> int:
                 )
                 return 1
 
+        # Markers are drawn, and only when there are markers.
+        #
+        # The ruler paints them in one colour that appears nowhere else in the
+        # window, so counting pixels of it says whether they reached the
+        # picture. Checking the empty case as well is what makes it a test of
+        # the drawing rather than of the colour constant.
+        marker_colour = (0x8F, 0xD6, 0x94)
+        counts = []
+        for operations in ("deselect", "select:1-2,mark:intro,select:3-4,mark:chorus,deselect"):
+            marked = workspace / f"marked{len(counts)}.png"
+            done = subprocess.run(
+                [str(arguments.binary), str(audio), "--apply", operations,
+                 "--screenshot", str(marked)],
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            if done.returncode != 0 or not marked.exists():
+                print(f"FAIL: rendering markers exited {done.returncode} -- {done.stderr}")
+                return 1
+            _, _, marked_rows = read_png(marked)
+            counts.append(sum(1 for row in marked_rows for pixel in row if pixel == marker_colour))
+        if counts[0] != 0:
+            print(f"FAIL: {counts[0]} marker-coloured pixels with no markers placed")
+            return 1
+        if counts[1] < 20:
+            print(f"FAIL: only {counts[1]} marker-coloured pixels with two markers placed")
+            return 1
+
         # An empty render is one flat colour. A real one is not.
         region = [pixel for row in plot_rows[::3] for pixel in row[::4]]
         distinct = len(set(region))

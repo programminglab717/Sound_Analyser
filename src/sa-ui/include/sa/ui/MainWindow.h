@@ -1,6 +1,7 @@
 #pragma once
 
 #include <sa/core/Cancellation.h>
+#include <sa/dsp/ChannelOps.h>
 #include <sa/engine/Document.h>
 #include <sa/engine/DocumentSource.h>
 #include <sa/engine/UndoHistory.h>
@@ -123,14 +124,18 @@ private:
     /// Re-measure whatever the panel should be showing: the selection when
     /// there is one, the whole document otherwise.
     void remeasure();
-    /// Recompute the spectrum panel, after a short pause.
+    /// Re-measure and redraw the spectrum, after a short pause.
     ///
     /// Deferred rather than immediate because the selection changes on every
-    /// mouse move of a drag, and this reads several seconds of audio and
-    /// transforms it. The meters solve the same problem with a worker thread
-    /// and a generation counter; a spectrum is cheap enough that waiting for
-    /// the drag to stop is the whole answer.
-    void respectrumSoon();
+    /// mouse move of a drag. The spectrum reads several seconds of audio and
+    /// transforms it; the meters start a worker, and starting one now means
+    /// stopping the one before it, which means waiting for it. Neither is
+    /// something to do sixty times a second for answers nobody will read until
+    /// the mouse stops.
+    void reanalyseSoon();
+
+    /// Do it now. For the headless paths, which have no drag and no patience.
+    void reanalyseNow();
     void respectrum();
 
     /// Rebuild the peak cache from the *document*, not the file. After the
@@ -144,6 +149,20 @@ private:
 
     /// Start a background spectrogram build, cancelling any already running.
     void startSpectrogramBuild();
+
+    /// The analysis settings the spectrogram is actually being built with.
+    ///
+    /// Not always displayConfig(): a long file gets a coarser hop so that its
+    /// cache fits, and the build and the note both have to agree on which one
+    /// was chosen.
+    spectral::SpectrogramConfig spectrogramConfig_;
+
+    /// What to say about the spectrogram once it has built, if anything.
+    ///
+    /// Separate from the status note because that one is also used for
+    /// "building…" and for failures, and the completion handler clears it. A
+    /// long file's "coarser than usual" message has to survive that.
+    QString spectrogramResolutionNote_;
 
     /// Stop a running spectrogram build and wait for its thread.
     ///
@@ -177,6 +196,23 @@ private:
     void togglePlayback();
     void stopPlayback();
     void followPlayhead();
+
+    /// The four editing verbs that need no settings and no dialog. The
+    /// arithmetic lives in sa-dsp, because the headless driver needs the same
+    /// four; this applies one to the selection and makes it undoable.
+    bool applyChannelOp(dsp::ChannelOp operation, const QString& label);
+
+    /// Markers. The engine has carried them since the document model was
+    /// written -- sessions save them, and a ripple delete moves them with the
+    /// audio -- but nothing reached them until now.
+    bool addMarker(const QString& label);
+    void chooseAddMarker();
+    void renameMarker();
+    bool deleteNearestMarker();
+    bool clearMarkers();
+    void goToMarker(bool forwards);
+    /// Index of the marker nearest the caret, or -1 when there are none.
+    [[nodiscard]] int nearestMarker() const noexcept;
 
     void learnNoiseProfile();
     void chooseDenoise();
@@ -217,7 +253,7 @@ private:
     TimeRuler* ruler_ = nullptr;
     LoudnessPanel* meters_ = nullptr;
     SpectrumView* spectrum_ = nullptr;
-    QTimer* spectrumTimer_ = nullptr;
+    QTimer* analysisTimer_ = nullptr;
     WaveformView* waveform_ = nullptr;
     SpectrogramView* spectrogram_ = nullptr;
     QLabel* status_ = nullptr;

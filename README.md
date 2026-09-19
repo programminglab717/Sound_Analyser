@@ -76,16 +76,18 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | `sa-engine`: non-destructive document, edits, undo, sessions | ✅ Done |
 | `sa-device`: WASAPI, ALSA, null backend | ✅ Done — never run on real hardware |
 | `sa-transport`: playback with a playhead | ✅ Done |
-| `sa-ui`: waveform, spectrogram, spectrum, rulers, meters, editing, repair | ✅ Done |
+| `sa-ui`: waveform, spectrogram, spectrum, rulers, markers, meters, editing, repair | ✅ Done |
 | Resampling: any ratio, streaming, real-time safe | ✅ Done |
 | Noise profile learning and spectral denoise | ✅ Done |
 | Click detection and repair, by linear prediction | ✅ Done |
 | Declipping: restoring peaks a converter took off | ✅ Done |
 | De-humming: finding a mains harmonic series and subtracting it | ✅ Done |
 | Mastering: filters, true-peak limiting, normalisation | ✅ Done |
-| `sa-cli`: headless batch driver | ✅ Done — ten commands, tested end to end |
+| `sa-cli`: headless batch driver | ✅ Done — eleven commands, tested end to end |
 | Time-stretch and pitch-shift | ✅ Done — phase vocoder with identity phase locking |
-| Markers and regions in the interface; a draggable EQ curve | ⬜ Next |
+| Markers and regions in the interface | ✅ Done — add, name, navigate, saved in sessions |
+| Reverse, invert polarity, swap channels, sum to mono | ✅ Done — exact to the sample, and obeys the selection |
+| A draggable EQ curve over the analyser | ⬜ Next |
 | GPU shader renderer | ⬜ An optimisation, not a requirement — the CPU path fits in the frame budget |
 
 **598 tests passing on GCC 13, under ASan/UBSan with leak detection, and under
@@ -113,7 +115,11 @@ whole chain rather than a unit:
   rewrote it; ThreadSanitizer named the exact pair of lines. Analysis sources
   now hold their own snapshot, which makes the whole class impossible rather
   than unlikely, and a TSan run is a CI gate so the next one is found the same
-  way.
+  way. A second rare crash resisted every attempt to reproduce it -- sixty runs
+  under load, twenty under ASan, three suites under gdb -- so the code was read
+  instead, which found two genuine lifetime faults in the metering worker. Both
+  are fixed; which of them crashed is still not known, and the comment where
+  they were says so.
 
 ### What is not true yet
 
@@ -133,6 +139,15 @@ number.
   a windowed-sinc substitute for BS.1770-4 Annex 2 Table 3 and reads up to
   0.44 dB low at 4× on bright transients. Both facts are written down where the
   code is.
+- **One crash was never reproduced.** Headless batch runs segfaulted twice under
+  heavy load. Reading the code found two genuine lifetime faults in the metering
+  worker -- a window where it could post a result to a destroyed panel, and a
+  detached thread still running as the process tore down -- and both are fixed.
+  But neither was ever caught in the act: sixty runs under load, twenty under
+  AddressSanitizer and three whole suites under gdb all came back clean. So the
+  honest description is that two real faults were removed, not that the crash
+  was diagnosed, and the next unexplained crash should be treated as new rather
+  than as this one returning.
 - **No audio has come out of real hardware.** WASAPI and ALSA are written and
   tested against a real thread on a real clock, and the ALSA path streams through
   ALSA itself, but nothing here has driven a sound card.

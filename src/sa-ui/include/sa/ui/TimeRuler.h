@@ -3,7 +3,9 @@
 #include <sa/core/Types.h>
 #include <sa/ui/ViewGeometry.h>
 
+#include <QString>
 #include <QWidget>
+#include <vector>
 
 namespace sa::ui {
 
@@ -26,6 +28,19 @@ public:
     /// Where the transport is, in samples. Negative hides it.
     void setPlayhead(SampleIndex position);
 
+    /// A marker as the ruler needs to draw it.
+    ///
+    /// Deliberately not engine::Marker. The ruler is a view of a time axis and
+    /// knows nothing about documents; copying the three fields it draws keeps
+    /// it that way, and the copy is three fields.
+    struct Mark {
+        SampleIndex position = 0;
+        SampleCount length = 0; ///< Zero for a point marker.
+        QString label;
+    };
+
+    void setMarkers(std::vector<Mark> markers);
+
 protected:
     void paintEvent(QPaintEvent* event) override;
 
@@ -35,6 +50,7 @@ private:
     SampleCount viewLength_ = 0;
     TimeSelection selection_;
     SampleIndex playhead_ = -1;
+    std::vector<Mark> markers_;
 };
 
 } // namespace sa::ui

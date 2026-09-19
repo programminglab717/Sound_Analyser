@@ -145,17 +145,17 @@ MainWindow::MainWindow() {
     statusBar()->addWidget(status_, 1);
     statusBar()->addPermanentWidget(readout_);
 
+    // A quarter of a second after the last change: past the end of a drag, and
+    // short enough not to feel deferred.
+    analysisTimer_ = new QTimer{this};
+    analysisTimer_->setSingleShot(true);
+    analysisTimer_->setInterval(250);
+    connect(analysisTimer_, &QTimer::timeout, this, &MainWindow::reanalyseNow);
+
     // 30 Hz: fast enough that the playhead looks continuous, slow enough that
     // it costs nothing. The position it reads is frames the callback has
     // actually played, not frames queued, so it does not run ahead of the
     // sound.
-    // A quarter of a second after the last change, which is past the end of a
-    // drag and short enough not to feel deferred.
-    spectrumTimer_ = new QTimer{this};
-    spectrumTimer_->setSingleShot(true);
-    spectrumTimer_->setInterval(250);
-    connect(spectrumTimer_, &QTimer::timeout, this, &MainWindow::respectrum);
-
     playheadTimer_ = new QTimer{this};
     playheadTimer_->setInterval(33);
     connect(playheadTimer_, &QTimer::timeout, this, &MainWindow::followPlayhead);
@@ -249,6 +249,19 @@ void MainWindow::buildMenus() {
                        &MainWindow::chooseFilter);
     process->addAction(tr("&Limiter…"), QKeySequence{Qt::CTRL | Qt::SHIFT | Qt::Key_L}, this,
                        &MainWindow::chooseLimiter);
+    process->addSeparator();
+    process->addAction(tr("Re&verse"), this,
+                       [this] { (void)applyChannelOp(dsp::ChannelOp::Reverse, tr("reverse")); });
+    process->addAction(tr("&Invert polarity"), this, [this] {
+        (void)applyChannelOp(dsp::ChannelOp::InvertPolarity, tr("invert polarity"));
+    });
+    process->addAction(tr("S&wap left and right"), this, [this] {
+        (void)applyChannelOp(dsp::ChannelOp::SwapChannels, tr("swap channels"));
+    });
+    process->addAction(tr("Sum to &mono"), this, [this] {
+        (void)applyChannelOp(dsp::ChannelOp::SumToMono, tr("sum to mono"));
+    });
+    process->addSeparator();
     process->addAction(tr("&Time stretch…"), this, &MainWindow::chooseTimeStretch);
     process->addAction(tr("&Pitch shift…"), this, &MainWindow::choosePitchShift);
     normaliseAction_ =
@@ -265,6 +278,19 @@ void MainWindow::buildMenus() {
                                        &MainWindow::togglePlayback);
     transport->addAction(tr("&Stop"), QKeySequence{Qt::Key_Escape | Qt::SHIFT}, this,
                          &MainWindow::stopPlayback);
+
+    QMenu* markers = menuBar()->addMenu(tr("&Markers"));
+    markers->addAction(tr("&Add marker…"), QKeySequence{Qt::CTRL | Qt::Key_M}, this,
+                       &MainWindow::chooseAddMarker);
+    markers->addAction(tr("&Rename nearest marker…"), this, &MainWindow::renameMarker);
+    markers->addAction(tr("&Delete nearest marker"), this, [this] { (void)deleteNearestMarker(); });
+    markers->addSeparator();
+    markers->addAction(tr("&Next marker"), QKeySequence{Qt::ALT | Qt::Key_Right}, this,
+                       [this] { goToMarker(true); });
+    markers->addAction(tr("&Previous marker"), QKeySequence{Qt::ALT | Qt::Key_Left}, this,
+                       [this] { goToMarker(false); });
+    markers->addSeparator();
+    markers->addAction(tr("&Clear all markers"), this, [this] { (void)clearMarkers(); });
 
     QMenu* repair = menuBar()->addMenu(tr("&Repair"));
     attenuateAction_ =
@@ -350,14 +376,21 @@ void MainWindow::selectionChanged(SampleIndex start, SampleIndex end) {
     ruler_->setSelection(selected);
     refreshActions();
     updateStatus();
-    remeasure();
-    respectrumSoon();
+    reanalyseSoon();
 }
 
-void MainWindow::respectrumSoon() {
-    if (spectrumTimer_) {
-        spectrumTimer_->start();
+void MainWindow::reanalyseSoon() {
+    if (analysisTimer_) {
+        analysisTimer_->start();
     }
+}
+
+void MainWindow::reanalyseNow() {
+    if (analysisTimer_) {
+        analysisTimer_->stop();
+    }
+    remeasure();
+    respectrum();
 }
 
 void MainWindow::respectrum() {
@@ -613,6 +646,7 @@ void MainWindow::rebuildCaches() {
     peaks_.reset();
     spectra_.reset();
     spectrogramNote_.clear();
+    spectrogramResolutionNote_.clear();
 
     if (document_.duration() <= 0) {
         return;
@@ -630,16 +664,42 @@ void MainWindow::rebuildCaches() {
     // What the cache will cost, before paying for it: one byte per bin per
     // frame at level 0, and the levels above it are a geometric series that
     // roughly doubles that.
-    const auto config = displayConfig();
-    const auto frames = static_cast<std::size_t>(document_.duration() / config.hopSize + 1);
-    const auto bins = static_cast<std::size_t>(config.fftSize / 2 + 1);
-    const std::size_t pyramidBytes = frames * bins * 2;
+    spectrogramConfig_ = displayConfig();
+    const auto bins = static_cast<std::size_t>(spectrogramConfig_.fftSize / 2 + 1);
+    const auto cost = [&] {
+        const auto frames =
+            static_cast<std::size_t>(document_.duration() / spectrogramConfig_.hopSize + 1);
+        return frames * bins * 2;
+    };
 
-    if (pyramidBytes > kMaximumPyramidBytes) {
+    // A long file gets a coarser hop rather than no spectrogram.
+    //
+    // Refusing outright was the first answer and it was the wrong one: a
+    // three-hour lecture is exactly the material somebody wants an overview of,
+    // and at that length they are looking at the whole thing at once anyway,
+    // where a 21 ms column and an 85 ms column look the same. Doubling the hop
+    // halves the cache, and stopping at the window length is where the analysis
+    // would start leaving gaps between frames rather than merely spacing them.
+    const int finestHop = spectrogramConfig_.hopSize;
+    while (cost() > kMaximumPyramidBytes &&
+           spectrogramConfig_.hopSize < spectrogramConfig_.fftSize) {
+        spectrogramConfig_.hopSize *= 2;
+    }
+
+    if (cost() > kMaximumPyramidBytes) {
         spectrogramNote_ = tr("too long for a spectrogram in this build (it would need %1 GB); "
                               "the waveform and the meters are unaffected")
-                               .arg(static_cast<double>(pyramidBytes) / 1e9, 0, 'f', 1);
+                               .arg(static_cast<double>(cost()) / 1e9, 0, 'f', 1);
+        spectrogramConfig_ = displayConfig();
         return;
+    }
+    spectrogramResolutionNote_.clear();
+    if (spectrogramConfig_.hopSize != finestHop) {
+        spectrogramResolutionNote_ =
+            tr("spectrogram at %1 ms per column rather than %2, because the file is long")
+                .arg(1000.0 * spectrogramConfig_.hopSize / document_.sampleRate().hz(), 0, 'f', 0)
+                .arg(1000.0 * finestHop / document_.sampleRate().hz(), 0, 'f', 0);
+        spectrogramNote_ = spectrogramResolutionNote_;
     }
 
     startSpectrogramBuild();
@@ -668,7 +728,7 @@ void MainWindow::startSpectrogramBuild() {
     // The source is captured by shared_ptr and the token by pointer into this
     // window, which outlives the worker because cancelSpectrogramBuild joins it
     // before anything replaces either.
-    spectrogramWorker_ = std::thread{[this, source = documentSource_, config = displayConfig(),
+    spectrogramWorker_ = std::thread{[this, source = documentSource_, config = spectrogramConfig_,
                                       mine, generation = spectrogramGeneration_] {
         JobMonitor monitor;
         monitor.cancellation = &spectrogramCancellation_;
@@ -688,7 +748,7 @@ void MainWindow::startSpectrogramBuild() {
                 if (*built) {
                     spectra_ = std::make_shared<const spectral::SpectrogramPyramid>(
                         std::move(*built).value());
-                    spectrogramNote_.clear();
+                    spectrogramNote_ = spectrogramResolutionNote_;
                 } else {
                     spectrogramNote_ =
                         tr("spectrogram analysis failed: %1")
@@ -721,10 +781,17 @@ void MainWindow::refreshViews() {
     ruler_->setViewRange(waveform_->viewStart(), waveform_->viewLength());
     spectrogram_->setViewRange(waveform_->viewStart(), waveform_->viewLength());
 
+    std::vector<TimeRuler::Mark> marks;
+    marks.reserve(document_.markers().size());
+    for (const engine::Marker& marker : document_.markers()) {
+        marks.push_back(
+            TimeRuler::Mark{marker.position, marker.length, QString::fromStdString(marker.label)});
+    }
+    ruler_->setMarkers(std::move(marks));
+
     refreshActions();
     updateStatus();
-    remeasure();
-    respectrumSoon();
+    reanalyseSoon();
 }
 
 void MainWindow::refreshActions() {
@@ -749,7 +816,13 @@ void MainWindow::refreshActions() {
     trimAction_->setEnabled(selected);
     exportSelectionAction_->setEnabled(selected);
     pasteAction_->setEnabled(document && clipboard_.frames() > 0);
-    normaliseAction_->setEnabled(document && meters_->conformGainDb().has_value());
+    // Enabled whenever there is a document, not only once a measurement has
+    // landed. The action waits for the measurement itself and says what it
+    // found, which is more useful than a menu item that is mysteriously grey
+    // for the first second after opening a file -- and with the measurement
+    // now deferred behind a timer, that second became indefinite while the
+    // user sat still.
+    normaliseAction_->setEnabled(document);
     attenuateAction_->setEnabled(document);
     healAction_->setEnabled(document);
     denoiseAction_->setEnabled(document && !noiseProfile_.isEmpty());
@@ -951,6 +1024,187 @@ void MainWindow::applySpectralEdit(const QString& label, Edit&& edit) {
     (void)applyEdit(label, [this, spanStart, &span] {
         return engine::replaceRange(document_, spanStart, std::move(span)).ok();
     });
+}
+
+bool MainWindow::applyChannelOp(dsp::ChannelOp operation, const QString& label) {
+    const TimeSelection range = targetRange();
+    if (range.isEmpty() || !documentSource_) {
+        return false;
+    }
+    // Checked before reading anything, so the refusal costs nothing and can
+    // say why rather than just failing.
+    const int channels = document_.layout().count();
+    if (dsp::channelOpNeedsStereo(operation) && channels != 2) {
+        status_->setText(
+            tr("That needs a stereo file; this one has %n channel(s)", nullptr, channels));
+        return false;
+    }
+
+    AudioBuffer span{document_.layout(), range.length()};
+    if (!documentSource_->read(range.start, span.view())) {
+        status_->setText(tr("Could not read the selection"));
+        return false;
+    }
+
+    if (const Status status = dsp::applyChannelOp(span.view(), operation); !status) {
+        status_->setText(QString::fromUtf8(status.error().what()));
+        return false;
+    }
+
+    return applyEdit(label, [this, &range, &span] {
+        return engine::replaceRange(document_, range.start, std::move(span)).ok();
+    });
+}
+
+int MainWindow::nearestMarker() const noexcept {
+    const auto& markers = document_.markers();
+    if (markers.empty()) {
+        return -1;
+    }
+    const SampleIndex caret = selection().start;
+    int best = 0;
+    SampleCount closest = std::abs(markers[0].position - caret);
+    for (std::size_t i = 1; i < markers.size(); ++i) {
+        const SampleCount distance = std::abs(markers[i].position - caret);
+        if (distance < closest) {
+            closest = distance;
+            best = static_cast<int>(i);
+        }
+    }
+    return best;
+}
+
+bool MainWindow::addMarker(const QString& label) {
+    if (!hasDocument()) {
+        return false;
+    }
+    const TimeSelection selected = selection();
+    // A selection makes a region, a caret makes a point. Both are the same
+    // record; the length is what distinguishes them, and asking the user which
+    // they meant when they have already shown you would be a question with an
+    // answer already on screen.
+    engine::Marker marker;
+    marker.position = std::clamp<SampleIndex>(selected.start, 0, document_.duration());
+    marker.length = selected.isEmpty() ? 0 : selected.length();
+    marker.label = label.toStdString();
+
+    return applyEdit(tr("add marker"), [this, marker = std::move(marker)]() mutable {
+        document_.markers().push_back(std::move(marker));
+        // Kept in time order, so "next" and "previous" mean what they say
+        // however they were added.
+        std::sort(document_.markers().begin(), document_.markers().end(),
+                  [](const engine::Marker& a, const engine::Marker& b) {
+                      return a.position < b.position;
+                  });
+        return true;
+    });
+}
+
+void MainWindow::chooseAddMarker() {
+    if (!hasDocument()) {
+        return;
+    }
+    // Numbered from the count rather than from the highest number used, which
+    // would need parsing labels the user may have rewritten.
+    const QString suggested = tr("Marker %1").arg(document_.markers().size() + 1);
+    bool accepted = false;
+    const QString label = QInputDialog::getText(this, tr("Add marker"), tr("Label:"),
+                                                QLineEdit::Normal, suggested, &accepted);
+    if (accepted) {
+        (void)addMarker(label);
+    }
+}
+
+void MainWindow::renameMarker() {
+    const int index = nearestMarker();
+    if (index < 0) {
+        status_->setText(tr("There are no markers"));
+        return;
+    }
+    bool accepted = false;
+    const QString label = QInputDialog::getText(
+        this, tr("Rename marker"), tr("Label:"), QLineEdit::Normal,
+        QString::fromStdString(document_.markers()[static_cast<std::size_t>(index)].label),
+        &accepted);
+    if (!accepted) {
+        return;
+    }
+    (void)applyEdit(tr("rename marker"), [this, index, label] {
+        document_.markers()[static_cast<std::size_t>(index)].label = label.toStdString();
+        return true;
+    });
+}
+
+bool MainWindow::deleteNearestMarker() {
+    const int index = nearestMarker();
+    if (index < 0) {
+        status_->setText(tr("There are no markers"));
+        return false;
+    }
+    return applyEdit(tr("delete marker"), [this, index] {
+        auto& markers = document_.markers();
+        markers.erase(markers.begin() + index);
+        return true;
+    });
+}
+
+bool MainWindow::clearMarkers() {
+    if (!hasDocument() || document_.markers().empty()) {
+        return false;
+    }
+    return applyEdit(tr("clear markers"), [this] {
+        document_.markers().clear();
+        return true;
+    });
+}
+
+void MainWindow::goToMarker(bool forwards) {
+    const auto& markers = document_.markers();
+    if (markers.empty()) {
+        status_->setText(tr("There are no markers"));
+        return;
+    }
+
+    const SampleIndex caret = selection().start;
+    const engine::Marker* found = nullptr;
+    if (forwards) {
+        for (const engine::Marker& marker : markers) {
+            if (marker.position > caret) {
+                found = &marker;
+                break;
+            }
+        }
+    } else {
+        for (auto it = markers.rbegin(); it != markers.rend(); ++it) {
+            if (it->position < caret) {
+                found = &*it;
+                break;
+            }
+        }
+    }
+    if (found == nullptr) {
+        status_->setText(forwards ? tr("No marker after here") : tr("No marker before here"));
+        return;
+    }
+
+    // Selecting the region rather than just moving the caret, where the marker
+    // has one: a region marker exists to be acted on, and arriving at it with
+    // it already selected is the point.
+    const double rate = document_.sampleRate().hz();
+    const double start = static_cast<double>(found->position) / rate;
+    selectSeconds(start, found->length > 0
+                             ? static_cast<double>(found->position + found->length) / rate
+                             : start);
+    // Bring it into view if it is not already, centred so there is context on
+    // both sides; leave the view alone when it is, because scrolling under
+    // someone who can already see the thing they asked for is disorienting.
+    const SampleIndex viewStart = waveform_->viewStart();
+    const SampleCount viewLength = waveform_->viewLength();
+    if (found->position < viewStart || found->position >= viewStart + viewLength) {
+        waveform_->scrollBySamples(found->position - viewLength / 2 - viewStart);
+    }
+    status_->setText(found->label.empty() ? tr("Marker at %1 s").arg(start, 0, 'f', 3)
+                                          : QString::fromStdString(found->label));
 }
 
 void MainWindow::learnNoiseProfile() {
@@ -1589,16 +1843,21 @@ void MainWindow::normaliseToTarget() {
     if (!hasDocument()) {
         return;
     }
-    // The measurement may still be running -- on a long file it will be, and on
-    // a freshly opened one it always is. Waiting is the right answer either way:
-    // the alternative is a menu item that silently does nothing depending on how
-    // fast the user reached for it.
-    if (meters_->busy()) {
+    // The measurement may not have started yet -- it is deferred behind a short
+    // timer so that dragging a selection does not restart it on every mouse
+    // move -- and on a long file it will still be running when it has. Either
+    // way the answer is to make it happen and then wait: the alternative is a
+    // menu item that silently does nothing depending on how fast the user
+    // reached for it, which is exactly what deferring the measurement
+    // reintroduced until a stress run caught it.
+    const bool pending =
+        (analysisTimer_ != nullptr && analysisTimer_->isActive()) || meters_->busy();
+    if (pending) {
         status_->setText(tr("Waiting for the measurement to finish…"));
-        if (!waitForAnalysis()) {
-            status_->setText(tr("The measurement did not finish in time"));
-            return;
-        }
+    }
+    if (!waitForAnalysis()) {
+        status_->setText(tr("The measurement did not finish in time"));
+        return;
     }
 
     const std::optional<double> gain = meters_->conformGainDb();
@@ -1882,6 +2141,38 @@ bool MainWindow::applyOperation(const QString& name) {
                     QStringLiteral("low-pass"));
         return true;
     }
+    if (name == "reverse") {
+        return applyChannelOp(dsp::ChannelOp::Reverse, QStringLiteral("reverse"));
+    }
+    if (name == "invert") {
+        return applyChannelOp(dsp::ChannelOp::InvertPolarity, QStringLiteral("invert polarity"));
+    }
+    if (name == "swapchannels") {
+        return applyChannelOp(dsp::ChannelOp::SwapChannels, QStringLiteral("swap channels"));
+    }
+    if (name == "mono") {
+        return applyChannelOp(dsp::ChannelOp::SumToMono, QStringLiteral("sum to mono"));
+    }
+    if (name == "mark") {
+        return addMarker(QString{});
+    }
+    if (name.startsWith("mark:")) {
+        return addMarker(name.mid(5));
+    }
+    if (name == "nextmarker") {
+        goToMarker(true);
+        return true;
+    }
+    if (name == "prevmarker") {
+        goToMarker(false);
+        return true;
+    }
+    if (name == "deletemarker") {
+        return deleteNearestMarker();
+    }
+    if (name == "clearmarkers") {
+        return clearMarkers();
+    }
     if (name == "dehum") {
         return removeHum();
     }
@@ -2062,11 +2353,28 @@ bool MainWindow::printAnalysis() const {
     line("peak_to_loudness_lu", result->statistics.peakToLoudnessRatioDb);
     std::printf("gated_blocks=%lld\n", static_cast<long long>(result->loudness.gatedBlockCount));
     std::printf("frames=%lld\n", static_cast<long long>(result->statistics.frames));
+
+    // Markers too, because the alternative for a test is reading them off a
+    // picture of a ruler.
+    std::printf("markers=%lld\n", static_cast<long long>(document_.markers().size()));
+    for (std::size_t i = 0; i < document_.markers().size(); ++i) {
+        const engine::Marker& marker = document_.markers()[i];
+        std::printf("marker_%zu=%lld,%lld,%s\n", i, static_cast<long long>(marker.position),
+                    static_cast<long long>(marker.length), marker.label.c_str());
+    }
     std::fflush(stdout);
     return true;
 }
 
 bool MainWindow::waitForAnalysis(int timeoutMs) {
+    // The analysis is deferred behind a timer so that dragging a selection does
+    // not restart it on every mouse move. A batch run has no drag: force
+    // whatever is pending rather than racing the timer and capturing the
+    // previous selection's numbers.
+    if (analysisTimer_ && analysisTimer_->isActive()) {
+        reanalyseNow();
+    }
+
     QElapsedTimer clock;
     clock.start();
     while (meters_->busy() || spectrogramBusy_) {
@@ -2078,14 +2386,6 @@ bool MainWindow::waitForAnalysis(int timeoutMs) {
         // Wait for work rather than spinning: the worker posts its result as a
         // queued call, so the loop only needs to wake when something arrives.
         QApplication::processEvents(QEventLoop::WaitForMoreEvents, 50);
-    }
-    // The spectrum is deferred behind a timer so that dragging a selection
-    // does not recompute it on every mouse move. A batch run has no drag and no
-    // patience: force whatever is pending rather than racing the timer and
-    // writing a screenshot of the previous selection's spectrum.
-    if (spectrumTimer_ && spectrumTimer_->isActive()) {
-        spectrumTimer_->stop();
-        respectrum();
     }
     QApplication::processEvents();
     return true;
@@ -2100,9 +2400,8 @@ bool MainWindow::saveSpectrogramImage(const std::filesystem::path& path) {
 }
 
 bool MainWindow::saveSpectrumImage(const std::filesystem::path& path) {
-    if (spectrumTimer_ && spectrumTimer_->isActive()) {
-        spectrumTimer_->stop();
-        respectrum();
+    if (analysisTimer_ && analysisTimer_->isActive()) {
+        reanalyseNow();
     }
     QApplication::processEvents();
     const QPixmap shot = spectrum_->grab(

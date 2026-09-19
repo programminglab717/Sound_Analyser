@@ -231,6 +231,15 @@ jobs:
                  Select-Object -First 1 -ExpandProperty FullName
           if (-not $exe) { throw "sound-analyser.exe was not built" }
           Copy-Item $exe $stage
+
+          # The headless driver goes in the same folder. It links nothing the
+          # window does not already bring, so it costs a megabyte and makes the
+          # package usable from a script without a second download.
+          $cli = Get-ChildItem -Recurse -Filter sa-cli.exe |
+                 Select-Object -First 1 -ExpandProperty FullName
+          if (-not $cli) { throw "sa-cli.exe was not built" }
+          Copy-Item $cli $stage
+
           & "$env:CMAKE_PREFIX_PATH/bin/windeployqt.exe" --release --no-translations `
               --no-system-d3d-compiler --no-opengl-sw "$stage/sound-analyser.exe"
 

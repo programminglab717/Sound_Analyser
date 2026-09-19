@@ -67,6 +67,51 @@ def load(path: Path) -> list[float]:
     ]
 
 
+def write_stereo_wav(path: Path) -> None:
+    """Six seconds of stereo, with a different tone on each channel.
+
+    Different material per channel is the whole point. With the same signal on
+    both, swapping them is invisible and summing to mono is a no-op, so the
+    test would pass whatever the code did.
+    """
+    samples = bytearray()
+    for i in range(SAMPLE_RATE * 6):
+        t = i / SAMPLE_RATE
+        left = 0.5 * math.sin(2.0 * math.pi * 300.0 * t)
+        right = 0.3 * math.sin(2.0 * math.pi * 1100.0 * t + 0.7)
+        samples += struct.pack("<hh", int(left * 32767), int(right * 32767))
+
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(2)
+        handle.setsampwidth(2)
+        handle.setframerate(SAMPLE_RATE)
+        handle.writeframes(bytes(samples))
+
+
+def load_channels(path: Path) -> list[list[float]]:
+    """Every channel of a WAV as floats in [-1, 1], one list per channel."""
+    with wave.open(str(path), "rb") as handle:
+        frames = handle.getnframes()
+        channels = handle.getnchannels()
+        width = handle.getsampwidth()
+        raw = handle.readframes(frames)
+
+    scale = float(1 << (width * 8 - 1))
+    step = channels * width
+    return [
+        [
+            int.from_bytes(
+                raw[i * step + c * width : i * step + (c + 1) * width],
+                "little",
+                signed=True,
+            )
+            / scale
+            for i in range(frames)
+        ]
+        for c in range(channels)
+    ]
+
+
 def worst_difference(a: list[float], b: list[float]) -> float:
     if len(a) != len(b):
         return float("inf")
@@ -310,8 +355,12 @@ def main() -> int:
             if key not in before or key not in after:
                 failures.append(f"gain: no {key} measured")
             elif abs((before[key] - after[key]) - 6.0) > 0.01:
+                # Both values, not just the difference: this failed once,
+                # intermittently, and the difference alone said nothing about
+                # which of the two measurements was the odd one.
                 failures.append(
-                    f"gain: -6 dB moved {key} by {before[key] - after[key]:.3f} dB"
+                    f"gain: -6 dB moved {key} by {before[key] - after[key]:.4f} dB "
+                    f"({before[key]:.4f} -> {after[key]:.4f})"
                 )
         if not failures:
             print("  ok  gain: -6 dB moved loudness and peak by exactly 6 dB")
@@ -706,6 +755,180 @@ def main() -> int:
                 )
             else:
                 print("  ok  dehum: a recording with no hum comes back bit-identical")
+
+        # Markers. The engine has carried them since the document model was
+        # written -- sessions save them, a ripple delete moves them, undo puts
+        # them back -- and until now nothing in the interface reached any of
+        # that. These check the whole chain rather than the menu.
+        print("\nmarkers:")
+
+        def markers_after(operations: str, path: Path | None = None) -> dict[str, str] | None:
+            completed = subprocess.run(
+                [str(arguments.binary), str(path or source), "--apply", operations,
+                 "--print-analysis"],
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+            if completed.returncode != 0:
+                failures.append(f"markers ({operations}): exited {completed.returncode} -- "
+                                f"{completed.stderr}")
+                return None
+            found = {}
+            for line in completed.stdout.splitlines():
+                key, _, value = line.partition("=")
+                if key == "markers" or key.startswith("marker_") or key == "frames":
+                    found[key] = value
+            return found
+
+        placed = markers_after("select:1-2,mark:intro,select:3-4,mark:chorus,deselect")
+        if placed is not None:
+            wanted = {
+                "markers": "2",
+                "marker_0": f"{SAMPLE_RATE},{SAMPLE_RATE},intro",
+                "marker_1": f"{3 * SAMPLE_RATE},{SAMPLE_RATE},chorus",
+            }
+            if any(placed.get(k) != v for k, v in wanted.items()):
+                failures.append(f"markers: placed {placed}, wanted {wanted}")
+            else:
+                print("  ok  two region markers land where they were put, with their labels")
+
+        # A ripple delete of the first second moves both back by a second. The
+        # first is dragged to the cut point rather than going negative.
+        rippled = markers_after("select:1-2,mark:intro,select:3-4,mark:chorus,select:0-1,cut")
+        if rippled is not None:
+            wanted = {"marker_0": f"0,{SAMPLE_RATE},intro",
+                      "marker_1": f"{2 * SAMPLE_RATE},{SAMPLE_RATE},chorus"}
+            if any(rippled.get(k) != v for k, v in wanted.items()):
+                failures.append(f"markers: after a ripple cut {rippled}, wanted {wanted}")
+            else:
+                print("  ok  a ripple delete moves the markers with the audio")
+
+        undone = markers_after("select:1-2,mark:intro,select:3-4,mark:chorus,undo")
+        if undone is not None and undone.get("markers") != "1":
+            failures.append(f"markers: after undo there are {undone.get('markers')}, wanted 1")
+        elif undone is not None:
+            print("  ok  adding a marker is undoable")
+
+        # Navigating to a region marker selects the region, so the measurement
+        # that follows covers exactly it.
+        navigated = markers_after(
+            "select:1-2,mark:intro,select:3-4,mark:chorus,select:0-0,nextmarker"
+        )
+        if navigated is not None:
+            if navigated.get("frames") != str(SAMPLE_RATE):
+                failures.append(
+                    f"markers: after nextmarker the selection is {navigated.get('frames')} "
+                    f"frames, wanted {SAMPLE_RATE}"
+                )
+            else:
+                print("  ok  moving to a region marker selects the region")
+
+        # And a session carries them.
+        session = workspace / "markers.sa"
+        saved = subprocess.run(
+            [str(arguments.binary), str(source), "--apply",
+             "select:1-2,mark:intro,select:3-4,mark:chorus", "--save-session", str(session)],
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if saved.returncode != 0 or not session.exists():
+            failures.append(f"markers: saving a session exited {saved.returncode} -- "
+                            f"{saved.stderr}")
+        else:
+            reopened = markers_after("deselect", session)
+            if reopened is not None:
+                wanted = {
+                    "markers": "2",
+                    "marker_0": f"{SAMPLE_RATE},{SAMPLE_RATE},intro",
+                    "marker_1": f"{3 * SAMPLE_RATE},{SAMPLE_RATE},chorus",
+                }
+                if any(reopened.get(k) != v for k, v in wanted.items()):
+                    failures.append(f"markers: a reopened session has {reopened}")
+                else:
+                    print("  ok  a saved session reopens with its markers")
+
+        # Channel operations. Every one of these is exact arithmetic on the
+        # samples, so "about right" is not the standard: a reversed file is the
+        # original read backwards, sample for sample, and anything else is a
+        # bug. Stereo throughout, because a swap of two identical channels
+        # proves nothing.
+        print("\nchannel operations:")
+        stereo = workspace / "stereo.wav"
+        write_stereo_wav(stereo)
+        pair = load_channels(stereo)
+
+        def run_stereo(operations: str, name: str) -> list[list[float]] | None:
+            output = workspace / f"{name}.wav"
+            completed = subprocess.run(
+                [
+                    str(arguments.binary),
+                    str(stereo),
+                    "--apply",
+                    operations,
+                    "--export",
+                    str(output),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            if completed.returncode != 0 or not output.exists():
+                failures.append(f"{name}: exited {completed.returncode} -- {completed.stderr}")
+                return None
+            return load_channels(output)
+
+        def expect_stereo(
+            name: str, actual: list[list[float]] | None, wanted: list[list[float]]
+        ) -> None:
+            if actual is None:
+                return
+            if len(actual) != len(wanted):
+                failures.append(f"{name}: {len(actual)} channels, wanted {len(wanted)}")
+                return
+            difference = max(worst_difference(a, b) for a, b in zip(actual, wanted))
+            if difference > 2e-4:
+                failures.append(f"{name}: worst sample difference {difference:.6f}")
+            else:
+                print(f"  ok  {name}: worst difference {difference:.2e}")
+
+        expect_stereo(
+            "reverse plays the file backwards",
+            run_stereo("reverse", "reversed"),
+            [list(reversed(channel)) for channel in pair],
+        )
+        # And over a selection, because a reverse that quietly took the whole
+        # file would pass the check above while destroying someone's edit.
+        half = 3 * SAMPLE_RATE
+        expect_stereo(
+            "reverse over a selection leaves the rest alone",
+            run_stereo("select:0-3,reverse", "reversed-part"),
+            [list(reversed(channel[:half])) + channel[half:] for channel in pair],
+        )
+        expect_stereo(
+            "invert negates every sample",
+            run_stereo("invert", "inverted"),
+            [[-value for value in channel] for channel in pair],
+        )
+        # Twice is the identity. A sign convention that is wrong in both
+        # directions at once survives a single pass and dies here.
+        expect_stereo(
+            "inverting twice returns the original",
+            run_stereo("invert,invert", "inverted-twice"),
+            pair,
+        )
+        expect_stereo(
+            "swap exchanges the two channels",
+            run_stereo("swapchannels", "swapped"),
+            [pair[1], pair[0]],
+        )
+        summed = [0.5 * (left + right) for left, right in zip(pair[0], pair[1])]
+        expect_stereo(
+            "mono puts the average on both channels",
+            run_stereo("mono", "monoed"),
+            [summed, summed],
+        )
 
         # Playback, against the null device. That device runs a real thread on a
         # real clock, so this exercises the ring, the render worker, the
