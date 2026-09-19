@@ -333,14 +333,16 @@ void AnalysisPanel::buildLayout() {
     addRow(tr("Key"), key_);
     addCaveatRow(keyCaveat_);
     addRow(tr("Runner-up"), runnerUp_);
-    addRow(tr("Tuning"), tuning_);
+    tuningWidgets_ = {addRow(tr("Tuning"), tuning_), tuning_};
 
     addSeparator(tr("TEMPO"));
     addRow(tr("Tempo"), tempo_);
     addCaveatRow(tempoCaveat_);
     addRow(tr("Confidence"), tempoConfidence_);
-    addRow(tr("First beat"), firstBeat_);
-    addRow(tr("Beats"), beatCount_);
+    // The count and the offset on one line, because they are one fact about
+    // the grid and two rows of it would push the tempo off the bottom of a
+    // panel sharing a column with two others.
+    addRow(tr("Beat grid"), beatGrid_);
 
     pitchWidgets_ = {addSeparator(tr("PITCH")),  addRow(tr("Median"), pitch_),  pitch_,
                      addCaveatRow(pitchCaveat_), addRow(tr("Voiced"), voiced_), voiced_};
@@ -391,8 +393,8 @@ void AnalysisPanel::clear() {
     latest_ = MusicalAnalysis{};
     heading_->setText(tr("nothing loaded"));
     coverage_->clear();
-    for (QLabel* label : {key_, runnerUp_, tuning_, tempo_, tempoConfidence_, firstBeat_,
-                          beatCount_, pitch_, voiced_}) {
+    for (QLabel* label :
+         {key_, runnerUp_, tuning_, tempo_, tempoConfidence_, beatGrid_, pitch_, voiced_}) {
         label->setText(QStringLiteral("--"));
         label->setStyleSheet(QStringLiteral("color: %1;").arg(kAbsent.name()));
     }
@@ -404,6 +406,9 @@ void AnalysisPanel::clear() {
         widget->setVisible(false);
     }
     for (QWidget* widget : roomWidgets_) {
+        widget->setVisible(false);
+    }
+    for (QWidget* widget : tuningWidgets_) {
         widget->setVisible(false);
     }
 }
@@ -442,8 +447,7 @@ std::vector<AnalysisPanel::PanelRow> AnalysisPanel::shownRows() const {
             row("tempo", tempo_),
             row("tempo_caveat", tempoCaveat_),
             row("confidence", tempoConfidence_),
-            row("first_beat", firstBeat_),
-            row("beats", beatCount_),
+            row("beat_grid", beatGrid_),
             row("pitch", pitch_),
             row("pitch_caveat", pitchCaveat_),
             row("voiced", voiced_),
@@ -567,6 +571,15 @@ void AnalysisPanel::showKey(const MusicalAnalysis& result) {
         label->setStyleSheet(
             QStringLiteral("color: %1;").arg(named ? kFirm.name() : kAbsent.name()));
     }
+
+    // Shown when there is something to see. Five cents is a fifth of the
+    // detuning at which the key itself carries a caveat, and well under what
+    // anyone would call in tune -- so below it the row would be reporting that
+    // nothing is wrong, over and over.
+    const bool worthSeeing = named && std::abs(result.key.tuningOffsetCents) > 5.0;
+    for (QWidget* widget : tuningWidgets_) {
+        widget->setVisible(worthSeeing);
+    }
 }
 
 void AnalysisPanel::showTempo(const MusicalAnalysis& result) {
@@ -581,11 +594,14 @@ void AnalysisPanel::showTempo(const MusicalAnalysis& result) {
     tempoConfidence_->setText(found || result.tempo.confidence > 0.0
                                   ? QStringLiteral("%1").arg(result.tempo.confidence, 0, 'f', 2)
                                   : QStringLiteral("--"));
-    firstBeat_->setText(found ? QStringLiteral("%1 s").arg(result.tempo.firstBeatSeconds, 0, 'f', 3)
-                              : QStringLiteral("--"));
-    beatCount_->setText(found ? QString::number(result.tempo.beatSeconds.size())
-                              : QStringLiteral("--"));
-    for (QLabel* label : {tempoConfidence_, firstBeat_, beatCount_}) {
+    // The offset as well as the count, because the offset is the number a
+    // caller setting a grid reaches for and the count is how much of the
+    // passage it covers.
+    beatGrid_->setText(found ? tr("%1 from %2 s")
+                                   .arg(result.tempo.beatSeconds.size())
+                                   .arg(result.tempo.firstBeatSeconds, 0, 'f', 3)
+                             : QStringLiteral("--"));
+    for (QLabel* label : {tempoConfidence_, beatGrid_}) {
         label->setStyleSheet(
             QStringLiteral("color: %1;").arg(found ? kFirm.name() : kAbsent.name()));
     }

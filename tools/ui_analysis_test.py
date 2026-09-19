@@ -433,9 +433,9 @@ def check_tempo_rule(values: dict[str, str], what: str) -> None:
         require(values["shown_tempo_caveat"] != "",
                 f"{what}: the panel refused a tempo without saying why")
         require(
-            values["shown_first_beat"] == "--" and values["shown_beats"] == "--",
-            f"{what}: no tempo was found, but the beat rows carry "
-            f"'{values['shown_first_beat']}' and '{values['shown_beats']}'",
+            values["shown_beat_grid"] == "--" and values["shown_confidence"] != "",
+            f"{what}: no tempo was found, but the grid row carries "
+            f"'{values['shown_beat_grid']}'",
         )
         return
 

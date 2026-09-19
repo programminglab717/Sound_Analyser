@@ -167,9 +167,19 @@ MainWindow::MainWindow() {
     side->addWidget(meters_);
     side->addWidget(analysisScroll);
     side->addWidget(spectrum_);
-    side->setStretchFactor(0, 3);
-    side->setStretchFactor(1, 2);
-    side->setStretchFactor(2, 2);
+    // The split as it opens, in pixels, because the alternative does not work:
+    // a splitter divides by size hints, and a scroll area's hint says nothing
+    // about the panel inside it, so the analysis panel would be handed the
+    // smallest share of the three and its tempo would start below the fold.
+    // These are the shares that put the key and the tempo on screen at the
+    // default window height. Anyone who wants it otherwise drags the handle.
+    side->setSizes({420, 230, 140});
+    // Where a larger window's extra height goes. Not to the analysis panel:
+    // it has a fixed amount to say, and once it is all on screen more room
+    // for it is room taken from the spectrum, which can always use it.
+    side->setStretchFactor(0, 2);
+    side->setStretchFactor(1, 0);
+    side->setStretchFactor(2, 3);
     auto* row = new QWidget{this};
     auto* across = new QHBoxLayout{row};
     across->setContentsMargins(0, 0, 0, 0);

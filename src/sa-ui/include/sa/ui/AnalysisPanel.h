@@ -146,12 +146,15 @@ private:
     QLabel* keyCaveat_ = nullptr;
     QLabel* runnerUp_ = nullptr;
     QLabel* tuning_ = nullptr;
+    /// The tuning row and its label, hidden together. A row reading "+0 cents"
+    /// on every well-made recording is a row spent saying nothing, and the
+    /// side column has three panels to fit into 760 pixels.
+    std::vector<QWidget*> tuningWidgets_;
 
     QLabel* tempo_ = nullptr;
     QLabel* tempoCaveat_ = nullptr;
     QLabel* tempoConfidence_ = nullptr;
-    QLabel* firstBeat_ = nullptr;
-    QLabel* beatCount_ = nullptr;
+    QLabel* beatGrid_ = nullptr;
 
     QLabel* pitch_ = nullptr;
     QLabel* pitchCaveat_ = nullptr;
