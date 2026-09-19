@@ -122,13 +122,16 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | A draggable EQ curve over the analyser | ✅ Done — drag for frequency and gain, wheel or shift-drag for Q; the drawn curve is checked against the filter's own transfer function, and applying it moves the audio by what the curve promised |
 | GPU shader renderer | ⬜ An optimisation, not a requirement — the CPU path fits in the frame budget |
 
-**980 tests passing on GCC 13, under ASan/UBSan with leak detection, and
-under ThreadSanitizer**, plus five end-to-end driver scripts that run the real
-binaries: one that edits and compares exported samples, one that renders the
-window and inspects the pixels, one that drives the EQ curve with synthesised
-pointer events and checks the drawing against the filter's own maths, one that
-restarts the application against settings files it has damaged on purpose, and
-one that exercises every `auscultate-cli` command.
+**997 tests passing on GCC 13**, with the suite also run under ASan/UBSan
+with leak detection and under ThreadSanitizer -- not the same set each time, and
+the difference is stated below rather than glossed. Six end-to-end driver
+scripts run the real binaries: one that edits and compares exported samples, one
+that renders the window and inspects the pixels, one that drives the EQ curve
+with synthesised pointer events and checks the drawing against the filter's own
+maths, one that reads the analysis the window reports and checks it against
+answers known by construction, one that restarts the application against
+settings files it has damaged on purpose, and one that exercises every
+`auscultate-cli` command.
 CI runs the same suite on MSVC 19 (Visual Studio 18), and the most recent run
 was green on every job -- both Windows configurations included -- and produced
 a packaged Windows build as an artifact.
@@ -198,6 +201,22 @@ number.
   honest description is that two real faults were removed, not that the crash
   was diagnosed, and the next unexplained crash should be treated as new rather
   than as this one returning.
+- **ThreadSanitizer has never seen the window.** It gates every commit, and
+  there is now a check beside it that compiles a deliberate data race with the
+  build's own flags and fails if the sanitiser stays quiet -- so a clean run
+  means the sanitiser was awake. What it covers is everything below the
+  interface. The sanitiser jobs install no Qt, and the tests that need a widget
+  are left out of a ThreadSanitizer build even where Qt is present, because the
+  ordering that makes a worker's result safe to hand to the window is a mutex
+  inside libQt6Core, which nothing instrumented: hand one integer across a
+  queued connection and the sanitiser reports it, in a thirty-line program that
+  shares nothing else. `tools/tsan_selftest.py` demonstrates that too, on any
+  machine with Qt installed. Every report the panels produce is that one
+  hand-off and nothing else -- thirty-nine of them from the two analysis-panel
+  tests, in six runs out of six, all of the same shape. So the two panels'
+  worker hand-off is the one piece of threading here that rests on reading and
+  on tests that drive it rather than on the sanitiser; closing that needs a Qt
+  built with the sanitiser.
 - **No audio has come out of real hardware.** WASAPI and ALSA are written and
   tested against a real thread on a real clock, and the ALSA path streams through
   ALSA itself, but nothing here has driven a sound card.

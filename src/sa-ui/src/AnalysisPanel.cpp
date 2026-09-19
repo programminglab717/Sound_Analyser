@@ -1,4 +1,5 @@
 #include <sa/ui/AnalysisPanel.h>
+#include <sa/ui/ChunkedPitch.h>
 
 #include <QGridLayout>
 #include <QLabel>
@@ -56,103 +57,6 @@ private:
         done += read.value();
     }
     return done;
-}
-
-/// A hop that gives a contour a few points per pixel of a wide window without
-/// tracking a two-minute passage at the default 5.3 ms.
-///
-/// The default hop is right for a phrase and wasteful for a passage: at 48 kHz
-/// it is 22,500 frames a minute, every one of them a transform, and a display
-/// two thousand columns wide cannot show more than a fraction of them. So the
-/// hop grows with the length, in powers of two, and stops at eight times the
-/// default -- past which the contour starts to miss notes rather than merely
-/// draw them with fewer points.
-///
-/// The hop is reported alongside the contour, because it is the time resolution
-/// of everything drawn from it.
-[[nodiscard]] SampleCount pitchHopFor(SampleCount frames, SampleCount base) {
-    constexpr SampleCount kComfortableFrames = 1 << 21; // About 44 s at 48 kHz.
-    SampleCount hop = base;
-    while (hop < base * 8 && frames > kComfortableFrames * (hop / base)) {
-        hop *= 2;
-    }
-    return hop;
-}
-
-/// The contour, tracked a second of audio at a time so it can be given up on.
-///
-/// By far the most expensive thing here -- on a two-minute passage it is an
-/// order of magnitude more work than everything else put together -- and the
-/// one place where a superseded run would otherwise hold the window still for
-/// seconds. trackPitch() takes a buffer and runs to the end of it, so the only
-/// way to make it interruptible is to hand it less at a time.
-///
-/// This produces exactly the contour one call would have produced, and that is
-/// worth spelling out rather than hoping for. trackPitch places a frame at
-/// every multiple of the hop for which window + longestLag samples remain, and
-/// each frame's reading depends on nothing outside that span. So a chunk
-/// starting at a multiple of the hop and carrying that span past its own end
-/// gives its frames the identical samples they would have had, and the frames
-/// kept from each chunk tile the whole exactly once. The alternative -- cutting
-/// the buffer up and keeping whatever came back -- drops the frames straddling
-/// every seam, and a contour with a hole every second is a contour that says
-/// "unvoiced" where it means "not looked at".
-[[nodiscard]] Result<std::vector<analysis::PitchPoint>>
-trackPitchInChunks(ConstAudioBufferView audio, SampleRate rate,
-                   const analysis::PitchSettings& settings, const CancellationToken& cancellation) {
-    // Settings this cannot divide by are handed on whole, so that the refusal
-    // comes from the tracker with its own account of what was wrong rather
-    // than from arithmetic here.
-    if (!(settings.hop > 0) || !(settings.minHz > 0.0) || !rate.isValid()) {
-        return analysis::trackPitch(audio, rate, settings);
-    }
-
-    // A second of audio: about a tenth of a second of work at the settings
-    // this is used with, which is short enough not to be felt and long enough
-    // that rebuilding the tracker's transform tables per chunk is noise.
-    const SampleCount chunk = std::max<SampleCount>(
-        settings.hop, static_cast<SampleCount>(rate.hz()) / settings.hop * settings.hop);
-    // What a frame reads past its own start, plus a hop so that the last frame
-    // of a chunk is complete. Erring long costs a few frames that are then
-    // discarded; erring short would lose them.
-    const SampleCount span = settings.window +
-                             static_cast<SampleCount>(std::ceil(rate.hz() / settings.minHz)) +
-                             settings.hop;
-
-    std::vector<analysis::PitchPoint> contour;
-    for (SampleCount base = 0; base < audio.frames(); base += chunk) {
-        if (cancellation.isCancelled()) {
-            // What it had, which nothing will look at: a cancelled run is a
-            // superseded one, and its generation check drops the result.
-            return contour;
-        }
-        const bool last = base + chunk >= audio.frames();
-        const SampleCount take =
-            last ? audio.frames() - base : std::min(chunk + span, audio.frames() - base);
-        auto part = analysis::trackPitch(audio.subRange(base, take), rate, settings);
-        if (!part) {
-            // Only the first chunk's refusal is the caller's answer. A later
-            // one means the tail was shorter than a frame, which is not a
-            // failure of anything.
-            if (base == 0) {
-                return part.error();
-            }
-            break;
-        }
-        // The chunk's own times start at zero; they are times in the passage.
-        const double offset = static_cast<double>(base) / rate.hz();
-        for (analysis::PitchPoint& point : part.value()) {
-            point.timeSeconds += offset;
-        }
-        // Frames past the chunk's own end belong to the next chunk, which will
-        // produce them itself.
-        const std::size_t keep =
-            last ? part.value().size()
-                 : std::min(part.value().size(), static_cast<std::size_t>(chunk / settings.hop));
-        contour.insert(contour.end(), part.value().begin(),
-                       part.value().begin() + static_cast<std::ptrdiff_t>(keep));
-    }
-    return contour;
 }
 
 /// Run every stage the request asks for over `audio`, filling `out`.
