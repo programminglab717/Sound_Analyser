@@ -69,9 +69,9 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | Build, presets, warnings-as-errors, CI on Windows and Linux | ✅ Done — ASan, UBSan and TSan all gate every commit |
 | Licence allowlist gate (`tools/check_licences.py`) | ✅ Done, negative-tested three ways |
 | `sa-core`: buffers, channel layouts, time types, `Result`, RT instrumentation | ✅ Done |
-| `sa-dsp`: FFT, windows, STFT, biquads, EQ, dynamics, resampling | ✅ Done — STFT round trip is a CI gate |
+| `sa-dsp`: FFT, windows, STFT, biquads, EQ, dynamics, resampling, dither, channel ops | ✅ Done — STFT round trip is a CI gate |
 | `sa-io`: WAV, AIFF, FLAC, MP3, peak pyramid, WAV writer | ✅ Done |
-| `sa-analysis`: LUFS, true peak, statistics, compliance targets, average spectrum | ✅ Done — see the caveat below |
+| `sa-analysis`: LUFS, true peak, statistics, compliance targets, average spectrum, stereo field, octave bands, provenance | ✅ Done — see the caveat below |
 | `sa-spectral`: spectrogram pyramid, attenuate and heal | ✅ Done |
 | `sa-engine`: non-destructive document, edits, undo, sessions | ✅ Done |
 | `sa-device`: WASAPI, ALSA, null backend | ✅ Done — never run on real hardware |
@@ -98,26 +98,33 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | A draggable EQ curve over the analyser | ⬜ Next |
 | GPU shader renderer | ⬜ An optimisation, not a requirement — the CPU path fits in the frame budget |
 
-**598 tests passing on GCC 13, under ASan/UBSan with leak detection, and under
-ThreadSanitizer.** CI runs the same suite on MSVC 19 (Visual Studio 18), and
-the most recent run was green on every job -- both Windows configurations
-included -- and produced a packaged Windows build as an artifact.
+**660 tests passing on GCC 13, under ASan/UBSan with leak detection, and under
+ThreadSanitizer**, plus three end-to-end driver scripts that run the real
+binaries: one that edits and compares exported samples, one that renders the
+window and inspects the pixels, and one that exercises every `sa-cli` command.
+CI runs the same suite on MSVC 19 (Visual Studio 18), and the most recent run
+was green on every job -- both Windows configurations included -- and produced
+a packaged Windows build as an artifact.
 
-Four things the tests check that are worth naming, because each one covers a
-whole chain rather than a unit:
+Some of what the tests check, because each one covers a whole chain rather
+than a unit:
 
 - **Measure, normalise, export, re-measure lands on −23.000 LUFS** against EBU
   R128's −23.0. The K-weighting, the gating, the gain verb, the render and the
   WAV writer all have to be right for that to happen.
-- **Editing is compared sample by sample.** Ten operations are driven through the
-  window headlessly, exported, and checked against what they should have
-  produced. All ten are bit-exact.
+- **Editing is compared sample by sample.** Every editing verb is driven through
+  the window headlessly, exported, and checked against what it should have
+  produced rather than against itself. Cut, paste, trim, silence, undo, redo,
+  reverse, invert, swap and sum-to-mono all come back with a worst sample
+  difference of exactly zero.
 - **Processing is checked against theory, not against itself.** A second-order
   Butterworth has a magnitude anyone can write down; the filter is held to that
   figure to a tenth of a decibel rather than to "it got quieter", and to a
   twentieth of one in the band it was not pointed at. The same standard applies
   to the limiter, which is judged by a band-limited reconstruction that shares
-  no code with the detector it was built against.
+  no code with the detector it was built against, and to the five fade shapes,
+  which are compared against their formulas by exporting a constant so that the
+  samples *are* the gain curve.
 - **Races are looked for, not waited for.** A rare crash in the interface turned
   out to be a background spectrogram build reading the document while an edit
   rewrote it; ThreadSanitizer named the exact pair of lines. Analysis sources
