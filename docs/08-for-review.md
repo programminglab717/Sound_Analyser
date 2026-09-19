@@ -17,10 +17,10 @@ run `sound-analyser.exe`. Qt ships beside it, so there is nothing to install.
 It is about 13.3 MB and it is built and tested by the same run that produces it:
 every CI job green -- both MSVC configurations, AddressSanitizer and
 ThreadSanitizer among them -- before the package is uploaded. `sa-cli.exe` is
-in the folder beside it: the headless driver, with twenty commands: analyse,
-bands, room, sweep, deconvolve, key, provenance, convert, normalise, denoise,
-declick, declip, dehum, deess, compress, gate, channels, render, stretch and
-pitch. `analyse --csv` gives one
+in the folder beside it: the headless driver, with twenty-two commands: analyse,
+bands, room, sweep, deconvolve, key, pitch-of, null, provenance, convert,
+normalise, denoise, declick, declip, dehum, deess, compress, gate, channels,
+render, stretch and pitch. `analyse --csv` gives one
 row per file, which is what to point at a folder of deliverables.
 
 Then open something real — a recording of your own, not a test tone — and try:
@@ -180,6 +180,22 @@ Not blocked, but a person's judgement would be better than mine.
   not defaults that happen to match; the deconvolution is only valid against
   the exact sweep that was played, and passing different ones gives a
   confident, wrong answer rather than an error.
+
+- **`sa-cli null` is the one I would reach for first.** Take a file, run it
+  through anything -- this tool, another tool, a plugin chain, an export at a
+  different setting -- and null the result against the original. It aligns
+  them, matches their level and prints how far below the reference whatever is
+  left sits, where in time it is worst, and which octave bands it lives in.
+
+  An exact copy nulls to the float floor. A copy delayed by 137 samples and
+  halved in level also nulls to the float floor, with the delay and the
+  -6.02 dB reported. So anything that does not null is a real difference, and
+  the number is how big.
+
+  The band table prints the reference level beside the residual on purpose. A
+  band where the reference has nothing in it shows the residual as enormously
+  louder, which looks like the biggest difference in the file and is the
+  opposite of one.
 
 - **Whether `sa-cli key` is right about music you know the key of.** This is
   the one on the list I am least able to check myself. It is right on every

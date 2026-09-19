@@ -101,8 +101,21 @@ branch unnoticed.
     published probe-tone tables. Those would probably do better and are a
     small change once someone has the actual numbers to hand, which is not the
     same as recalling them.
-12. **Forensics.** Half done. Lossy-codec cutoff detection and true bit-depth
-    detection are in `sa-cli provenance`; the **A/B null test** is not started.
+
+    Pitch: done, as `sa-cli pitch-of`. YIN, with the cumulative mean
+    normalisation, the absolute threshold and parabolic interpolation.
+    Monophonic and says so. Recovers a known period to within 0.5% and reports
+    nothing rather than a number on noise. Not checked against any published
+    implementation or any recorded voice.
+
+    Tempo and beat grid: in progress.
+12. **Forensics.** Done. Lossy-codec cutoff detection and true bit-depth
+    detection are in `sa-cli provenance`, and the A/B null test is `sa-cli
+    null`: align, gain-match, subtract, and report the residual with a
+    per-octave breakdown. An exact copy, a delayed copy and a scaled copy all
+    null to the float floor, so anything that does not null is a real
+    difference. Nothing is checked against another implementation of a null
+    test; the ground truth is constructed.
 
 ## Worth attempting, uncertain
 

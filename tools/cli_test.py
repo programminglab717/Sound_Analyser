@@ -622,6 +622,123 @@ def main() -> int:
               run("deconvolve", str(workspace / "nope.wav"),
                   str(workspace / "out.wav")).returncode != 0)
 
+        print("pitch-of:")
+
+        def sawtooth(hz: float, seconds: float) -> list[float]:
+            """Harmonics at 1/h, so the detector has to find the fundamental
+            rather than the loudest partial. A pure sine would not test that."""
+            count = int(SAMPLE_RATE * seconds)
+            partials = [hz * h for h in range(1, 20) if hz * h < SAMPLE_RATE * 0.45]
+            return [
+                0.13 * sum(math.sin(2.0 * math.pi * p * i / SAMPLE_RATE) / (n + 1)
+                           for n, p in enumerate(partials))
+                for i in range(count)
+            ]
+
+        for hz in (110.0, 220.0, 440.0):
+            tone = workspace / f"tone-{int(hz)}.wav"
+            write_wav(tone, sawtooth(hz, 1.0))
+            result = run("pitch-of", str(tone), "--json")
+            check(f"pitch-of exits cleanly on {int(hz)} Hz", result.returncode == 0, result.stderr)
+            if result.returncode != 0:
+                continue
+            report = json.loads(result.stdout)
+            # Half a per cent, which is a fourteenth of a semitone. Parabolic
+            # interpolation is what makes that reachable at all: the nearest
+            # integer lag for 440 Hz at 48 kHz is 109 samples, which alone
+            # would read 440.4 Hz.
+            check(f"{int(hz)} Hz comes back within 0.5%",
+                  report["medianHz"] is not None and abs(report["medianHz"] - hz) < 0.005 * hz,
+                  str(report["medianHz"]))
+            check(f"{int(hz)} Hz is voiced throughout",
+                  report["voicedFraction"] > 0.9, str(report["voicedFraction"]))
+
+        # Noise has no period, so nothing should be voiced and no pitch
+        # reported -- a detector that always returns a number is worse than one
+        # that admits it found nothing.
+        hiss = workspace / "hiss.wav"
+        rng_pitch = random.Random(29)
+        write_wav(hiss, [0.2 * rng_pitch.gauss(0.0, 1.0) for _ in range(SAMPLE_RATE)])
+        result = run("pitch-of", str(hiss), "--json")
+        check("pitch-of exits cleanly on noise", result.returncode == 0, result.stderr)
+        if result.returncode == 0:
+            report = json.loads(result.stdout)
+            check("noise is mostly unvoiced", report["voicedFraction"] < 0.2,
+                  str(report["voicedFraction"]))
+
+        result = run("pitch-of", str(workspace / "tone-220.wav"), "--csv")
+        check("pitch-of --csv exits cleanly", result.returncode == 0, result.stderr)
+        if result.returncode == 0:
+            rows = [line for line in result.stdout.splitlines() if line.strip()]
+            check("the contour has a header and many rows", len(rows) > 50, f"{len(rows)} lines")
+            check("the header names its columns",
+                  rows[0] == "seconds,hz,confidence,voiced", rows[0])
+
+        check("pitch-of with no file fails", run("pitch-of").returncode != 0)
+        check("pitch-of on a missing file fails",
+              run("pitch-of", str(workspace / "nope.wav")).returncode != 0)
+
+        print("null:")
+        base = sawtooth(220.0, 1.0)
+        reference = workspace / "null-reference.wav"
+        write_wav32(reference, base)
+
+        same = workspace / "null-same.wav"
+        write_wav32(same, base)
+        result = run("null", str(reference), str(same), "--json")
+        check("null exits cleanly", result.returncode == 0, result.stderr)
+        if result.returncode == 0:
+            report = json.loads(result.stdout)
+            check("a file against itself is identical", report["verdict"] == "bit-identical",
+                  report["verdict"])
+            check("with no delay and no gain",
+                  report["delaySamples"] == 0 and abs(report["gainDb"]) < 0.001, str(report))
+
+        # Delayed by 137 samples and halved. Both are exact operations on a
+        # float, so this has to null completely: 20*log10(0.5) = -6.0206 dB.
+        moved = workspace / "null-moved.wav"
+        write_wav32(moved, [0.0] * 137 + [v * 0.5 for v in base])
+        result = run("null", str(reference), str(moved), "--json")
+        check("null exits cleanly on a shifted copy", result.returncode == 0, result.stderr)
+        if result.returncode == 0:
+            report = json.loads(result.stdout)
+            check("the delay is found exactly", report["delaySamples"] == 137,
+                  str(report["delaySamples"]))
+            check("and the level", abs(report["gainDb"] - -6.0206) < 0.01, str(report["gainDb"]))
+            check("and it nulls", report["residualDb"] < -100.0, str(report["residualDb"]))
+
+        # Noise added at a known level. The residual is that noise, so it has
+        # to read back at the level it was added at, within a decibel.
+        rng_null = random.Random(31)
+        reference_rms = rms(base)
+        noise_rms = reference_rms * (10.0 ** (-30.0 / 20.0))
+        dirty = workspace / "null-dirty.wav"
+        write_wav32(dirty, [v + noise_rms * rng_null.gauss(0.0, 1.0) for v in base])
+        result = run("null", str(reference), str(dirty), "--json")
+        check("null exits cleanly on an altered copy", result.returncode == 0, result.stderr)
+        if result.returncode == 0:
+            report = json.loads(result.stdout)
+            check("an altered copy is reported as different",
+                  report["verdict"] == "different", report["verdict"])
+            check("and the residual is the level the noise was added at",
+                  abs(report["residualDb"] - -30.0) < 1.5, str(report["residualDb"]))
+            check("the band table carries the reference level too",
+                  all("referenceDb" in band for band in report["bands"]), str(report["bands"][:1]))
+
+        # Polarity inversion nulls at 0 dB under a magnitude gain, so it has to
+        # be reported separately or it reads exactly like two identical files.
+        flipped = workspace / "null-flipped.wav"
+        write_wav32(flipped, [-v for v in base])
+        result = run("null", str(reference), str(flipped), "--json")
+        if result.returncode == 0:
+            report = json.loads(result.stdout)
+            check("a polarity inversion is reported as one",
+                  report["polarityInverted"] is True, str(report))
+
+        check("null with one file fails", run("null", str(reference)).returncode != 0)
+        check("null on a missing file fails",
+              run("null", str(reference), str(workspace / "nope.wav")).returncode != 0)
+
         print("key:")
 
         def render_progression(path: Path, chords: list[tuple[list[int], int]],

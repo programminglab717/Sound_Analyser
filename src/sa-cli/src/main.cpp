@@ -12,7 +12,9 @@
 #include <sa/analysis/ComplianceTarget.h>
 #include <sa/analysis/KeyDetect.h>
 #include <sa/analysis/LoudnessMeter.h>
+#include <sa/analysis/NullTest.h>
 #include <sa/analysis/OctaveBands.h>
+#include <sa/analysis/PitchTrack.h>
 #include <sa/analysis/Provenance.h>
 #include <sa/analysis/RoomAcoustics.h>
 #include <sa/analysis/SignalStatistics.h>
@@ -454,6 +456,30 @@ void usage() {
       specifies -- nothing here claims to meet its tolerance masks, and a
       certified measurement needs a bank this does not have.
 
+  pitch-of <file> [--min <hz>] [--max <hz>] [--threshold <t>] [--channel <n>]
+        [--csv | --json]
+      Track the fundamental over time, by YIN. Prints the median of the voiced
+      frames and how much of the file was voiced at all; --csv gives the whole
+      contour, one row per frame, with an empty cell where nothing periodic
+      was found rather than a zero.
+
+      Monophonic. Given two notes at once it reports one of them and which one
+      is not defined. Widening --min costs time on every frame, because the
+      lowest pitch sets how many samples each one has to read.
+
+  null <reference> <other> [--no-align] [--no-gain-match] [--max-delay <n>]
+        [--channel <n>] [--json]
+      Subtract two recordings that should be the same and report what is left.
+      Aligns them, matches their level, then prints how far the residual sits
+      below the reference, where in time it is worst, and a per-octave
+      breakdown.
+
+      This is the forensic answer to "did that processing chain actually change
+      anything". A residual at the float floor means it did not. The band table
+      prints the reference level beside the residual, because a band where the
+      reference is silent shows a large positive ratio that means the opposite
+      of what it looks like.
+
   key <file> [--channel <n>] [--json]
       Work out what key the music is in. Folds the spectrum onto the twelve
       pitch classes and compares the result against each of the twenty-four
@@ -862,6 +888,197 @@ int room(const Options& options) {
 
     if (asJson) {
         std::printf("  ]\n}\n");
+    }
+    return 0;
+}
+
+int pitch_of(const Options& options) {
+    if (options.positional.size() != 2) {
+        return fail("pitch-of needs one file");
+    }
+    std::string error;
+    const auto source = open(options.positional[1], error);
+    if (!source) {
+        return fail(error);
+    }
+    const sa::io::AudioFileInfo& info = source->info();
+
+    sa::AudioBuffer audio{info.layout, info.frameCount};
+    if (const auto read = source->read(0, audio.view()); !read) {
+        return fail(std::string{read.error().what()});
+    }
+
+    sa::analysis::PitchSettings settings;
+    settings.minHz = options.number("min", settings.minHz);
+    settings.maxHz = options.number("max", settings.maxHz);
+    settings.threshold = options.number("threshold", settings.threshold);
+    const auto channel = static_cast<int>(options.number("channel", 0.0));
+
+    const auto contour = sa::analysis::trackPitch(audio.view(), info.sampleRate, settings, channel);
+    if (!contour) {
+        return fail(std::string{contour.error().what()});
+    }
+    const auto& points = contour.value();
+
+    // The median of the voiced frames, which is what estimatePitch would give
+    // and is the number worth printing above a contour.
+    std::vector<double> voiced;
+    for (const auto& point : points) {
+        if (point.voiced) {
+            voiced.push_back(point.hz);
+        }
+    }
+    std::sort(voiced.begin(), voiced.end());
+    const double median = voiced.empty() ? 0.0 : voiced[voiced.size() / 2];
+    const double voicedFraction =
+        points.empty() ? 0.0
+                       : static_cast<double>(voiced.size()) / static_cast<double>(points.size());
+
+    if (options.has("csv")) {
+        std::printf("seconds,hz,confidence,voiced\n");
+        for (const auto& point : points) {
+            std::printf("%.4f,", point.timeSeconds);
+            if (point.voiced) {
+                std::printf("%.3f,", point.hz);
+            } else {
+                std::printf(",");
+            }
+            std::printf("%.4f,%d\n", point.confidence, point.voiced ? 1 : 0);
+        }
+        return 0;
+    }
+
+    const auto name = std::filesystem::path{options.positional[1]}.filename().string();
+    if (options.has("json")) {
+        std::printf("{\n  \"file\": \"%s\",\n", name.c_str());
+        // Null rather than zero where nothing was voiced: zero hertz is not a
+        // pitch that was measured, and a consumer summing a column of these
+        // should not be handed one.
+        if (voiced.empty()) {
+            std::printf("  \"medianHz\": null,\n  \"lowestHz\": null,\n  \"highestHz\": null,\n");
+        } else {
+            std::printf("  \"medianHz\": %.3f,\n  \"lowestHz\": %.3f,\n  \"highestHz\": %.3f,\n",
+                        median, voiced.front(), voiced.back());
+        }
+        std::printf("  \"voicedFraction\": %.4f,\n  \"frames\": %zu\n}\n", voicedFraction,
+                    points.size());
+        return 0;
+    }
+
+    std::printf("%s\n", name.c_str());
+    if (voiced.empty()) {
+        std::printf("    nothing periodic found between %.0f Hz and %.0f Hz\n", settings.minHz,
+                    settings.maxHz);
+        return 0;
+    }
+    std::printf("    median     %.2f Hz\n", median);
+    std::printf("    range      %.2f Hz to %.2f Hz over the voiced frames\n", voiced.front(),
+                voiced.back());
+    std::printf("    voiced     %.0f%% of %zu frames\n", voicedFraction * 100.0, points.size());
+    std::printf("    --csv gives the whole contour, one row per frame.\n");
+    return 0;
+}
+
+int nulltest(const Options& options) {
+    if (options.positional.size() != 3) {
+        return fail("null needs two files to compare");
+    }
+    std::string error;
+    const auto referenceFile = open(options.positional[1], error);
+    if (!referenceFile) {
+        return fail(error);
+    }
+    const auto otherFile = open(options.positional[2], error);
+    if (!otherFile) {
+        return fail(error);
+    }
+    const sa::io::AudioFileInfo& referenceInfo = referenceFile->info();
+    const sa::io::AudioFileInfo& otherInfo = otherFile->info();
+    if (std::abs(referenceInfo.sampleRate.hz() - otherInfo.sampleRate.hz()) > 0.5) {
+        return fail("the two files are at different sample rates; convert one first");
+    }
+
+    sa::AudioBuffer reference{referenceInfo.layout, referenceInfo.frameCount};
+    if (const auto read = referenceFile->read(0, reference.view()); !read) {
+        return fail(std::string{read.error().what()});
+    }
+    sa::AudioBuffer other{otherInfo.layout, otherInfo.frameCount};
+    if (const auto read = otherFile->read(0, other.view()); !read) {
+        return fail(std::string{read.error().what()});
+    }
+
+    sa::analysis::NullSettings settings;
+    settings.alignDelay = !options.has("no-align");
+    settings.matchGain = !options.has("no-gain-match");
+    settings.maxDelaySamples = static_cast<sa::SampleCount>(options.number("max-delay", 0.0));
+    const auto channel = static_cast<int>(options.number("channel", 0.0));
+
+    const auto result = sa::analysis::nullTest(reference.view(), other.view(),
+                                               referenceInfo.sampleRate, settings, channel);
+    if (!result) {
+        return fail(std::string{result.error().what()});
+    }
+    const auto& found = result.value();
+
+    const auto verdictName = [](sa::analysis::NullVerdict verdict) {
+        switch (verdict) {
+        case sa::analysis::NullVerdict::BitIdentical:
+            return "bit-identical";
+        case sa::analysis::NullVerdict::WithinFloatFloor:
+            return "identical within the float floor";
+        case sa::analysis::NullVerdict::Different:
+            break;
+        }
+        return "different";
+    };
+
+    if (options.has("json")) {
+        std::printf("{\n  \"verdict\": \"%s\",\n", verdictName(found.verdict));
+        std::printf("  \"delaySamples\": %lld,\n", static_cast<long long>(found.delaySamples));
+        std::printf("  \"gainDb\": %.4f,\n  \"polarityInverted\": %s,\n", found.gainDb,
+                    found.polarityInverted ? "true" : "false");
+        std::printf("  \"residualDb\": %.4f,\n  \"peakResidualDb\": %.4f,\n", found.residualDb,
+                    found.peakResidualDb);
+        std::printf("  \"worstTimeSeconds\": %.4f,\n  \"comparedFrames\": %lld,\n",
+                    found.worstTimeSeconds, static_cast<long long>(found.comparedFrames));
+        std::printf("  \"bands\": [\n");
+        for (std::size_t i = 0; i < found.bands.size(); ++i) {
+            const auto& band = found.bands[i];
+            std::printf("    {\"centreHz\": %.1f, \"referenceDb\": %.2f, \"residualDb\": %.2f, "
+                        "\"relativeDb\": %.2f}%s\n",
+                        band.centreHz, band.referenceDb, band.residualDb, band.relativeDb,
+                        i + 1 < found.bands.size() ? "," : "");
+        }
+        std::printf("  ]\n}\n");
+        return 0;
+    }
+
+    std::printf("%s against %s\n",
+                std::filesystem::path{options.positional[2]}.filename().string().c_str(),
+                std::filesystem::path{options.positional[1]}.filename().string().c_str());
+    std::printf("    verdict    %s\n", verdictName(found.verdict));
+    std::printf("    delay      %lld samples\n", static_cast<long long>(found.delaySamples));
+    std::printf("    level      %+.2f dB%s\n", found.gainDb,
+                found.polarityInverted ? ", polarity inverted" : "");
+    std::printf("    residual   %.2f dB below the reference\n", found.residualDb);
+    if (found.verdict == sa::analysis::NullVerdict::Different) {
+        std::printf("    worst at   %.3f s, peaking %.2f dB down\n", found.worstTimeSeconds,
+                    found.peakResidualDb);
+        // Reference and residual both, not just their ratio. A band where the
+        // reference has nothing in it shows a huge positive ratio -- the
+        // residual is louder than a silence -- which reads as the biggest
+        // difference in the file when it is the opposite of one. Printing the
+        // two levels makes that visible instead of alarming.
+        std::printf("    by band:        reference    residual\n");
+        for (const auto& band : found.bands) {
+            std::printf("      %8.1f Hz   %7.1f dB  %7.1f dB", band.centreHz, band.referenceDb,
+                        band.residualDb);
+            if (band.referenceDb < -80.0) {
+                std::printf("   nothing in the reference here\n");
+            } else {
+                std::printf("   %+6.1f dB\n", band.relativeDb);
+            }
+        }
     }
     return 0;
 }
@@ -1792,6 +2009,12 @@ int main(int argc, char** argv) {
     }
     if (command == "bands") {
         return bands(options);
+    }
+    if (command == "pitch-of") {
+        return pitch_of(options);
+    }
+    if (command == "null") {
+        return nulltest(options);
     }
     if (command == "key") {
         return key(options);
