@@ -45,6 +45,16 @@ public:
 
     [[nodiscard]] const AudioFileInfo& info() const noexcept override { return info_; }
 
+    /// Whatever the stream's VORBIS_COMMENT block carried.
+    ///
+    /// Parsed here rather than asked of dr_flac, and deliberately so. The
+    /// argument for handing the audio to a fuzzed decoder does not reach the
+    /// metadata blocks: they are a length-prefixed list of strings at the front
+    /// of the file, reading them is bounds-checked byte access of the kind this
+    /// module already does for WAV and AIFF, and doing it here leaves the
+    /// decode path -- the part that is hard to get right -- untouched.
+    [[nodiscard]] const AudioFileMetadata& metadata() const noexcept { return metadata_; }
+
     /// Read up to `destination.frames()` frames starting at `startFrame`,
     /// converting to float32 in [-1, 1].
     ///
@@ -71,6 +81,7 @@ private:
 
     std::shared_ptr<Decoder> decoder_;
     AudioFileInfo info_;
+    AudioFileMetadata metadata_;
 };
 
 } // namespace sa::io

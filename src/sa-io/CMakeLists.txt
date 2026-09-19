@@ -48,10 +48,12 @@ endif()
 # ---------------------------------------------------------------------------
 add_library(sa-io STATIC
     src/AiffReader.cpp
+    src/AiffWriter.cpp
     src/AudioFile.cpp
     src/AudioFileInfo.cpp
     src/ByteSource.cpp
     src/FlacReader.cpp
+    src/FlacWriter.cpp
     src/Mp3Reader.cpp
     src/PeakPyramid.cpp
     src/WavReader.cpp
@@ -68,8 +70,10 @@ target_link_libraries(sa-io PRIVATE sa-io-drlibs sa-warnings)
 if(SA_BUILD_TESTS)
     add_executable(sa-io-tests
         tests/AiffTests.cpp
+        tests/AiffWriterTests.cpp
         tests/AudioFileTests.cpp
         tests/FlacTests.cpp
+        tests/FlacWriterTests.cpp
         tests/Mp3Tests.cpp
         tests/PeakPyramidTests.cpp
         tests/StreamingPyramidTests.cpp
