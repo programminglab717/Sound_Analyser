@@ -43,6 +43,7 @@ Then open something real — a recording of your own, not a test tone — and tr
 | Dehum | Repair ▸ Remove mains hum. It finds the frequency itself — 50 or 60, and to a hundredth of a Hertz — and says what it found |
 | Mark | Ctrl+M drops a marker at the caret, or over the selection if there is one. Alt+Left and Alt+Right walk between them, and landing on a region selects it |
 | Flip it about | Process ▸ Reverse, Invert polarity, Swap channels, Sum to mono. Each one obeys the selection, so they work on a passage as well as the whole file |
+| Fade | Process ▸ Fade in or Fade out over a selection. Process ▸ Fade shape picks the curve: linear unless you change it, and equal power is the one that does not leave a hole when two fades meet |
 | Save | File ▸ Save session, reopen it, check nothing was lost |
 
 **What I need back.** Not a bug list — impressions. Where did you expect

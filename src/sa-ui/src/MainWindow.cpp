@@ -40,6 +40,49 @@ namespace sa::ui {
 
 namespace {
 
+/// The five fade curves, with the name each goes by in the menu and in a batch
+/// verb.
+///
+/// One table rather than a switch in each place: the menu, the undo label and
+/// the verb parser all have to agree about the set, and three lists that have
+/// to agree are two chances to forget one. The label is a callable because
+/// tr() cannot run before QApplication exists.
+struct FadeShapeEntry {
+    engine::FadeShape shape;
+    QString (*label)();
+    const char* verb;
+};
+
+const FadeShapeEntry kFadeShapes[] = {
+    {engine::FadeShape::Linear, [] { return MainWindow::tr("&Linear"); }, "linear"},
+    {engine::FadeShape::EqualPower, [] { return MainWindow::tr("&Equal power"); }, "equalpower"},
+    {engine::FadeShape::Logarithmic, [] { return MainWindow::tr("Lo&garithmic"); }, "logarithmic"},
+    {engine::FadeShape::Exponential, [] { return MainWindow::tr("E&xponential"); }, "exponential"},
+    {engine::FadeShape::SCurve, [] { return MainWindow::tr("&S-curve"); }, "scurve"},
+};
+
+/// The shape a verb names, or nothing if it names none of them.
+[[nodiscard]] std::optional<engine::FadeShape> fadeShapeFor(const QString& verb) {
+    for (const FadeShapeEntry& entry : kFadeShapes) {
+        if (verb == QLatin1String{entry.verb}) {
+            return entry.shape;
+        }
+    }
+    return std::nullopt;
+}
+
+/// What to call a shape in an undo label. Lower case and without the menu's
+/// ampersand, because it reads as part of a sentence rather than as a menu
+/// entry.
+[[nodiscard]] QString fadeShapeName(engine::FadeShape shape) {
+    for (const FadeShapeEntry& entry : kFadeShapes) {
+        if (entry.shape == shape) {
+            return entry.label().remove(QLatin1Char{'&'}).toLower();
+        }
+    }
+    return MainWindow::tr("unknown");
+}
+
 /// Ceiling on the spectrogram cache itself.
 ///
 /// The build streams now, so the decoded audio is no longer the constraint --
@@ -268,8 +311,22 @@ void MainWindow::buildMenus() {
         process->addAction(tr("&Normalise to target"), QKeySequence{Qt::CTRL | Qt::Key_N}, this,
                            &MainWindow::normaliseToTarget);
     process->addSeparator();
-    process->addAction(tr("Fade &in"), this, [this] { applyFade(true); });
-    process->addAction(tr("Fade &out"), this, [this] { applyFade(false); });
+    process->addAction(tr("Fade &in"), this, [this] { applyFade(true, fadeShape_); });
+    process->addAction(tr("Fade &out"), this, [this] { applyFade(false, fadeShape_); });
+
+    // The shape is a setting rather than five pairs of menu entries. Ten
+    // entries for what is one choice made once and then left alone would push
+    // the two verbs people actually reach for down a list.
+    QMenu* shapes = process->addMenu(tr("Fade &shape"));
+    auto* shapeGroup = new QActionGroup{this};
+    for (const FadeShapeEntry& entry : kFadeShapes) {
+        const engine::FadeShape shape = entry.shape;
+        QAction* action =
+            shapes->addAction(entry.label(), this, [this, shape] { fadeShape_ = shape; });
+        action->setCheckable(true);
+        action->setChecked(shape == fadeShape_);
+        shapeGroup->addAction(action);
+    }
     process->addSeparator();
     process->addAction(tr("F&latten"), this, &MainWindow::flattenRange);
 
@@ -1874,15 +1931,18 @@ void MainWindow::normaliseToTarget() {
     applyGainDecibels(*gain, tr("normalise to %1").arg(meters_->targetName()));
 }
 
-void MainWindow::applyFade(bool fadingIn) {
+void MainWindow::applyFade(bool fadingIn, engine::FadeShape shape) {
     const TimeSelection range = targetRange();
     if (range.isEmpty()) {
         return;
     }
-    (void)applyEdit(fadingIn ? tr("fade in") : tr("fade out"), [this, range, fadingIn] {
-        return engine::applyRangeFade(document_, range.start, range.end, fadingIn,
-                                      engine::FadeShape::Linear)
-            .ok();
+    // The label names the curve, so the undo menu distinguishes two fades of
+    // different shapes over the same range rather than offering "fade in"
+    // twice.
+    const QString label = fadingIn ? tr("%1 fade in").arg(fadeShapeName(shape))
+                                   : tr("%1 fade out").arg(fadeShapeName(shape));
+    (void)applyEdit(label, [this, range, fadingIn, shape] {
+        return engine::applyRangeFade(document_, range.start, range.end, fadingIn, shape).ok();
     });
 }
 
@@ -2156,6 +2216,22 @@ bool MainWindow::applyOperation(const QString& name) {
     if (name == "mark") {
         return addMarker(QString{});
     }
+    // fadein:scurve names the curve for this one fade without disturbing what
+    // the menu has selected, so a batch script says what it means rather than
+    // depending on hidden state.
+    for (const char* prefix : {"fadein:", "fadeout:"}) {
+        const QString start = QLatin1String{prefix};
+        if (!name.startsWith(start)) {
+            continue;
+        }
+        const auto shape = fadeShapeFor(name.mid(start.size()));
+        if (!shape) {
+            return false;
+        }
+        applyFade(start == QLatin1String{"fadein:"}, *shape);
+        return true;
+    }
+
     if (name.startsWith("mark:")) {
         return addMarker(name.mid(5));
     }
@@ -2219,9 +2295,9 @@ bool MainWindow::applyOperation(const QString& name) {
     if (name == "normalise") {
         normaliseToTarget();
     } else if (name == "fadein") {
-        applyFade(true);
+        applyFade(true, fadeShape_);
     } else if (name == "fadeout") {
-        applyFade(false);
+        applyFade(false, fadeShape_);
     } else if (name == "flatten") {
         flattenRange();
     } else if (name == "cut") {

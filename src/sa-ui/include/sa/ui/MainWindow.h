@@ -2,6 +2,7 @@
 
 #include <sa/core/Cancellation.h>
 #include <sa/dsp/ChannelOps.h>
+#include <sa/engine/Clip.h>
 #include <sa/engine/Document.h>
 #include <sa/engine/DocumentSource.h>
 #include <sa/engine/UndoHistory.h>
@@ -236,7 +237,11 @@ private:
     bool applyPitchShift(double semitones, const QString& label);
     void limitTo(double ceilingDb);
     void normaliseToTarget();
-    void applyFade(bool fadingIn);
+    /// Fade the selection in or out with `shape`.
+    ///
+    /// The shape is a parameter rather than a member read inside, so a batch
+    /// verb can name one without disturbing what the menu has selected.
+    void applyFade(bool fadingIn, engine::FadeShape shape);
     void flattenRange();
 
     void copySelection();
@@ -268,6 +273,11 @@ private:
     QAction* silenceAction_ = nullptr;
     QAction* trimAction_ = nullptr;
     QAction* normaliseAction_ = nullptr;
+
+    /// Which curve Fade in and Fade out use. Linear by default: it is what
+    /// people mean by a fade, and equal power is for crossfades, where two of
+    /// them have to sum to a constant.
+    engine::FadeShape fadeShape_ = engine::FadeShape::Linear;
     QAction* attenuateAction_ = nullptr;
     QAction* healAction_ = nullptr;
     QAction* denoiseAction_ = nullptr;

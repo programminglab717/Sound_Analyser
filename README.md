@@ -87,6 +87,7 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | Time-stretch and pitch-shift | ✅ Done — phase vocoder with identity phase locking |
 | Markers and regions in the interface | ✅ Done — add, name, navigate, saved in sessions |
 | Reverse, invert polarity, swap channels, sum to mono | ✅ Done — exact to the sample, and obeys the selection |
+| Fades in five shapes | ✅ Done — linear, equal power, logarithmic, exponential, S-curve |
 | A draggable EQ curve over the analyser | ⬜ Next |
 | GPU shader renderer | ⬜ An optimisation, not a requirement — the CPU path fits in the frame budget |
 

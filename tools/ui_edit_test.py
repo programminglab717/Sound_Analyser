@@ -849,6 +849,91 @@ def main() -> int:
                 else:
                     print("  ok  a saved session reopens with its markers")
 
+        # Fade shapes. The source is a constant, so the exported samples *are*
+        # the gain curve and can be compared against the formula rather than
+        # against "it got quieter".
+        print("\nfade shapes:")
+        flat = workspace / "flat.wav"
+        with wave.open(str(flat), "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(SAMPLE_RATE)
+            handle.writeframes(b"".join(struct.pack("<h", 32767) for _ in range(SAMPLE_RATE)))
+
+        curves = {
+            "linear": lambda t: t,
+            "equalpower": lambda t: math.sin(t * math.pi / 2.0),
+            "logarithmic": lambda t: t**0.5,
+            "exponential": lambda t: t * t,
+            "scurve": lambda t: t * t * (3.0 - 2.0 * t),
+        }
+        faded: dict[str, list[float]] = {}
+        for shape, curve in curves.items():
+            output = workspace / f"fade-{shape}.wav"
+            completed = subprocess.run(
+                [str(arguments.binary), str(flat), "--apply", f"selectall,fadein:{shape}",
+                 "--export", str(output)],
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            if completed.returncode != 0 or not output.exists():
+                failures.append(f"fadein:{shape}: exited {completed.returncode}")
+                continue
+            got = load(output)
+            faded[shape] = got
+            count = len(got)
+            # Full scale in 16 bits is 32767/32768, so the curve is scaled by
+            # that: two LSBs of headroom is the whole tolerance needed.
+            worst = max(abs(got[i] - curve(i / count)) for i in range(1, count))
+            if worst > 2e-4:
+                failures.append(f"fadein:{shape}: deviates from its curve by {worst:.2e}")
+            elif abs(got[0]) > 1e-6:
+                failures.append(f"fadein:{shape}: starts at {got[0]:.6f} rather than silence")
+            else:
+                print(f"  ok  {shape}: matches its formula to {worst:.2e}")
+
+        # The property equal power exists for: a fade-in and a fade-out of that
+        # shape sum to constant power, where two linear ones dip 3 dB in the
+        # middle and leave a hole.
+        out = workspace / "fade-out-equalpower.wav"
+        completed = subprocess.run(
+            [str(arguments.binary), str(flat), "--apply", "selectall,fadeout:equalpower",
+             "--export", str(out)],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        if completed.returncode != 0 or "equalpower" not in faded:
+            failures.append("equal power: could not render the pair")
+        else:
+            down = load(out)
+            up = faded["equalpower"]
+            power = [u * u + d * d for u, d in zip(up, down)]
+            spread = max(power) - min(power)
+            if spread > 1e-3:
+                failures.append(f"equal power: summed power varies by {spread:.2e}")
+            else:
+                print(f"  ok  equal power: a fade pair sums to constant power ({spread:.2e})")
+            linear_middle = curves["linear"](0.5) ** 2 * 2
+            if linear_middle >= 0.9:
+                failures.append("the linear comparison is wrong; two linear fades should dip")
+            else:
+                print(f"  ok  and two linear fades really would dip, to {linear_middle:.2f}")
+
+        # An unknown shape is refused rather than silently taken as linear.
+        unknown = subprocess.run(
+            [str(arguments.binary), str(flat), "--apply", "selectall,fadein:triangular",
+             "--export", str(workspace / "nope.wav")],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        if unknown.returncode == 0:
+            failures.append("fadein:triangular was accepted")
+        else:
+            print("  ok  an unknown shape is refused")
+
         # Channel operations. Every one of these is exact arithmetic on the
         # samples, so "about right" is not the standard: a reversed file is the
         # original read backwards, sample for sample, and anything else is a
