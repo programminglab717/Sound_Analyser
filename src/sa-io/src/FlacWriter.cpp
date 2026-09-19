@@ -575,8 +575,10 @@ bool quantiseCoefficients(const double* coefficients, int order, int precision, 
         return false;
     }
 
+    // The signed range `precision` bits hold, as doubles, because that is what
+    // the rounding below compares against.
     const auto ceiling = static_cast<double>((std::int32_t{1} << (precision - 1)) - 1);
-    const double floor = -ceiling - 1.0;
+    const double lowest = -ceiling - 1.0;
 
     // frexp gives largest = fraction * 2^exponent with the fraction in
     // [0.5, 1), so scaling by 2^(precision - 1 - exponent) lands it inside the
@@ -599,7 +601,7 @@ bool quantiseCoefficients(const double* coefficients, int order, int precision, 
     double carried = 0.0;
     for (int i = 0; i < order; ++i) {
         carried += coefficients[i] * std::ldexp(1.0, shift);
-        const double rounded = std::clamp(std::round(carried), floor, ceiling);
+        const double rounded = std::clamp(std::round(carried), lowest, ceiling);
         out.coefficients[static_cast<std::size_t>(i)] = static_cast<std::int32_t>(rounded);
         carried -= rounded;
     }
