@@ -50,17 +50,23 @@ namespace sa::analysis {
 /// reading taken over half a second is not a short-term reading, and this is
 /// what stops one being reported as though it were.
 struct LoudnessPoint {
-    /// Time these readings belong to: the *end* of every window below, so a
-    /// value at t describes the audio ending at t. That is how a meter is read,
-    /// and it is also the only attribution that does not require knowing the
-    /// future. Quantised to a whole sample, so the grid cannot drift across a
-    /// long programme.
+    /// When this reading was taken. Every window below *ends* at or just before
+    /// it and runs backwards from there, which is the only attribution that
+    /// does not require knowing the future -- and is how a meter is read.
+    ///
+    /// "Just before" because BS.1770's blocks advance on a 100 ms grid: a point
+    /// sampled between two boundaries carries the value from the earlier one,
+    /// exactly as a meter's display holds its last value. On the default
+    /// interval every point lands on a boundary and the two coincide.
+    ///
+    /// Quantised to a whole sample, so the grid cannot drift across a long
+    /// programme.
     double timeSeconds = 0.0;
 
-    /// Loudness of the 400 ms ending here. Defined from 400 ms in.
+    /// Loudness of the most recent 400 ms. Defined from 400 ms in.
     std::optional<double> momentaryLufs;
 
-    /// Loudness of the 3 s ending here. Defined from 3 s in.
+    /// Loudness of the most recent 3 s. Defined from 3 s in.
     std::optional<double> shortTermLufs;
 
     /// True peak over the same 3 s the short-term value covers -- not the peak
@@ -88,8 +94,9 @@ struct LoudnessPoint {
     /// limited passage rather than as no measurement.
     std::optional<double> psrDb;
 
-    /// Sample peak over RMS across the 400 ms ending here, in dB. Pooled over
-    /// every channel, which is the definition SignalStatistics already uses.
+    /// Sample peak over RMS across the same 400 ms the momentary value covers,
+    /// in dB. Pooled over every channel, which is the definition
+    /// SignalStatistics already uses.
     ///
     /// Sample peak, not true peak, and deliberately: a square wave's crest
     /// factor is 0 dB, but its reconstruction overshoots between samples, so a

@@ -111,9 +111,9 @@ public:
     [[nodiscard]] double shortTermLufs() const noexcept { return shortTermLufs_; }
 
     /// 100 ms sub-blocks completed so far. The unit the whole measurement
-    /// advances in: every reading above changes only when this does, so a
-    /// caller sampling the meter over time knows from this alone whether it is
-    /// looking at a new value or the previous one again.
+    /// advances in: every loudness reading this meter exposes changes only when
+    /// this does, so a caller sampling the meter over time knows from this
+    /// alone whether it is looking at a new value or at the previous one again.
     [[nodiscard]] std::int64_t completedSubBlocks() const noexcept { return completedSubBlocks_; }
 
     /// Whether momentaryLufs() is a measurement at all.

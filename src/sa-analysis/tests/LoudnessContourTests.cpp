@@ -362,9 +362,9 @@ TEST_CASE("Momentary reacts to a step 2.6 s before short-term does", "[analysis]
     // times the quiet power -- while short-term has 0.1 s of 3 s, which is
     // (0.1*100 + 2.9)/3 = 4.3 times.
     CHECK(*contour.points[pointIndexAt(10.1)].momentaryLufs - before ==
-          Approx(10.0 * std::log10(25.75)).margin(0.1));
+          Approx(10.0 * std::log10(25.75)).margin(0.02));
     CHECK(*contour.points[pointIndexAt(10.1)].shortTermLufs - before ==
-          Approx(10.0 * std::log10(4.3)).margin(0.1));
+          Approx(10.0 * std::log10(4.3)).margin(0.02));
 }
 
 // --- Dynamics arithmetic ----------------------------------------------------
@@ -441,11 +441,11 @@ TEST_CASE("PLR and PSR are the differences they are defined to be", "[analysis][
         const double steady = *contour.points[pointIndexAt(5.5)].psrDb;
         const double straddling = *contour.points[pointIndexAt(8.9)].psrDb;
         INFO("PSR " << steady << " dB steady, " << straddling << " dB across the drop");
-        CHECK(straddling - steady == Approx(10.0 * std::log10(0.16 / 0.00688)).margin(0.1));
+        CHECK(straddling - steady == Approx(10.0 * std::log10(0.16 / 0.00688)).margin(0.02));
 
         // By 9.5 s the window has slid clear of the loud passage entirely, peak
         // and loudness have fallen together, and PSR is back where it started.
-        CHECK(*contour.points[pointIndexAt(9.5)].psrDb == Approx(steady).margin(0.1));
+        CHECK(*contour.points[pointIndexAt(9.5)].psrDb == Approx(steady).margin(0.01));
     }
 }
 
