@@ -28,6 +28,7 @@
 #include <sa/dsp/Deess.h>
 #include <sa/dsp/Dehum.h>
 #include <sa/dsp/Dither.h>
+#include <sa/dsp/FilterBank.h>
 #include <sa/dsp/OfflineDynamics.h>
 #include <sa/dsp/Resampler.h>
 #include <sa/dsp/TimeStretch.h>
@@ -37,6 +38,7 @@
 #include <sa/engine/DocumentSource.h>
 #include <sa/engine/Edits.h>
 #include <sa/engine/SessionFile.h>
+#include <sa/engine/StreamingConvert.h>
 #include <sa/io/AudioFile.h>
 #include <sa/io/WavWriter.h>
 #include <sa/spectral/Denoise.h>
@@ -448,14 +450,34 @@ void usage() {
       Change its pitch without changing how long it lasts. Fractions are
       allowed, and 0.01 of a semitone is a cent.
 
-  bands <file> [--octave] [--json | --csv]
+  bands <file> [--octave] [--filters [--order <n>]] [--json | --csv]
       Energy in third-octave bands, or in octaves with --octave. The oldest
       way of describing a spectrum and still the one people talk in.
 
-      Integrated from the transform rather than from a filter bank, which is
-      exact for steady material and cheap, and is not what IEC 61260
-      specifies -- nothing here claims to meet its tolerance masks, and a
-      certified measurement needs a bank this does not have.
+      By default the energy is integrated from the transform: exact for steady
+      material, cheap, and a rectangular band with no skirts.
+
+      --filters runs the audio through an actual Butterworth band-pass per
+      band instead and takes the level of what comes out, which is closer to
+      what a sound level meter does. --order sets the filter order, six poles
+      by default.
+
+      The two do not agree, and neither is wrong. A full-scale sine at a band
+      centre reads the same through both, but on white noise the filters read
+      about a decibel higher, because a real filter's skirts reach past its
+      nominal edges and into its neighbours while a rectangular band does not.
+      Which you want depends on whether you are describing a spectrum or
+      measuring a level.
+
+      The two also label bands differently, and both labels are right. The
+      default prints the preferred numbers people say aloud -- 125, 250,
+      16000 -- and --filters prints the exact centres those names stand for,
+      125.89, 251.19, 15848.9. They are the same bands. Joining two of these
+      reports on the centre column will not line up.
+
+      Neither is IEC 61260. Nothing here claims to meet its tolerance masks:
+      they are not in this repository and the response has never been checked
+      against them.
 
   tempo <file> [--min <bpm>] [--max <bpm>] [--channel <n>] [--json]
       Find the tempo and where the beats fall. Reads the first two minutes.
@@ -592,16 +614,20 @@ stdout on failure, so it composes in a script.
 /// step of a chain is how a file ends up with four layers of it. The window
 /// exports a delivery master; this writes an intermediate unless told
 /// otherwise.
-[[nodiscard]] bool ditherFor(sa::AudioBufferView audio, sa::io::SampleFormat format,
-                             const Options& options, std::string& error) {
+/// Build the ditherer a conversion should use, if any.
+///
+/// Hands back an object rather than processing a buffer, because a streamed
+/// conversion never has the whole buffer: noise shaping carries an error term
+/// from one sample to the next and the same ditherer has to see every block in
+/// order. Returns false only when the request itself was wrong.
+[[nodiscard]] bool ditherFor(std::optional<sa::dsp::Ditherer>& out, sa::io::SampleFormat format,
+                             int channelCount, const Options& options, std::string& error) {
+    out.reset();
     const auto named = options.value("dither");
-    if (!named) {
+    if (!named || *named == "none") {
         return true;
     }
     sa::dsp::DitherSettings settings;
-    if (*named == "none") {
-        return true;
-    }
     if (*named == "tpdf") {
         settings.type = sa::dsp::DitherType::Tpdf;
     } else if (*named == "shaped") {
@@ -621,12 +647,12 @@ stdout on failure, so it composes in a script.
         return true;
     }
 
-    auto ditherer = sa::dsp::Ditherer::create(settings, audio.channelCount());
+    auto ditherer = sa::dsp::Ditherer::create(settings, channelCount);
     if (!ditherer) {
         error = std::string{ditherer.error().what()};
         return false;
     }
-    ditherer.value().process(audio);
+    out.emplace(std::move(ditherer).value());
     return true;
 }
 
@@ -701,14 +727,52 @@ int bands(const Options& options) {
         return fail(std::string{read.error().what()});
     }
 
-    const auto measured = sa::analysis::measureBands(audio.view(), info.sampleRate, settings);
-    if (!measured) {
-        return fail(std::string{measured.error().what()});
+    // Two ways of asking the same question, and they are not the same
+    // measurement. The default integrates the transform's bins over each
+    // band; --filters runs the audio through an actual Butterworth band-pass
+    // per band and takes the level of what comes out. The filters have real
+    // skirts and real overlap, so their answer is the one a sound level meter
+    // would give, and the transform's is the one an analyser would.
+    std::vector<sa::analysis::Band> bandLevels;
+    if (options.has("filters")) {
+        sa::dsp::FilterBankSettings bankSettings;
+        bankSettings.spacing = settings.width == sa::analysis::BandWidth::Octave
+                                   ? sa::dsp::BandSpacing::Octave
+                                   : sa::dsp::BandSpacing::ThirdOctave;
+        bankSettings.order = static_cast<int>(options.number("order", 6.0));
+        auto bank = sa::dsp::FilterBank::create(info.sampleRate, bankSettings);
+        if (!bank) {
+            return fail(std::string{bank.error().what()});
+        }
+        const auto levels = bank.value().measure(audio.constView(), 0);
+        if (!levels) {
+            return fail(std::string{levels.error().what()});
+        }
+        for (const sa::dsp::BandLevel& level : levels.value()) {
+            sa::analysis::Band band;
+            band.centreHz = level.band.centreHz;
+            band.lowHz = level.band.lowHz;
+            band.highHz = level.band.highHz;
+            // The bank reports a plain RMS, so a full-scale sine inside a band
+            // reads -3.01 dBFS. The transform path is sine-referenced, where
+            // the same tone reads 0. Adding the 3.0103 dB puts the two on one
+            // scale so they can be read against each other; without it every
+            // band would look 3 dB quieter for a reason that is a convention
+            // rather than a measurement.
+            band.levelDb = level.levelDb + 3.0102999566398120;
+            bandLevels.push_back(band);
+        }
+    } else {
+        auto measuredBands = sa::analysis::measureBands(audio.view(), info.sampleRate, settings);
+        if (!measuredBands) {
+            return fail(std::string{measuredBands.error().what()});
+        }
+        bandLevels = std::move(measuredBands).value();
     }
 
     if (asCsv) {
         std::printf("centreHz,lowHz,highHz,levelDbfs\n");
-        for (const sa::analysis::Band& band : measured.value()) {
+        for (const sa::analysis::Band& band : bandLevels) {
             std::printf("%.1f,%.2f,%.2f,%.2f\n", band.centreHz, band.lowHz, band.highHz,
                         band.levelDb);
         }
@@ -717,12 +781,12 @@ int bands(const Options& options) {
     if (asJson) {
         std::printf("{\n  \"file\": \"%s\",\n  \"bands\": [\n",
                     std::filesystem::path{options.positional[1]}.filename().string().c_str());
-        for (std::size_t i = 0; i < measured.value().size(); ++i) {
-            const sa::analysis::Band& band = measured.value()[i];
+        for (std::size_t i = 0; i < bandLevels.size(); ++i) {
+            const sa::analysis::Band& band = bandLevels[i];
             std::printf("    {\"centreHz\": %.1f, \"lowHz\": %.2f, \"highHz\": %.2f, "
                         "\"levelDbfs\": %.2f}%s\n",
                         band.centreHz, band.lowHz, band.highHz, band.levelDb,
-                        i + 1 < measured.value().size() ? "," : "");
+                        i + 1 < bandLevels.size() ? "," : "");
         }
         std::printf("  ]\n}\n");
         return 0;
@@ -732,10 +796,10 @@ int bands(const Options& options) {
     // Loudest band first, so the bars have something to be relative to and a
     // quiet recording is not drawn as thirty-one empty rows.
     double loudest = sa::analysis::kDecibelFloor;
-    for (const sa::analysis::Band& band : measured.value()) {
+    for (const sa::analysis::Band& band : bandLevels) {
         loudest = std::max(loudest, band.levelDb);
     }
-    for (const sa::analysis::Band& band : measured.value()) {
+    for (const sa::analysis::Band& band : bandLevels) {
         // Forty columns over sixty decibels, which is the range a band display
         // conventionally shows and enough to read a shape off.
         const double below = loudest - band.levelDb;
@@ -1446,6 +1510,50 @@ int provenance(const Options& options) {
     return failures == 0 ? 0 : 1;
 }
 
+/// A sink that dithers each block on its way to the file.
+///
+/// Dither belongs immediately before the bits are dropped, and the bits are
+/// dropped by the writer, so this sits between the two. The ditherer is built
+/// once and kept: noise shaping carries an error term from one sample to the
+/// next, and a fresh ditherer per block would reset that at every boundary and
+/// leave a periodic artefact at the block rate.
+class WriterSink final : public sa::engine::AudioSink {
+public:
+    WriterSink(sa::io::WavWriter& writer, sa::ChannelLayout layout, sa::dsp::Ditherer* ditherer)
+        : writer_{writer}, layout_{layout}, ditherer_{ditherer} {}
+
+    [[nodiscard]] sa::Status write(sa::ConstAudioBufferView frames) override {
+        if (frames.frames() <= 0) {
+            return {};
+        }
+        if (ditherer_ == nullptr) {
+            return writer_.write(frames)
+                       ? sa::Status{}
+                       : sa::Error{sa::ErrorCode::IoFailure, "the write failed partway through"};
+        }
+        // Dither needs somewhere it may write, and the converter's output is
+        // not ours to modify.
+        if (scratch_.frames() < frames.frames() ||
+            scratch_.channelCount() != frames.channelCount()) {
+            scratch_ = sa::AudioBuffer{layout_, frames.frames()};
+        }
+        sa::AudioBufferView block = scratch_.view().subRange(0, frames.frames());
+        for (int channel = 0; channel < frames.channelCount(); ++channel) {
+            std::copy_n(frames.channel(channel), frames.frames(), block.channel(channel));
+        }
+        ditherer_->process(block);
+        return writer_.write(sa::ConstAudioBufferView{block})
+                   ? sa::Status{}
+                   : sa::Error{sa::ErrorCode::IoFailure, "the write failed partway through"};
+    }
+
+private:
+    sa::io::WavWriter& writer_;
+    sa::ChannelLayout layout_;
+    sa::dsp::Ditherer* ditherer_ = nullptr;
+    sa::AudioBuffer scratch_;
+};
+
 int convert(const Options& options) {
     if (options.positional.size() != 3) {
         return fail("convert needs an input and an output");
@@ -1459,88 +1567,53 @@ int convert(const Options& options) {
     const sa::io::AudioFileInfo& info = source->info();
     const auto wanted = options.number("rate", info.sampleRate.hz());
     const auto format = formatFrom(options, info.format);
+    const sa::SampleRate outputRate{wanted};
 
-    if (std::abs(wanted - info.sampleRate.hz()) < 0.5) {
-        if (!options.value("dither")) {
-            // Nothing to dither, so stream it straight through rather than
-            // pulling the whole file into memory to change nothing.
-            return write(*source, options.positional[2], format, error) ? 0 : fail(error);
-        }
-        sa::AudioBuffer same{info.layout, info.frameCount};
-        if (const auto read = source->read(0, same.view()); !read) {
-            return fail(std::string{read.error().what()});
-        }
-        if (!ditherFor(same.view(), format, options, error)) {
-            return fail(error);
-        }
-        const sa::engine::BufferSource dithered{std::move(same), info.sampleRate};
-        return write(dithered, options.positional[2], format, error) ? 0 : fail(error);
-    }
-
-    // Resample into memory, then write. Streaming straight through would be
-    // better for very long files and is worth doing; this is honest about
-    // holding the result, and refuses rather than thrashing when it will not
-    // fit.
-    const double ratio = wanted / info.sampleRate.hz();
-    const auto outputFrames =
-        static_cast<sa::SampleCount>(std::ceil(static_cast<double>(info.frameCount) * ratio));
-    if (static_cast<std::size_t>(outputFrames) * static_cast<std::size_t>(info.channelCount()) *
-            sizeof(float) >
-        2'000'000'000ULL) {
-        return fail("the converted file would not fit in memory; streaming conversion is not "
-                    "implemented yet");
-    }
-
-    sa::AudioBuffer input{info.layout, info.frameCount};
-    if (const auto read = source->read(0, input.view()); !read) {
-        return fail(std::string{read.error().what()});
-    }
-
-    sa::AudioBuffer output{info.layout, outputFrames};
-    for (int channel = 0; channel < info.channelCount(); ++channel) {
-        // Built from the rate pair, not the ratio: where the two rates are
-        // whole numbers the converter steps its phase in integers and stays
-        // exactly on the grid however long the stream runs. Handing it a real
-        // number instead gives up that guarantee for nothing.
-        sa::dsp::ResamplerSpec spec;
-        spec.inputRate = info.sampleRate;
-        spec.outputRate = sa::SampleRate{wanted};
-        spec.quality = sa::dsp::ResamplerQuality::Best;
-
-        auto resampler = sa::dsp::Resampler::create(spec);
-        if (!resampler) {
-            return fail(std::string{resampler.error().what()});
-        }
-
-        // process() stops on whichever of input and output runs out first, so
-        // it loops; flush() then drains what the fed input still owes.
-        sa::SampleCount consumed = 0;
-        sa::SampleCount produced = 0;
-        while (consumed < info.frameCount && produced < outputFrames) {
-            const auto step = resampler.value().process(
-                input.channel(channel) + consumed, info.frameCount - consumed,
-                output.channel(channel) + produced, outputFrames - produced);
-            if (step.inputConsumed == 0 && step.outputProduced == 0) {
-                break;
-            }
-            consumed += step.inputConsumed;
-            produced += step.outputProduced;
-        }
-        while (produced < outputFrames) {
-            const auto drained = resampler.value().flush(output.channel(channel) + produced,
-                                                         outputFrames - produced);
-            if (drained <= 0) {
-                break;
-            }
-            produced += drained;
-        }
-    }
-
-    if (!ditherFor(output.view(), format, options, error)) {
+    // A ditherer, if one was asked for and the format has bits to drop. Built
+    // here rather than inside the sink so that an unknown --dither name is
+    // reported before anything is written.
+    std::optional<sa::dsp::Ditherer> ditherer;
+    if (!ditherFor(ditherer, format, info.channelCount(), options, error)) {
         return fail(error);
     }
-    const sa::engine::BufferSource converted{std::move(output), sa::SampleRate{wanted}};
-    return write(converted, options.positional[2], format, error) ? 0 : fail(error);
+
+    std::ofstream stream{options.positional[2], std::ios::binary};
+    if (!stream) {
+        return fail("could not write " + options.positional[2]);
+    }
+    sa::io::WavOptions wavOptions;
+    wavOptions.format = format;
+    auto writer = sa::io::WavWriter::create(stream, outputRate, info.layout, wavOptions);
+    if (!writer) {
+        return fail(std::string{writer.error().what()});
+    }
+
+    // Streamed, a block at a time, so a file's length costs disk rather than
+    // memory. This used to pull the whole thing in and refuse outright past
+    // two gigabytes of samples, which for a concert recording or an archive
+    // transfer is a wall rather than an inconvenience.
+    WriterSink sink{writer.value(), info.layout, ditherer ? &ditherer.value() : nullptr};
+    sa::engine::ConversionSpec spec;
+    spec.outputRate = outputRate;
+    spec.quality = sa::dsp::ResamplerQuality::Best;
+
+    const auto converted = sa::engine::convertStreaming(*source, sink, spec);
+    if (!converted) {
+        // Deliberately not finishing the writer: a WAV whose header was never
+        // patched does not read as a complete file, which is what a failed
+        // conversion should leave behind rather than a plausible short one.
+        return fail(std::string{converted.error().what()});
+    }
+    if (!writer.value().finish()) {
+        return fail("could not finish " + options.positional[2]);
+    }
+
+    if (std::abs(wanted - info.sampleRate.hz()) >= 0.5) {
+        std::printf("%lld frames at %.0f Hz from %lld at %.0f\n",
+                    static_cast<long long>(converted.value().framesWritten), outputRate.hz(),
+                    static_cast<long long>(converted.value().framesRead), info.sampleRate.hz());
+    }
+    return 0;
 }
 
 int normalise(const Options& options) {

@@ -948,6 +948,53 @@ def main() -> int:
             rows = [line for line in result.stdout.splitlines() if line.strip()]
             check("ten octave bands", len(rows) == 11, f"{len(rows)} lines")
 
+        # The filter-bank path, which measures the same bands a different way.
+        result = run("bands", str(noise_source), "--octave", "--filters", "--csv")
+        check("bands --filters exits cleanly", result.returncode == 0, result.stderr)
+        if result.returncode == 0:
+            rows = [r for r in result.stdout.splitlines() if r.strip()]
+            check("bands --filters reports ten octaves", len(rows) == 11, f"{len(rows)} lines")
+            centres = [float(r.split(",")[0]) for r in rows[1:]]
+            # The exact base-ten centres, not the preferred numbers: 1000 Hz
+            # times 10^(3n/10), so the band above 1 kHz is at 1995.26 and not
+            # at 2000. Both names are right and they are the same band.
+            check("and centres them on the base-ten values",
+                  any(abs(c - 1995.26) < 1.0 for c in centres), str(centres))
+
+        # A full-scale sine at a band centre has to read the same through both
+        # paths. The bank reports a plain RMS, where a sine sits 3.01 dB below
+        # its peak, and the transform path is sine-referenced; if that 3.01 is
+        # not applied the two disagree by exactly that and neither says so.
+        sine = workspace / "band-sine.wav"
+        write_wav32(sine, [0.999 * math.sin(2.0 * math.pi * 1000.0 * i / SAMPLE_RATE)
+                           for i in range(SAMPLE_RATE * 2)])
+
+        def level_at(args: list[str], want: float) -> float | None:
+            out = run("bands", str(sine), "--octave", *args, "--csv")
+            if out.returncode != 0:
+                return None
+            for row in out.stdout.splitlines()[1:]:
+                if not row.strip():
+                    continue
+                parts = row.split(",")
+                if abs(float(parts[0]) - want) < 1.0:
+                    return float(parts[3])
+            return None
+
+        through_transform = level_at([], 1000.0)
+        through_filters = level_at(["--filters"], 1000.0)
+        check("a full-scale sine reads the same through both band methods",
+              through_transform is not None and through_filters is not None
+              and abs(through_transform - through_filters) < 0.1,
+              f"{through_transform} vs {through_filters}")
+        # And both read it at its actual level: 20*log10(0.999) = -0.0087 dB.
+        check("and reads it at the level it was written at",
+              through_filters is not None and abs(through_filters - -0.0087) < 0.2,
+              str(through_filters))
+
+        check("bands --filters with a nonsense order is refused",
+              run("bands", str(noise_source), "--filters", "--order", "7").returncode != 0)
+
         check("bands with two report formats is refused",
               run("bands", str(noise_source), "--json", "--csv").returncode != 0)
         check("bands with no file fails", run("bands").returncode != 0)
