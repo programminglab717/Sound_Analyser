@@ -3,6 +3,11 @@ name: CI
 on:
   push:
     branches: ["**"]
+    # A tag beginning with v is what publishes a release. Everything below runs
+    # exactly as it does for a branch push -- the same build, the same tests,
+    # the same gates -- and the windows-package job then attaches what it built
+    # to a GitHub Release. Nothing ships that did not pass the whole suite.
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -231,6 +236,10 @@ jobs:
     name: Windows package
     needs: licences
     runs-on: windows-latest
+    # Only for the release step below; every other job keeps the default
+    # read-only token.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
 
@@ -343,6 +352,32 @@ jobs:
           name: auscultate-windows
           path: package/
           if-no-files-found: error
+
+      # An Actions artefact is not a way to give somebody a program. It expires,
+      # and downloading one needs a signed-in GitHub account even when the
+      # repository is public -- so a tester without an account cannot get the
+      # file at all, however public the source is.
+      #
+      # A release asset has a permanent public URL and needs no account. That is
+      # the difference between handing someone a repository and handing them the
+      # program. gh is already on the runner, so this needs no third-party
+      # action, and the notes are a file in the repository rather than a string
+      # buried in this workflow, so they can be reviewed like anything else.
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $zip = "auscultate-$tag-windows-x64.zip"
+          Compress-Archive -Path package/Auscultate -DestinationPath $zip
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash
+          $notes = Get-Content packaging/windows/release-notes.md -Raw
+          $notes = $notes.Replace('__TAG__', $tag).Replace('__HASH__', $hash)
+          $notes | Out-File -FilePath release-notes.txt -Encoding utf8
+          gh release create $tag $zip --title "Auscultate $tag" --notes-file release-notes.txt
+          if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
 
       # -- Installer ---------------------------------------------------------
       #
