@@ -35,17 +35,37 @@ import sys
 import tempfile
 from pathlib import Path
 
-# Two writes to one int from two threads, with nothing between them. Every
-# other line exists to make the two of them happen.
+# Two threads writing one int for long enough that they cannot fail to overlap.
+#
+# This began as a single write from each of two threads, which is the smallest
+# program that is a data race and reads better. It was replaced because it went
+# unreported once on a CI runner while passing eight times out of eight here,
+# and a check whose whole job is to be trusted cannot be the flaky one. The
+# original raced in a window a few instructions wide -- between spawning the
+# thread and the parent's own write -- and on a loaded runner the child can be
+# scheduled wholly outside it.
+#
+# The loop removes the timing question rather than answering it: with a hundred
+# thousand writes each, there is no schedule on which the two threads do not
+# collide. Both writers are spawned, so neither is the parent racing a child it
+# has just created, and the widened window is the only thing that changed --
+# it is still two unsynchronised writes to one int.
 RACY_PROGRAM = """
 #include <thread>
 
 int shared = 0;
 
+static void hammer(int value) {
+    for (int i = 0; i < 100000; ++i) {
+        shared = value;
+    }
+}
+
 int main() {
-    std::thread other{[] { shared = 1; }};
-    shared = 2;
-    other.join();
+    std::thread first{hammer, 1};
+    std::thread second{hammer, 2};
+    first.join();
+    second.join();
     return shared == 0 ? 1 : 0;
 }
 """
@@ -193,10 +213,14 @@ def main() -> int:
 
         reported = build_and_run(compiler, flags, source, workspace / "race-tsan")
         if "WARNING: ThreadSanitizer: data race" not in reported:
+            detail = reported.strip() or "(nothing at all -- it ran and said not one word)"
             print(
                 "FAIL: a program that is nothing but a data race, compiled with this build's own "
-                f"flags, was not reported. The sanitiser is not awake, so a clean run of the "
-                f"suite says nothing.\n--- what it printed ---\n{reported}"
+                "flags, was not reported. The sanitiser is not awake, so a clean run of the "
+                "suite says nothing.\n"
+                f"compiler: {compiler}\n"
+                f"flags:    {' '.join(flags)}\n"
+                f"--- what the probe printed ---\n{detail}"
             )
             return 1
 

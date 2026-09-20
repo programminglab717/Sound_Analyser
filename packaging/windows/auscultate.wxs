@@ -95,9 +95,13 @@
 
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
-    <!-- Publisher, and no Modify button: there is one feature, so Modify has
-         nothing to offer. Repair and Uninstall stay. -->
-    <Property Id="ARPNOMODIFY" Value="1" />
+    <!-- ARPNOMODIFY is deliberately not declared here, although we do want it.
+         WixUI_Minimal sets it already, because a minimal UI has no Modify path
+         to offer, and declaring it a second time is a duplicate symbol that
+         light refuses to link. The property is still in effect: it arrives from
+         the UI library referenced at the bottom of this file rather than from
+         here. Should the UI ever change to one that does not set it, set it
+         here again. -->
 
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="LocalAppDataFolder">
