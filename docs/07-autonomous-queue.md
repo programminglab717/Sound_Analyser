@@ -206,7 +206,7 @@ branch unnoticed.
 | --- | --- |
 | EBU/ITU conformance vectors | The published test material. Both publishers are blocked by the network policy here; see above. |
 | GPU shader renderer | Real GPU across Intel/AMD/NVIDIA. No longer a Phase 0 risk — it is an optimisation. |
-| Confirming audio actually comes out | The owner running a build. Backends and tests are written here. |
+| ~~Confirming audio actually comes out~~ | **Done, 2026-09-20.** The owner ran the Windows build and heard the file play. What is still unobserved: rates other than the one tried, exclusive-mode devices, removal mid-playback, load. ALSA on real hardware is untried. |
 | True-peak filter conformance | BS.1770-4 Annex 2 Table 3, transcribed from the published standard rather than memory. |
 | Platform compliance targets | Checking against live platform documentation before they ship as presets. |
 | ~~Product name~~ | **Decided: Auscultate**, published by Delta Creation Co. Trademark and domain checks are still outstanding and are the owner's — see below. |

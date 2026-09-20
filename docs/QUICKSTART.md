@@ -31,11 +31,13 @@ you about material that has something wrong with it.
 Playback runs from the caret, or over the selection if you have made one.
 Space again stops it.
 
-One caveat, stated plainly: **no audio has ever come out of real hardware from
-this program.** The output code is written and tested, but the machines that
-build it have no sound card. If the application cannot open a device it falls
-back to one that plays silently and says so in the status bar, so that a silent
-playback is not mistaken for silent audio.
+The status bar names the device it opened — *"Playing through …"* — or tells
+you it could not open one and is playing silently. The playhead moves either
+way, so it says which of the two happened rather than leaving you to guess.
+
+Sound has been heard from this program on Windows. What has not been tried is
+everything around that: other sample rates, exclusive-mode devices, a device
+unplugged mid-playback.
 
 ## 5. The four things worth trying first
 

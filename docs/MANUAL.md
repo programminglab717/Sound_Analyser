@@ -98,21 +98,33 @@ Exports are always WAV. See §3.8.
 **File ▸ Open session** (Ctrl+Shift+O) opens a `.sa` file — an arrangement you
 saved earlier, described in §3.9.
 
-### 1.5 Playback has never been tested on real audio hardware
+### 1.5 Playback, and how far it has actually been confirmed
 
-Press **Space** to play. There is a caveat that belongs here rather than in a
-footnote: **no audio has ever come out of a real sound card from this
-program.** The Windows (WASAPI) and Linux (ALSA) output paths are written, and
-they are tested against a real thread on a real clock, but the machines that
-build and test this software have no audio hardware in them. Playback is
-therefore the one part of the product whose behaviour is inferred rather than
-observed.
+Press **Space** to play. Playback runs from the caret, or over the selection if
+you have made one.
 
-If the application cannot open any output device it falls back to a device that
-plays to nothing, and it says so in the status bar: *"No sound card was
-available — playback will run silently"*. The playhead will move and you will
-hear nothing. That message is there precisely so that a silent playback is not
-mistaken for silent audio.
+**Sound has been heard from this program, through WASAPI, on Windows.** That is
+worth stating precisely, because for most of this product's life it could not
+be said at all: every machine that builds and tests this software is without
+audio hardware, so until someone ran it on a real one, the output path was the
+only part of the product whose behaviour was inferred rather than observed.
+
+What that confirms is the whole chain end to end: the file is decoded, rendered,
+handed across the ring buffer to the audio callback, and reaches a device that
+turns it into sound.
+
+What it does not confirm is everything around that one path. A single successful
+playback says nothing about sample rates other than the one that was tried,
+about exclusive-mode devices, about what happens when a device is unplugged
+mid-playback, or about whether the render keeps ahead under load on a slower
+machine. Those remain reasoned rather than observed, and the underrun counter
+exists to catch the last of them.
+
+On the first play the status bar names the device it opened: *"Playing through
+…"*. If no device could be opened at all it falls back to one that plays to
+nothing and says *"No sound card was available — playback will run silently"*.
+The playhead moves either way, which is exactly why it tells you which of the
+two happened.
 
 If sound does come out but crackles, or the playhead drifts away from what you
 hear, that is worth reporting.
@@ -1462,7 +1474,10 @@ This is the position the code takes, the position the licence agreement takes
 
 Three further things that are true of this build:
 
-- **Playback has never been run on real audio hardware.** See §1.5.
+- **Playback has been heard once, on one machine, through WASAPI.** Other
+  sample rates, exclusive-mode devices, a device removed mid-playback and
+  the render keeping ahead under load are all still reasoned rather than
+  observed. See §1.5.
 - **The software is unsigned**, which is why Windows warns about it. See §1.2.
 - **It modifies files.** Keep backups of anything you care about. The
   application never writes over the file you opened, but an export can overwrite

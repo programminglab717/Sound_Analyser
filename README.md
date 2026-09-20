@@ -83,7 +83,7 @@ measures, plays and saves.** See [04 — Roadmap](docs/04-roadmap.md) and
 | `sa-analysis`: LUFS, true peak, statistics, compliance targets, average spectrum, stereo field, octave bands, provenance | ✅ Done — see the caveat below |
 | `sa-spectral`: spectrogram pyramid, tiled cache, attenuate and heal | ✅ Done — no length limit; a decimated overview plus detail tiles under an LRU budget |
 | `sa-engine`: non-destructive document, edits, undo, sessions | ✅ Done |
-| `sa-device`: WASAPI, ALSA, null backend | ✅ Done — never run on real hardware |
+| `sa-device`: WASAPI, ALSA, null backend | ✅ Done — WASAPI confirmed audible on Windows; ALSA still only inferred |
 | `sa-transport`: playback with a playhead | ✅ Done |
 | `sa-ui`: waveform, spectrogram, spectrum, rulers, markers, meters, editing, repair | ✅ Done |
 | Resampling: any ratio, streaming, real-time safe | ✅ Done |
