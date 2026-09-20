@@ -200,6 +200,21 @@ branch unnoticed.
   reported case by case. Until that happens, nothing in the project claims
   conformance, which is the correct state rather than a gap to paper over.
 
+## Observed on real Windows, 2026-09-20
+
+The same build was refused outright by a Windows 11 machine, with no override
+offered, and ran without complaint on Windows 10 the next day. Nothing about the
+program changed between the two.
+
+Smart App Control exists only on Windows 11 and rejects unsigned applications
+before any of our code runs, so the launcher in the package cannot help with it.
+The three options are in `packaging/windows/README-FIRST.txt`; Windows 10 is the
+one fallback that has actually been watched working.
+
+This raises the cost of shipping unsigned rather than changing the decision.
+Recorded here because it is evidence, and because the size of that cost is the
+owner's to weigh, not mine.
+
 ## Blocked — needs someone or something not here
 
 | Item | Needs |

@@ -1474,6 +1474,10 @@ This is the position the code takes, the position the licence agreement takes
 
 Three further things that are true of this build:
 
+- **Windows 11 with Smart App Control on will refuse to run this build**, with
+  no override offered, and nothing shipped in the zip can change that. Observed:
+  refused on Windows 11, ran on Windows 10 the following day, same build. See
+  `README-FIRST.txt` in the package.
 - **Playback has been heard once, on one machine, through WASAPI.** Other
   sample rates, exclusive-mode devices, a device removed mid-playback and
   the render keeping ahead under load are all still reasoned rather than

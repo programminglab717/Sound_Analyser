@@ -43,6 +43,17 @@ Look at what you were shown.
 SMART APP CONTROL
 =================
 
+WHAT HAS ACTUALLY BEEN SEEN
+
+This is not theory. The same build of Auscultate was refused outright by a
+Windows 11 machine, with no override offered, and then ran without complaint on
+a Windows 10 machine the following day. Nothing about the program changed
+between the two.
+
+That is the expected result rather than a surprise: Smart App Control exists
+only on Windows 11 and has no equivalent on Windows 10. If you are blocked with
+no way past, a Windows 10 machine is the one fallback that is known to work.
+
 Smart App Control refuses any application that is not signed by a certificate
 it already trusts, and it offers no override. There is no file, script or
 setting inside this folder that changes that -- the decision is made before
@@ -74,10 +85,13 @@ If it reads On, your options are:
      refuses unknown applications outright, and it is the layer that is
      stopping this one.
 
-  2. Run Auscultate on a different machine that does not have it on. Smart App
-     Control is only switched on by default on Windows 11 machines that were
-     set up from a clean install; a machine upgraded from Windows 10 has it
-     off.
+  2. Run Auscultate on a Windows 10 machine, where the feature does not exist
+     at all. This is the option that has been tested, and it worked.
+
+     A Windows 11 machine that was upgraded from Windows 10 rather than clean
+     installed also has Smart App Control off, so those work too -- but that is
+     reasoning from how Microsoft ships it, where Windows 10 is something we
+     have actually watched run.
 
   3. Build Auscultate from source on your own machine. See docs/BUILDING.md.
      This takes a working compiler and Qt and is a much longer road, but the

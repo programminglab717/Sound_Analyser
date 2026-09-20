@@ -13,6 +13,14 @@ reports the absence of a certificate; it is not a detection of anything. There
 is no free way to obtain a code-signing certificate, so this is a deliberate
 trade rather than an oversight.
 
+**Windows 10 and Windows 11 do not behave the same way here, and the difference
+is not small.** This build has been seen running on Windows 10 and refused
+outright by a Windows 11 machine with no override offered. Windows 11 carries
+Smart App Control, which has no equivalent on Windows 10 and which rejects
+unsigned applications before anything of ours runs; the launcher cannot help
+with it. If you are blocked with no way past, check Windows Security ▸ App &
+browser control ▸ Smart App Control, and see `README-FIRST.txt` in the zip.
+
 ### What is in the zip
 
 `auscultate.exe`, the headless driver `auscultate-cli.exe`, the Qt libraries

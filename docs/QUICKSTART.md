@@ -20,6 +20,14 @@ warning for every unsigned program it has not seen many times before. It is a
 statement about the absence of a certificate, not a detection of anything.
 Windows remembers your decision for that copy of the file.
 
+**If there is no "More info" link and no way past at all, you are on Windows 11
+with Smart App Control switched on.** That is a different and much stricter
+feature, it has no equivalent on Windows 10, and nothing shipped in the zip can
+get round it — the decision is made before any of our code runs. This has been
+observed with this very build: refused by a Windows 11 machine, and running
+normally on Windows 10 the next day. `README-FIRST.txt` in the zip sets out the
+three options.
+
 ## 3. Open something
 
 **File ▸ Open audio** (Ctrl+O). WAV, AIFF, FLAC and MP3 all work. Open a real
