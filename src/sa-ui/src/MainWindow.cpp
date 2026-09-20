@@ -1769,12 +1769,23 @@ void MainWindow::togglePlayback() {
                                  .arg(QString::fromStdString(std::string{opened.error().what()})));
             return;
         }
-        // The last resort in that chain is a device that plays to nothing.
-        // Using it without saying so would move the playhead and make no sound,
-        // which is a worse answer than an honest one.
-        if (opened.value()->description().id == device::NullAudioBackend::kDeviceId) {
-            status_->setText(tr("No sound card was available -- playback will run silently"));
-        }
+        // Which device this is gets said out loud, and in both directions.
+        //
+        // The last resort in the chain above is a device that plays to nothing,
+        // and using it without saying so would move the playhead and make no
+        // sound -- a worse answer than an honest one. That much was always
+        // reported. What was not is the ordinary case: a real card opened and
+        // the window said nothing at all, so a user who heard nothing could not
+        // tell a broken speaker from a silent fallback from a program that had
+        // not started playing. Saying nothing is only an answer to someone who
+        // already knows what silence means.
+        //
+        // The name comes from the backend and is the same string the operating
+        // system shows, so it can be recognised rather than merely read.
+        const auto& description = opened.value()->description();
+        const bool silent = description.id == device::NullAudioBackend::kDeviceId;
+        const QString deviceName = QString::fromStdString(description.name);
+
         auto created = transport::Player::create(std::move(opened).value());
         if (!created) {
             status_->setText(tr("Could not start playback: %1")
@@ -1782,10 +1793,16 @@ void MainWindow::togglePlayback() {
             return;
         }
         player_.emplace(std::move(created).value());
+
+        status_->setText(silent ? tr("No sound card was available -- playback will run silently")
+                                : tr("Playing through %1").arg(deviceName));
     }
 
     const TimeSelection selected = selection();
-    const SampleIndex from = selected.isEmpty() ? selected.start : selected.start;
+    // Both arms of the ternary this replaces were selected.start, which read as
+    // though the empty case was meant to differ. It is not: an empty selection
+    // carries the caret in start, so one expression covers both.
+    const SampleIndex from = selected.start;
     const SampleIndex to = selected.isEmpty() ? document_.duration() : selected.end;
     if (to <= from) {
         return;
