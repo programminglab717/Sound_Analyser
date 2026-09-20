@@ -334,17 +334,24 @@ TEST_CASE("The writer's output is recognised as FLAC by the sniffer", "[io][flac
                                   ChannelLayout::stereo(), options)
                 .ok());
 
-    auto opened = openAudioFile(path);
-    REQUIRE(opened.hasValue());
-    CHECK(opened.value()->info().frameCount == 500);
-    CHECK(opened.value()->info().channelCount() == 2);
+    // Scoped so the reader closes before the file is removed. POSIX unlinks an
+    // open file happily; Windows refuses, and std::filesystem::remove without an
+    // error_code throws when it does -- failing the test for a reason that has
+    // nothing to do with what it is testing. WavTests has carried this same note
+    // since before these writers existed.
+    {
+        auto opened = openAudioFile(path);
+        REQUIRE(opened.hasValue());
+        CHECK(opened.value()->info().frameCount == 500);
+        CHECK(opened.value()->info().channelCount() == 2);
 
-    auto reader = FlacReader::open(path);
-    REQUIRE(reader.hasValue());
-    CHECK(reader.value().metadata().title == "Sniffable");
-    auto restored = reader.value().readAll();
-    REQUIRE(restored.hasValue());
-    requireIdentical(restored.value(), source);
+        auto reader = FlacReader::open(path);
+        REQUIRE(reader.hasValue());
+        CHECK(reader.value().metadata().title == "Sniffable");
+        auto restored = reader.value().readAll();
+        REQUIRE(restored.hasValue());
+        requireIdentical(restored.value(), source);
+    }
 
     std::filesystem::remove(path);
 }
@@ -418,13 +425,20 @@ TEST_CASE("A FLAC written to a path round-trips through the file system", "[io][
                                   ChannelLayout::stereo(), options)
                 .ok());
 
-    auto reader = FlacReader::open(path);
-    REQUIRE(reader.hasValue());
-    CHECK(reader.value().info().frameCount == 4097);
-    CHECK(reader.value().info().sampleRate == kSampleRate96000);
-    auto restored = reader.value().readAll();
-    REQUIRE(restored.hasValue());
-    requireIdentical(restored.value(), source);
+    // Scoped so the reader closes before the file is removed. POSIX unlinks an
+    // open file happily; Windows refuses, and std::filesystem::remove without an
+    // error_code throws when it does -- failing the test for a reason that has
+    // nothing to do with what it is testing. WavTests has carried this same note
+    // since before these writers existed.
+    {
+        auto reader = FlacReader::open(path);
+        REQUIRE(reader.hasValue());
+        CHECK(reader.value().info().frameCount == 4097);
+        CHECK(reader.value().info().sampleRate == kSampleRate96000);
+        auto restored = reader.value().readAll();
+        REQUIRE(restored.hasValue());
+        requireIdentical(restored.value(), source);
+    }
 
     std::filesystem::remove(path);
 }

@@ -350,14 +350,21 @@ TEST_CASE("Writing an AIFF to a path and reading it back works", "[io][aiff][wri
                                   options)
                 .ok());
 
-    auto reader = AiffReader::open(path);
-    REQUIRE(reader.hasValue());
-    CHECK(reader.value().info().frameCount == 333);
-    CHECK(reader.value().metadata().title == "On disk");
-    auto restored = reader.value().readAll();
-    REQUIRE(restored.hasValue());
-    for (SampleCount i = 0; i < 333; ++i) {
-        REQUIRE(restored.value().channel(0)[i] == source.channel(0)[i]);
+    // Scoped so the reader closes before the file is removed. POSIX unlinks an
+    // open file happily; Windows refuses, and std::filesystem::remove without an
+    // error_code throws when it does -- failing the test for a reason that has
+    // nothing to do with what it is testing. WavTests has carried this same note
+    // since before these writers existed.
+    {
+        auto reader = AiffReader::open(path);
+        REQUIRE(reader.hasValue());
+        CHECK(reader.value().info().frameCount == 333);
+        CHECK(reader.value().metadata().title == "On disk");
+        auto restored = reader.value().readAll();
+        REQUIRE(restored.hasValue());
+        for (SampleCount i = 0; i < 333; ++i) {
+            REQUIRE(restored.value().channel(0)[i] == source.channel(0)[i]);
+        }
     }
 
     std::filesystem::remove(path);
