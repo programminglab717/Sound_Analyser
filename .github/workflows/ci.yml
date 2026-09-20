@@ -415,8 +415,13 @@ jobs:
           $version = (Get-Content installer/version.txt -Raw).Trim()
           $licence = (Resolve-Path installer/EULA.rtf).Path
           New-Item -ItemType Directory -Force -Path installer\obj | Out-Null
+          # Quoted, because candle received the literal text '$version' rather
+          # than its value: PowerShell does not expand a bare argument of the
+          # form -name=$var the way it expands one inside a double-quoted
+          # string. The whole argument is one string, so there is nothing left
+          # to parse ambiguously.
           & "$env:WIX_BIN\candle.exe" -nologo -arch x64 `
-              -dProductVersion=$version -dLicenceRtf=$licence `
+              "-dProductVersion=$version" "-dLicenceRtf=$licence" `
               -ext WixUIExtension `
               -out installer\obj\ `
               packaging\windows\auscultate.wxs installer\files.wxs

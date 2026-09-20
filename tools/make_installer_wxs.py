@@ -45,8 +45,32 @@ import argparse
 import hashlib
 import re
 import sys
+import uuid
 from pathlib import Path
 from xml.sax.saxutils import quoteattr
+
+# Component GUIDs have to be explicit here, and they have to be stable.
+#
+# WiX's automatic guid -- Guid="*" -- is refused for a component that has both a
+# registry keypath and files, and every component in this package has exactly
+# that: the keypath is a registry value on purpose, so that a Qt DLL a user has
+# replaced under the LGPL is never what Windows Installer consults when it
+# decides whether the product is intact. Splitting into one file per component
+# to satisfy the automatic guid would give that property up, so the guids are
+# generated instead.
+#
+# They are derived, not random, because a component's guid identifies the
+# resource it installs for the life of the product: the same file in the next
+# version must carry the same guid or upgrades and repairs stop tracking it.
+# uuid5 over a fixed namespace and the component's own key gives that for free
+# and makes the generator's output reproducible, which the determinism check
+# depends on.
+COMPONENT_NAMESPACE = uuid.UUID("6f1b8f2e-9d47-5c3a-b8e0-2a7c4d15e9f3")
+
+
+def component_guid(key_name: str) -> str:
+    """The stable guid for the component covering `key_name`."""
+    return str(uuid.uuid5(COMPONENT_NAMESPACE, key_name)).upper()
 
 WIX_NAMESPACE = "http://schemas.microsoft.com/wix/2006/wi"
 
@@ -160,7 +184,8 @@ def render_components(
 
         lines.append(
             f"{indent}<Component Id={quoteattr(identifier('cmp', key_name))} "
-            f"Directory={quoteattr(directory_id(relative))} Guid=\"*\">"
+            f"Directory={quoteattr(directory_id(relative))} "
+            f"Guid={quoteattr(component_guid(key_name))}>"
         )
         lines.append(
             f'{indent}  <RegistryValue Root="HKCU" Key={quoteattr(SETUP_KEY)} '
