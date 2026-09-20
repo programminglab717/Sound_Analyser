@@ -55,6 +55,7 @@ plugin hosting, measurement reporting) rather than access.
 | [User manual](docs/MANUAL.md) | Every panel, every command, and when not to trust a measurement |
 | [Licence agreement](docs/EULA.md) | Draft, pending legal review |
 | [Privacy policy](docs/PRIVACY.md) | Draft. Short, because the product collects nothing |
+| [LICENSE](LICENSE) | All rights reserved. The source is readable; that is not a grant |
 | [ADRs](docs/adr/) | Architecture decision records for the choices that are expensive to reverse |
 
 ## Decisions already locked
