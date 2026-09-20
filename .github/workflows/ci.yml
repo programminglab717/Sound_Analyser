@@ -376,8 +376,20 @@ jobs:
           $notes = Get-Content packaging/windows/release-notes.md -Raw
           $notes = $notes.Replace('__TAG__', $tag).Replace('__HASH__', $hash)
           $notes | Out-File -FilePath release-notes.txt -Encoding utf8
-          gh release create $tag $zip --title "Auscultate $tag" --notes-file release-notes.txt
-          if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
+          # Either route has to work. Pushing a tag from a clone gets here with
+          # no release yet, and drafting one in GitHub's web interface creates
+          # the tag and the release together and gets here with one already
+          # made. Creating unconditionally would fail on the second, which is
+          # the route a person is most likely to take.
+          gh release view $tag 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+              Write-Host "A release for $tag exists; attaching the build to it."
+              gh release upload $tag $zip --clobber
+              if ($LASTEXITCODE -ne 0) { throw "gh release upload failed" }
+          } else {
+              gh release create $tag $zip --title "Auscultate $tag" --notes-file release-notes.txt
+              if ($LASTEXITCODE -ne 0) { throw "gh release create failed" }
+          }
 
       # -- Installer ---------------------------------------------------------
       #
